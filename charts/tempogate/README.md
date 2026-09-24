@@ -24,7 +24,7 @@ From the published OCI registry:
 
 ```bash
 helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate \
-  --version 0.1.0
+  --version 0.3.0
 ```
 
 Verify:
@@ -98,7 +98,7 @@ auth:
 | `securityContext` | drop ALL, no privilege escalation, read-only rootfs | Container security context. |
 | `service.type` | `ClusterIP` | Service type. |
 | `service.port` | `8000` | The single HTTP port (public + health). |
-| `listenAddress` | `0.0.0.0` | `HTTP__LISTENER` bind host (must not be loopback in-cluster). |
+| `listenAddress` | `0.0.0.0` | `HTTP_LISTENER` bind host (must not be loopback in-cluster). |
 | `ingress.enabled` | `false` | Enable Ingress. |
 | `ingress.className` / `hosts` / `tls` | _(see values.yaml)_ | Ingress wiring. |
 | `httpRoute.enabled` | `false` | Gateway API HTTPRoute (alternative to Ingress). |
@@ -114,14 +114,14 @@ auth:
 | `persistence.size` | `1Gi` | PVC size. |
 | `persistence.annotations` | `{}` | Extra PVC annotations. |
 | `state.mountPath` | `/var/lib/tempogate` | Where the PVC is mounted. |
-| `state.sqlitePath` | `/var/lib/tempogate/state.db` | `STATE__SQLITE__PATH` (must be under `mountPath`). |
-| `log.level` | `info` | `LOG__LEVEL` (`debug`/`info`/`warn`/`error`). |
-| `oidc.issuer` | `""` | `OIDC__ISSUER` — externally reachable base URL. |
-| `oidc.sessionSigningKeySecretRef` | `{name,key}` empty | Secret holding `OIDC__SESSION_SIGNING_KEY` (base64url 32-byte HMAC key for the device-flow verification-page cookie). tempogate refuses to boot when unset. |
-| `oidc.sessionTtl` | `""` | `OIDC__SESSION_TTL` — verification-page cookie TTL (Go duration). `""` leaves the binary default (5m). |
-| `auth.clients` | `""` | `OIDC__CLIENTS` — `id:redirect_uri_prefix` allowlist. |
-| `auth.allowedDomains` | `[]` | `OIDC__ALLOWED_DOMAINS` — SSO email-domain gate. |
-| `auth.clientSecretsSecretRef` | `{name,key}` empty | Secret holding `OIDC__CLIENT_SECRETS`. |
+| `state.sqlitePath` | `/var/lib/tempogate/state.db` | `STATE_SQLITE_PATH` (must be under `mountPath`). |
+| `log.level` | `info` | `LOG_LEVEL` (`debug`/`info`/`warn`/`error`). |
+| `oidc.issuer` | `""` | `OIDC_ISSUER` — externally reachable base URL. |
+| `oidc.sessionSigningKeySecretRef` | `{name,key}` empty | Secret holding `OIDC_SESSION_SIGNING_KEY` (base64url 32-byte HMAC key for the device-flow verification-page cookie). tempogate refuses to boot when unset. |
+| `oidc.sessionTtl` | `""` | `OIDC_SESSION_TTL` — verification-page cookie TTL (Go duration). `""` leaves the binary default (5m). |
+| `auth.clients` | `""` | `OIDC_CLIENTS` — `id:redirect_uri_prefix` allowlist. |
+| `auth.allowedDomains` | `[]` | `OIDC_ALLOWED_DOMAINS` — SSO email-domain gate. |
+| `auth.clientSecretsSecretRef` | `{name,key}` empty | Secret holding `OIDC_CLIENT_SECRETS`. |
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |
 | `auth.upstream.google.clientSecretSecretRef` | `{name,key}` empty | Secret holding the Google client secret. |
 | `auth.upstream.google.authEndpoint` / `tokenEndpoint` / `issuerUrl` | `""` | Upstream endpoint overrides (testing). |

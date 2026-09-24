@@ -77,7 +77,7 @@ deadlocks); a `serve` pod that starts first simply exits and is restarted
 until the schema is current.
 
 **PKCE mandatory, with one auditable carve-out.** Every registered client is
-public and must use PKCE. A deliberately separate `OIDC__CLIENT_SECRETS`
+public and must use PKCE. A deliberately separate `OIDC_CLIENT_SECRETS`
 setting promotes specific clients to confidential for the narrow case of a
 client that cannot do PKCE (the Temporal Web UI). Keeping the relaxation in
 its own setting makes it explicit and reviewable; an entry for an unregistered
@@ -90,7 +90,7 @@ needs for cluster APIs. Group- or role-derived per-namespace scoping, and a
 revocable long-lived integration-key admin API, are planned; the JWT shape and
 the `permissions` claim are already in place for them.
 
-**Co-hostable.** `OIDC__ISSUER` may carry a path, so the whole OIDC surface
+**Co-hostable.** `OIDC_ISSUER` may carry a path, so the whole OIDC surface
 can serve under a prefix on a shared hostname while health probes stay at the
 root. See [docs/configuration.md](configuration.md#sub-path-hosting).
 

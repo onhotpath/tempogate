@@ -4,11 +4,11 @@ description: Drop-in OIDC provider and OAuth2 authorization server for self-host
 type: application
 
 # SemVer chart version. Bump on every change to the chart or its templates.
-version: 0.2.0
+version: 0.3.0
 
 # The tempogate image tag this chart defaults to. `image.tag` overrides it;
 # when unset the Deployment pulls ghcr.io/onhotpath/tempogate:<appVersion>.
-appVersion: "0.1.0"
+appVersion: "v0.2.0"
 
 # tempogate is a pure-Go binary; nothing here needs a bleeding-edge API.
 kubeVersion: ">=1.25.0-0"

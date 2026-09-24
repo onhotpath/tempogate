@@ -5,27 +5,27 @@ metadata:
   labels:
     {{- include "tempogate.labels" . | nindent 4 }}
 data:
-  LOG__LEVEL: {{ .Values.log.level | quote }}
-  HTTP__LISTENER: {{ printf "%s:%v" .Values.listenAddress .Values.service.port | quote }}
-  STATE__SQLITE__PATH: {{ .Values.state.sqlitePath | quote }}
+  LOG_LEVEL: {{ .Values.log.level | quote }}
+  HTTP_LISTENER: {{ printf "%s:%v" .Values.listenAddress .Values.service.port | quote }}
+  STATE_SQLITE_PATH: {{ .Values.state.sqlitePath | quote }}
   {{- with .Values.oidc.issuer }}
-  OIDC__ISSUER: {{ . | quote }}
+  OIDC_ISSUER: {{ . | quote }}
   {{- end }}
   {{- with .Values.oidc.sessionTtl }}
-  OIDC__SESSION_TTL: {{ . | quote }}
+  OIDC_SESSION_TTL: {{ . | quote }}
   {{- end }}
   {{- with .Values.auth.clients }}
-  OIDC__CLIENTS: {{ . | quote }}
+  OIDC_CLIENTS: {{ . | quote }}
   {{- end }}
   {{- with .Values.auth.allowedDomains }}
-  OIDC__ALLOWED_DOMAINS: {{ join "," . | quote }}
+  OIDC_ALLOWED_DOMAINS: {{ join "," . | quote }}
   {{- end }}
   {{- with .Values.auth.upstream.google.authEndpoint }}
-  OIDC__GOOGLE__AUTH_ENDPOINT: {{ . | quote }}
+  OIDC_GOOGLE_AUTH_ENDPOINT: {{ . | quote }}
   {{- end }}
   {{- with .Values.auth.upstream.google.tokenEndpoint }}
-  OIDC__GOOGLE__TOKEN_ENDPOINT: {{ . | quote }}
+  OIDC_GOOGLE_TOKEN_ENDPOINT: {{ . | quote }}
   {{- end }}
   {{- with .Values.auth.upstream.google.issuerUrl }}
-  OIDC__GOOGLE__ISSUER_URL: {{ . | quote }}
+  OIDC_GOOGLE_ISSUER_URL: {{ . | quote }}
   {{- end }}

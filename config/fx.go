@@ -3,7 +3,6 @@ package config
 import (
 	"time"
 
-	xloadtype "github.com/gojekfarm/xtools/xload/type"
 	"go.uber.org/fx"
 
 	"github.com/onhotpath/tempogate/log"
@@ -16,23 +15,23 @@ type Result struct {
 	fx.Out
 
 	LogLevel              log.Level
-	HTTPListener          xloadtype.Listener `name:"http"`
-	AdminListener         xloadtype.Listener `name:"admin"`
-	SqlitePath            string             `name:"sqlite_path"`
-	SqliteMaxConns        int                `name:"sqlite_max_conns"`
-	SqliteBusyTimeout     time.Duration      `name:"sqlite_busy_timeout"`
-	OIDCIssuer            string             `name:"oidc_issuer"`
-	OIDCBasePath          string             `name:"oidc_base_path"`
-	OIDCClients           string             `name:"oidc_clients"`
-	OIDCClientSecrets     string             `name:"oidc_client_secrets"`
-	OIDCAllowedDomains    string             `name:"oidc_allowed_domains"`
-	OIDCSessionTTL        time.Duration      `name:"oidc_session_ttl"`
-	OIDCSessionSigningKey string             `name:"oidc_session_signing_key"`
-	GoogleClientID        string             `name:"google_client_id"`
-	GoogleClientSecret    string             `name:"google_client_secret"`
-	GoogleAuthEndpoint    string             `name:"google_auth_endpoint"`
-	GoogleTokenEndpoint   string             `name:"google_token_endpoint"`
-	GoogleIssuerURL       string             `name:"google_issuer_url"`
+	HTTPListener          Listener      `name:"http"`
+	AdminListener         Listener      `name:"admin"`
+	SqlitePath            string        `name:"sqlite_path"`
+	SqliteMaxConns        int           `name:"sqlite_max_conns"`
+	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
+	OIDCIssuer            string        `name:"oidc_issuer"`
+	OIDCBasePath          string        `name:"oidc_base_path"`
+	OIDCClients           string        `name:"oidc_clients"`
+	OIDCClientSecrets     string        `name:"oidc_client_secrets"`
+	OIDCAllowedDomains    string        `name:"oidc_allowed_domains"`
+	OIDCSessionTTL        time.Duration `name:"oidc_session_ttl"`
+	OIDCSessionSigningKey string        `name:"oidc_session_signing_key"`
+	GoogleClientID        string        `name:"google_client_id"`
+	GoogleClientSecret    string        `name:"google_client_secret"`
+	GoogleAuthEndpoint    string        `name:"google_auth_endpoint"`
+	GoogleTokenEndpoint   string        `name:"google_token_endpoint"`
+	GoogleIssuerURL       string        `name:"google_issuer_url"`
 }
 
 func Fx() fx.Option {

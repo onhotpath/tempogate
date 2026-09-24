@@ -53,7 +53,7 @@ service:
   # gains a `service.admin` block without changing this key.
   port: 8000
 
-# HTTP__LISTENER bind address. The binary defaults to 127.0.0.1, which is
+# HTTP_LISTENER bind address. The binary defaults to 127.0.0.1, which is
 # unreachable through a Service; in-cluster it MUST bind all interfaces.
 listenAddress: 0.0.0.0
 
@@ -158,7 +158,7 @@ oidc:
   # regardless, so the probe paths below need no change.
   issuer: ""
 
-  # OIDC__SESSION_SIGNING_KEY — base64url-encoded 32-byte HMAC key.
+  # OIDC_SESSION_SIGNING_KEY — base64url-encoded 32-byte HMAC key.
   # Signs the verification-page session cookie and the SSO-bounce `state`
   # used by the device-authorization flow (RFC 8628), see
   # docs/cli-device-login.md. The `tempogate serve` Deployment REFUSES
@@ -174,7 +174,7 @@ oidc:
     name: ""
     key: ""
 
-  # OIDC__SESSION_TTL — TTL of the verification-page session cookie used
+  # OIDC_SESSION_TTL — TTL of the verification-page session cookie used
   # by the device-authorization flow. Go duration. Empty leaves the
   # tempogate binary's built-in default (5m). The cookie is scoped to
   # the device-flow UI only — not a general-purpose login session — so
@@ -183,11 +183,11 @@ oidc:
 
 auth:
   # Comma-separated `id:redirect_uri_prefix` client allowlist
-  # (OIDC__CLIENTS). Non-secret.
+  # (OIDC_CLIENTS). Non-secret.
   clients: ""
   # Email domains permitted to complete SSO. Empty ⇒ nobody is admitted.
   allowedDomains: []
-  # Optional confidential-client carve-out (OIDC__CLIENT_SECRETS) — secret
+  # Optional confidential-client carve-out (OIDC_CLIENT_SECRETS) — secret
   # material. Supply it via an existing Secret, never as plaintext here.
   clientSecretsSecretRef:
     name: ""
@@ -209,7 +209,7 @@ auth:
       issuerUrl: ""
 
 # Extra environment variables appended verbatim to the container (and the
-# migrate Job), e.g. [{name: STATE__SQLITE__BUSY_TIMEOUT, value: "10s"}].
+# migrate Job), e.g. [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].
 extraEnv: []
 
 # Extra volumes / mounts on the Deployment (the state PVC is wired

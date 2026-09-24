@@ -70,10 +70,10 @@ config, and the CLI is free to pick a fresh ephemeral port every run.
 ## Operator setup
 
 Register the CLI as a public client (no secret ⇒ PKCE mandatory) in
-`OIDC__CLIENTS`, alongside any other clients:
+`OIDC_CLIENTS`, alongside any other clients:
 
 ```
-OIDC__CLIENTS=tempogate-cli:http://127.0.0.1:,ui:https://temporal-ui.example.com/auth/sso/callback
+OIDC_CLIENTS=tempogate-cli:http://127.0.0.1:,ui:https://temporal-ui.example.com/auth/sso/callback
 ```
 
 The redirect prefix is `http://127.0.0.1:` — note the **trailing colon**. The
@@ -86,13 +86,13 @@ client registry matches `redirect_uri` by prefix, so:
 If you prefer a fixed port, register `tempogate-cli:http://127.0.0.1:39473/`
 and have users run `tempogate login --port 39473`.
 
-The signed-in email must also pass `OIDC__ALLOWED_DOMAINS`, the same gate the
+The signed-in email must also pass `OIDC_ALLOWED_DOMAINS`, the same gate the
 Web UI flow uses.
 
 ## Usage
 
 ```bash
-export TEMPOGATE__ISSUER=https://tempogate.example.com
+export TEMPOGATE_ISSUER=https://tempogate.example.com
 
 # Print a JWT (progress goes to stderr, so this captures just the token):
 export TEMPORAL_AUTH_TOKEN=$(tempogate login)
@@ -104,9 +104,9 @@ Flags:
 
 | Flag          | Default                      | Notes                                                            |
 | ------------- | ---------------------------- | ---------------------------------------------------------------- |
-| `--issuer`     | `$TEMPOGATE__ISSUER`        | tempogate base URL. Required (flag or env).                      |
+| `--issuer`     | `$TEMPOGATE_ISSUER`        | tempogate base URL. Required (flag or env).                      |
 | `--port`       | `0`                         | Loopback port. `0` = a free ephemeral port (recommended).        |
-| `--client-id`  | `tempogate-cli`             | Must match a registered `OIDC__CLIENTS` entry.                   |
+| `--client-id`  | `tempogate-cli`             | Must match a registered `OIDC_CLIENTS` entry.                   |
 | `--token-file` | `~/.tempogate/token.json`   | Where the token is persisted.                                    |
 
 `stdout` carries only the token; all human-facing text (the authorize URL,
@@ -123,7 +123,7 @@ leaves a half-written credential).
 After that first login, use `tempogate token` for everything:
 
 ```bash
-export TEMPOGATE__ISSUER=https://tempogate.example.com
+export TEMPOGATE_ISSUER=https://tempogate.example.com
 export TEMPORAL_AUTH_TOKEN=$(tempogate token)
 ```
 

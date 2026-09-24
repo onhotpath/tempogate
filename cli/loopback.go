@@ -39,7 +39,7 @@ const (
 	loginScope = "openid email"
 
 	// defaultClientID is the client_id the CLI presents to tempogate. The
-	// operator registers it once as "<id>:http://127.0.0.1:" in OIDC__CLIENTS
+	// operator registers it once as "<id>:http://127.0.0.1:" in OIDC_CLIENTS
 	// so any ephemeral loopback port is accepted by the prefix match.
 	defaultClientID = "tempogate-cli"
 
@@ -94,7 +94,7 @@ func WithPort(port int) Option {
 }
 
 // WithClientID overrides the client_id presented to tempogate. Defaults to
-// "tempogate-cli"; must match a registered OIDC__CLIENTS entry.
+// "tempogate-cli"; must match a registered OIDC_CLIENTS entry.
 func WithClientID(id string) Option {
 	return func(f *Flow) {
 		if id != "" {
@@ -166,7 +166,7 @@ type callbackResult struct {
 // state echo, and exchanges the code with the PKCE verifier at /token.
 func (f *Flow) Run(ctx context.Context) (Token, error) {
 	if f.issuer == "" {
-		return Token{}, errors.New("cli: issuer is required (pass --issuer or set TEMPOGATE__ISSUER)")
+		return Token{}, errors.New("cli: issuer is required (pass --issuer or set TEMPOGATE_ISSUER)")
 	}
 
 	verifier, err := f.newVerifier()

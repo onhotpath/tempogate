@@ -20,7 +20,7 @@ ENV CGO_ENABLED=0
 # The cliclient stands in for a developer laptop, which only ever runs the
 # CLI subcommands (login/token/version). The lean build drops the SQLite +
 # OIDC + admin subtree along with the server-bound subcommands, so the
-# binary's fx graph no longer requires OIDC__SESSION_SIGNING_KEY (or any of
+# binary's fx graph no longer requires OIDC_SESSION_SIGNING_KEY (or any of
 # the other server env vars) at startup — exactly what a CLI-only client is
 # expected to need on a real laptop. See app/modules_lean.go.
 RUN --mount=type=cache,target=/go/pkg/mod \

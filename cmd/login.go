@@ -13,10 +13,10 @@ import (
 )
 
 // issuerEnvVar is the client-side issuer override. It is deliberately distinct
-// from the server's OIDC__ISSUER: `tempogate login` runs on a developer laptop
+// from the server's OIDC_ISSUER: `tempogate login` runs on a developer laptop
 // and points at a *remote* tempogate, so it carries its own env var rather
 // than reusing server configuration that is irrelevant on a client.
-const issuerEnvVar = "TEMPOGATE__ISSUER"
+const issuerEnvVar = "TEMPOGATE_ISSUER"
 
 // loginModeEnvVar is the no-flag escape hatch for selecting the device flow,
 // used by CI / wrapper scripts that cannot easily pass `--device` through.

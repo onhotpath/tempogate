@@ -138,12 +138,29 @@ identity-mapping layer matures.
 
 ## Quick start
 
-Run a published image (once a release is cut):
+Run a published image:
 
 ```bash
-docker run --rm -p 8000:8000 ghcr.io/onhotpath/tempogate:latest
-curl http://127.0.0.1:8000/healthz
+TEMPOGATE_IMAGE=${TEMPOGATE_IMAGE:-ghcr.io/onhotpath/tempogate:latest}
+export OIDC_SESSION_SIGNING_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback'
+export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
+docker volume create tempogate-state
+docker run --rm --mount source=tempogate-state,target=/var/lib/tempogate \
+  -e OIDC_SESSION_SIGNING_KEY -e OIDC_CLIENTS -e OIDC_CLIENT_SECRETS \
+  "$TEMPOGATE_IMAGE" migrate
+docker run --rm -d --name tempogate -p 8000:8000 \
+  --mount source=tempogate-state,target=/var/lib/tempogate \
+  -e OIDC_SESSION_SIGNING_KEY -e OIDC_CLIENTS -e OIDC_CLIENT_SECRETS \
+  -e HTTP_LISTENER=0.0.0.0:8000 "$TEMPOGATE_IMAGE"
+curl --retry 20 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:8000/healthz
 ```
+
+Keep the signing key and SQLite volume across restarts. The generated client
+secret is for this health-check example; configure `OIDC_ISSUER`, registered
+clients, allowed domains, and Google credentials for real login. Save those
+secrets outside the shell before using this as a lasting deployment. Stop the
+example with `docker stop tempogate`.
 
 Container images are published to `ghcr.io/onhotpath/tempogate`:
 
@@ -187,6 +204,11 @@ Build from source:
 git clone git@github.com:onhotpath/tempogate.git
 cd tempogate
 make build
+export STATE_SQLITE_PATH="$PWD/state.db"
+export OIDC_SESSION_SIGNING_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback'
+export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
+./.bin/tempogate migrate
 ./.bin/tempogate serve            # listens on 127.0.0.1:8000
 ```
 
@@ -194,7 +216,7 @@ Or build the container locally:
 
 ```bash
 docker build -t tempogate:dev .
-docker run --rm -p 8000:8000 tempogate:dev
+TEMPOGATE_IMAGE=tempogate:dev    # then run the Quick start above
 ```
 
 Kubernetes deployment is covered by the chart in
@@ -202,7 +224,7 @@ Kubernetes deployment is covered by the chart in
 OCI artifact, so no repo clone is needed:
 
 ```bash
-helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.1.0
+helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.3.0
 ```
 
 The chart is versioned independently of the binary; pick the version from
@@ -214,7 +236,7 @@ Once the server is reachable, a user mints a short-lived Temporal JWT
 without hand-editing any config:
 
 ```bash
-export TEMPOGATE__ISSUER=https://tempogate.example.com
+export TEMPOGATE_ISSUER=https://tempogate.example.com
 
 tempogate login                                  # browser sign-in, once
 export TEMPORAL_AUTH_TOKEN=$(tempogate token)    # thereafter; auto-refreshes
@@ -223,7 +245,7 @@ export TEMPORAL_AUTH_TOKEN=$(tempogate token)    # thereafter; auto-refreshes
 `tempogate login` starts a one-shot `127.0.0.1` server, opens your browser to
 sign in via Google, prints the token, and persists it to
 `~/.tempogate/token.json` (`0600`). A fresh ephemeral loopback port is used
-each run — no Google Cloud Console edits, just one `OIDC__CLIENTS` entry on the
+each run — no Google Cloud Console edits, just one `OIDC_CLIENTS` entry on the
 server. `tempogate token` then reuses that file, refreshing the token five
 minutes before expiry, so it never re-opens a browser. Both print only the
 token to stdout, so they are safe in `$(...)`. See
@@ -239,30 +261,30 @@ See [docs/cli-device-login.md](docs/cli-device-login.md).
 ## Configuration
 
 Configuration is layered: defaults, then an optional `application.yaml`, then
-environment variables (env wins). Nested keys flatten with `__` as the
+environment variables (env wins). Nested keys flatten with `_` as the
 separator.
 
 | Env var | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `OIDC__ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. May include a path (e.g. `https://host/idp`) — see [Sub-path hosting](#sub-path-hosting) |
-| `OIDC__CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri_prefix` allowlist. Register the CLI as `tempogate-cli:http://127.0.0.1:` |
-| `OIDC__ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in |
-| `OIDC__GOOGLE__CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
-| `OIDC__GOOGLE__CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
-| `OIDC__CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
-| `HTTP__LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
-| `STATE__SQLITE__PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
-| `LOG__LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
-| `TEMPOGATE__ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
+| `OIDC_ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. May include a path (e.g. `https://host/idp`) — see [Sub-path hosting](#sub-path-hosting) |
+| `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri_prefix` allowlist. Register the CLI as `tempogate-cli:http://127.0.0.1:` |
+| `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in |
+| `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
+| `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
+| `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
+| `HTTP_LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
+| `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
+| `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
+| `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
 
 ## Sub-path hosting
 
-`OIDC__ISSUER` may contain a path, so tempogate can share a hostname with
+`OIDC_ISSUER` may contain a path, so tempogate can share a hostname with
 another app instead of needing its own. Set the issuer to the full external
 URL including the path, e.g.:
 
 ```
-OIDC__ISSUER=https://tempogate.example.com/idp
+OIDC_ISSUER=https://tempogate.example.com/idp
 ```
 
 tempogate then serves its **entire OIDC surface under that prefix** —

@@ -3,7 +3,7 @@
 //
 //   - Public: /healthz, /readyz, and the OIDC + .well-known endpoints
 //     contributed by feature packages (oidc). The OIDC surface may move under
-//     a base path when one is set (OIDC__ISSUER's path component); health
+//     a base path when one is set (OIDC_ISSUER's path component); health
 //     probes stay at the root regardless.
 //   - Admin: /admin/healthz plus the /admin/* endpoints contributed by the
 //     admin package. Lives on its own mux + Huma API so it can be bound to a
@@ -54,7 +54,7 @@ func WithAdminRegistrar(fn func(huma.API)) Option {
 }
 
 // WithBasePath mounts the OIDC surface under a URL path prefix — the path
-// component of OIDC__ISSUER (e.g. "/idp"). Health probes stay at the root.
+// component of OIDC_ISSUER (e.g. "/idp"). Health probes stay at the root.
 // Empty ⇒ root, the historical default.
 func WithBasePath(p string) Option {
 	return func(c *apiConfig) { c.basePath = p }

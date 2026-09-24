@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// issuerBasePath extracts the URL path component of OIDC__ISSUER — the single
+// issuerBasePath extracts the URL path component of OIDC_ISSUER — the single
 // source of truth for where tempogate mounts its OIDC surface. It is
 // normalised the same way api/wellknown.go and oidc.New already normalise the
 // issuer (strings.TrimRight(…, "/")): a leading slash, no trailing slash, and

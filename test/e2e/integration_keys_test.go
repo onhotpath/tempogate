@@ -310,17 +310,17 @@ func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKe
 	// surface only contacts Google during /callback/google, which we never
 	// invoke.
 	tgEnv := map[string]string{
-		"HTTP__LISTENER":               "0.0.0.0:8000",
-		"ADMIN__LISTENER":              "0.0.0.0:8081",
-		"STATE__SQLITE__PATH":          "/state/state.db",
-		"OIDC__ISSUER":                 tempogateIssuer,
-		"OIDC__CLIENTS":                "noop:https://noop.invalid/cb",
-		"OIDC__ALLOWED_DOMAINS":        "example.com",
-		"OIDC__GOOGLE__CLIENT_ID":      "tempogate-upstream",
-		"OIDC__GOOGLE__CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC__GOOGLE__AUTH_ENDPOINT":  "http://unused.invalid/auth",
-		"OIDC__GOOGLE__TOKEN_ENDPOINT": "http://unused.invalid/token",
-		"OIDC__GOOGLE__ISSUER_URL":     "http://unused.invalid",
+		"HTTP_LISTENER":              "0.0.0.0:8000",
+		"ADMIN_LISTENER":             "0.0.0.0:8081",
+		"STATE_SQLITE_PATH":          "/state/state.db",
+		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_CLIENTS":               "noop:https://noop.invalid/cb",
+		"OIDC_ALLOWED_DOMAINS":       "example.com",
+		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":  "http://unused.invalid/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT": "http://unused.invalid/token",
+		"OIDC_GOOGLE_ISSUER_URL":     "http://unused.invalid",
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	stateVol := fmt.Sprintf("tempogate-intkeys-e2e-state-%d", time.Now().UnixNano())

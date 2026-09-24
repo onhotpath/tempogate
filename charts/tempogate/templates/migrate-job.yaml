@@ -42,9 +42,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["migrate"]
           env:
-            - name: LOG__LEVEL
+            - name: LOG_LEVEL
               value: {{ .Values.log.level | quote }}
-            - name: STATE__SQLITE__PATH
+            - name: STATE_SQLITE_PATH
               value: {{ .Values.state.sqlitePath | quote }}
           {{- with .Values.resources }}
           resources:

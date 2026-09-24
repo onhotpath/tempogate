@@ -88,7 +88,7 @@ non-secret vars come from the ConfigMap via envFrom (see each workload).
 {{- define "tempogate.secretEnv" -}}
 {{- with .Values.auth.upstream.google.clientIdSecretRef }}
 {{- if .name }}
-- name: OIDC__GOOGLE__CLIENT_ID
+- name: OIDC_GOOGLE_CLIENT_ID
   valueFrom:
     secretKeyRef:
       name: {{ .name }}
@@ -97,7 +97,7 @@ non-secret vars come from the ConfigMap via envFrom (see each workload).
 {{- end }}
 {{- with .Values.auth.upstream.google.clientSecretSecretRef }}
 {{- if .name }}
-- name: OIDC__GOOGLE__CLIENT_SECRET
+- name: OIDC_GOOGLE_CLIENT_SECRET
   valueFrom:
     secretKeyRef:
       name: {{ .name }}
@@ -106,7 +106,7 @@ non-secret vars come from the ConfigMap via envFrom (see each workload).
 {{- end }}
 {{- with .Values.auth.clientSecretsSecretRef }}
 {{- if .name }}
-- name: OIDC__CLIENT_SECRETS
+- name: OIDC_CLIENT_SECRETS
   valueFrom:
     secretKeyRef:
       name: {{ .name }}
@@ -115,7 +115,7 @@ non-secret vars come from the ConfigMap via envFrom (see each workload).
 {{- end }}
 {{- with .Values.oidc.sessionSigningKeySecretRef }}
 {{- if .name }}
-- name: OIDC__SESSION_SIGNING_KEY
+- name: OIDC_SESSION_SIGNING_KEY
   valueFrom:
     secretKeyRef:
       name: {{ .name }}

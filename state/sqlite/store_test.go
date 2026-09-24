@@ -547,9 +547,9 @@ func (s *StoreSuite) TestFxRejectsEmptyPath() {
 
 func (s *StoreSuite) TestFxComposition() {
 	path := filepath.Join(s.T().TempDir(), "fx.db")
-	s.T().Setenv("STATE__SQLITE__PATH", path)
-	s.T().Setenv("STATE__SQLITE__BUSY_TIMEOUT", "1s")
-	s.T().Setenv("STATE__SQLITE__MAX_CONNS", "1")
+	s.T().Setenv("STATE_SQLITE_PATH", path)
+	s.T().Setenv("STATE_SQLITE_BUSY_TIMEOUT", "1s")
+	s.T().Setenv("STATE_SQLITE_MAX_CONNS", "1")
 
 	var (
 		injected      *Store

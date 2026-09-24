@@ -25,7 +25,7 @@ type clientRegistryParams struct {
 }
 
 // newClientRegistry parses the single shared ClientRegistry both /authorize
-// and /token depend on. A malformed OIDC__CLIENTS or OIDC__CLIENT_SECRETS —
+// and /token depend on. A malformed OIDC_CLIENTS or OIDC_CLIENT_SECRETS —
 // or a secret declared for an unregistered client — fails graph construction
 // here rather than surfacing as a per-request error later, so the PKCE
 // carve-out can never be half-configured at runtime.
@@ -119,21 +119,21 @@ type sessionManagerParams struct {
 
 // newSessionManager builds the device-flow verification-page session manager
 // against the shared BrowserSessionStore. The HMAC-SHA256 signing key is
-// validated here so a misconfigured OIDC__SESSION_SIGNING_KEY fails graph
+// validated here so a misconfigured OIDC_SESSION_SIGNING_KEY fails graph
 // construction at startup — never at the first failed cookie verify under
-// load. An empty key is treated as missing (mirrors how OIDC__CLIENTS
+// load. An empty key is treated as missing (mirrors how OIDC_CLIENTS
 // surfaces an unset value); a base64url-decoded length other than 32 is
 // rejected because a shorter key would silently weaken the cookie MAC.
 func newSessionManager(p sessionManagerParams) (*SessionManager, error) {
 	if p.SigningKeyB64 == "" {
-		return nil, fmt.Errorf("oidc: OIDC__SESSION_SIGNING_KEY is required (base64url-encoded %d bytes)", sessionSigningKeyBytes)
+		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY is required (base64url-encoded %d bytes)", sessionSigningKeyBytes)
 	}
 	key, err := base64.RawURLEncoding.DecodeString(p.SigningKeyB64)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: OIDC__SESSION_SIGNING_KEY must be base64url-encoded: %w", err)
+		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must be base64url-encoded: %w", err)
 	}
 	if len(key) != sessionSigningKeyBytes {
-		return nil, fmt.Errorf("oidc: OIDC__SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
+		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
 	}
 
 	opts := []SessionOption{}
@@ -193,18 +193,18 @@ type deviceUIParams struct {
 // tempogate-device-ui client must be present in the shared ClientRegistry
 // and registered confidential — NewDeviceUI surfaces both misconfigurations
 // as graph-construction errors, so an operator who forgets the
-// OIDC__CLIENT_SECRETS entry learns about it at startup rather than when
+// OIDC_CLIENT_SECRETS entry learns about it at startup rather than when
 // the first user submits the verification form. The signing key is the
-// same one OIDC__SESSION_SIGNING_KEY backs SessionManager with, decoded
+// same one OIDC_SESSION_SIGNING_KEY backs SessionManager with, decoded
 // once here so the bounce state and the session cookie share a single
 // cryptographic root.
 func newDeviceUIRegistrar(p deviceUIParams) (func(huma.API), error) {
 	key, err := base64.RawURLEncoding.DecodeString(p.SigningKeyB64)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: OIDC__SESSION_SIGNING_KEY must be base64url-encoded: %w", err)
+		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must be base64url-encoded: %w", err)
 	}
 	if len(key) != sessionSigningKeyBytes {
-		return nil, fmt.Errorf("oidc: OIDC__SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
+		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
 	}
 	ui, err := NewDeviceUI(p.Devices, p.Sessions, p.Clients, p.Token, key, p.Issuer,
 		// Whitelist the upstream IdP's origin in the device_enter page's CSP
