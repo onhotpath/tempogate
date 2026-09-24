@@ -20,7 +20,7 @@ independently of the binary — see [Helm chart releases](#helm-chart-releases).
 
 | Goal | Do this | You get |
 | --- | --- | --- |
-| **Full release** | `git tag vX.Y.Z && git push origin vX.Y.Z` | Images `:vX.Y.Z` `:X.Y` `:X` `:latest` · published GitHub Release with lean CLI binaries + `checksums.txt` · PR to update `Casks/tempogate.rb` (`brew install tempogate` after merge) |
+| **Full release** | `git tag vX.Y.Z && git push origin vX.Y.Z` | Images `:vX.Y.Z` `:X.Y` `:X` `:latest` · published GitHub Release with lean CLI binaries + `checksums.txt` · PR to update `Casks/tempogate.rb` (`brew install --cask tempogate` after merge and one-time cask trust) |
 | **Release candidate** | `git tag vX.Y.Z-rc.N && git push origin vX.Y.Z-rc.N` | Image `:vX.Y.Z-rc.N` only · GitHub Release marked **pre-release** with the same binaries · Homebrew **not** touched |
 | **Test / dev build** | Actions → **release** workflow → **Run workflow** → pick branch/SHA | Image `:sha-<short>` · snapshot binaries attached to the **workflow run** (no GitHub Release, ~14-day retention) · Homebrew **not** touched |
 
@@ -92,7 +92,7 @@ sha256sum -c --ignore-missing checksums.txt
 docker pull ghcr.io/onhotpath/tempogate:vX.Y.Z
 
 # homebrew (stable only): merge the cask PR, then verify the bump on main
-brew update && brew upgrade tempogate
+brew update && brew upgrade --cask tempogate
 ```
 
 ## Homebrew tap
@@ -104,8 +104,12 @@ Users install after that PR is merged with:
 
 ```bash
 brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
-brew install tempogate
+brew trust --cask onhotpath/tempogate/tempogate
+brew install --cask tempogate
 ```
+
+Homebrew 6 requires explicit trust for casks from non-official taps.
+Trusting this cask once avoids granting trust to the entire in-repo tap.
 
 While the repository is access-restricted, `brew` needs credentials to reach
 the private release assets — set `HOMEBREW_GITHUB_API_TOKEN` (a token with

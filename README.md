@@ -183,8 +183,12 @@ On macOS, via the Homebrew tap (hosted in this repository):
 
 ```bash
 brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
-brew install tempogate
+brew trust --cask onhotpath/tempogate/tempogate
+brew install --cask tempogate
 ```
+
+Homebrew 6 requires trust for casks from non-official taps.
+The `brew trust` step grants trust only to the tempogate cask and is needed once.
 
 Or download a release asset directly (Linux x86_64 shown — pick your os/arch):
 
