@@ -8,7 +8,7 @@ BUILDINFO   := $(PKG)/buildinfo
 
 # Pin tool versions so CI and local installs agree. Bump deliberately.
 GCI_VERSION           ?= v0.14.0
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.13.2
 
 GIT_TAG    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
