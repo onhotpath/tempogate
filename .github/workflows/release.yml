@@ -91,8 +91,8 @@ jobs:
     name: goreleaser (cli binaries)
     runs-on: ubuntu-latest
     # Overrides the workflow-level `contents: read`: GoReleaser needs to create
-    # the GitHub Release, upload assets, and commit the regenerated
-    # Casks/tempogate.rb back to this repo's main (in-repo Homebrew tap).
+    # the GitHub Release, upload assets, and open a PR for the regenerated
+    # Casks/tempogate.rb in this repo (in-repo Homebrew tap).
     permissions:
       contents: write
     steps:
@@ -108,7 +108,7 @@ jobs:
 
       # Tag push (vX.Y.Z / vX.Y.Z-rc.N): publish a GitHub Release with the lean
       # multi-arch CLI binaries + checksums. `prerelease: auto` marks rc tags.
-      # On stable tags GoReleaser also commits the refreshed cask to main.
+      # On stable tags GoReleaser also opens a PR for the refreshed cask.
       - name: GoReleaser (release on tag push)
         if: github.event_name == 'push'
         uses: goreleaser/goreleaser-action@v7

@@ -57,18 +57,15 @@ checksum:
 homebrew_casks:
   - name: tempogate
     binaries: [tempogate]
-    # In-repo tap: the cask lives in onhotpath/tempogate itself (Casks/), so the
-    # default workflow GITHUB_TOKEN can push it — no second repo, no PAT.
+    # In-repo tap: open a PR because main requires changes through a PR.
     repository:
       owner: onhotpath
       name: tempogate
-      branch: main
       token: '{{ .Env.GITHUB_TOKEN }}'
-      # If main is branch-protected against direct pushes, switch to PR mode:
-      # pull_request:
-      #   enabled: true
-      #   base:
-      #     branch: main
+      pull_request:
+        enabled: true
+        base:
+          branch: main
     directory: Casks
     homepage: 'https://github.com/onhotpath/tempogate'
     description: 'OIDC provider & OAuth2 authorization server for self-hosted Temporal — CLI'

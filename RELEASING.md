@@ -20,7 +20,7 @@ independently of the binary — see [Helm chart releases](#helm-chart-releases).
 
 | Goal | Do this | You get |
 | --- | --- | --- |
-| **Full release** | `git tag vX.Y.Z && git push origin vX.Y.Z` | Images `:vX.Y.Z` `:X.Y` `:X` `:latest` · published GitHub Release with lean CLI binaries + `checksums.txt` · `Casks/tempogate.rb` bumped on `main` (`brew install tempogate`) |
+| **Full release** | `git tag vX.Y.Z && git push origin vX.Y.Z` | Images `:vX.Y.Z` `:X.Y` `:X` `:latest` · published GitHub Release with lean CLI binaries + `checksums.txt` · PR to update `Casks/tempogate.rb` (`brew install tempogate` after merge) |
 | **Release candidate** | `git tag vX.Y.Z-rc.N && git push origin vX.Y.Z-rc.N` | Image `:vX.Y.Z-rc.N` only · GitHub Release marked **pre-release** with the same binaries · Homebrew **not** touched |
 | **Test / dev build** | Actions → **release** workflow → **Run workflow** → pick branch/SHA | Image `:sha-<short>` · snapshot binaries attached to the **workflow run** (no GitHub Release, ~14-day retention) · Homebrew **not** touched |
 
@@ -60,10 +60,10 @@ git push origin vX.Y.Z
 ```
 
 Watch the **release** workflow: the `publish` job pushes the image tags; the
-`binaries` job runs GoReleaser. On a stable tag GoReleaser also commits the
-regenerated `Casks/tempogate.rb` back to `main` (in-repo Homebrew tap) — that
-bot commit is `paths-ignore`d by CI so it doesn't spawn a no-op run, and
-`release.yml` has no `push: main` trigger so it doesn't re-fire.
+`binaries` job runs GoReleaser.
+On a stable tag GoReleaser also opens a PR for the regenerated
+`Casks/tempogate.rb` in the in-repo Homebrew tap.
+Merge that PR to publish the cask on `main`.
 
 For a **dev build**, don't tag — run the workflow manually and choose the
 branch/SHA. You get a `:sha-<short>` image and the binaries as a downloadable
@@ -91,15 +91,16 @@ sha256sum -c --ignore-missing checksums.txt
 # container
 docker pull ghcr.io/onhotpath/tempogate:vX.Y.Z
 
-# homebrew (stable only): confirm the Casks/tempogate.rb bump landed on main
+# homebrew (stable only): merge the cask PR, then verify the bump on main
 brew update && brew upgrade tempogate
 ```
 
 ## Homebrew tap
 
 The cask lives in this repository under `Casks/tempogate.rb` (no separate tap
-repo, no extra token — GoReleaser pushes it with the workflow's default
-`GITHUB_TOKEN`). Users install with:
+repo or extra token).
+GoReleaser opens an update PR with the workflow's default `GITHUB_TOKEN`.
+Users install after that PR is merged with:
 
 ```bash
 brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
@@ -111,10 +112,8 @@ the private release assets — set `HOMEBREW_GITHUB_API_TOKEN` (a token with
 read access) or rely on a configured git credential helper. `gh release
 download` works with your existing `gh auth` and needs no extra setup.
 
-If `main` ever becomes branch-protected against direct pushes, switch the
-cask to PR mode (the `pull_request:` block is commented in
-[`.goreleaser.yaml`](.goreleaser.yaml)) so GoReleaser opens a PR instead of
-committing the bump directly.
+The cask update uses PR mode in [`.goreleaser.yaml`](.goreleaser.yaml)
+because `main` requires changes through a PR.
 
 ## Rollback
 
