@@ -59,6 +59,8 @@ func TestLoadRejectsMissingExplicitFileAndMalformedYAML(t *testing.T) {
 	c := defaultConfig()
 	_, err := Load(c, filepath.Join(t.TempDir(), "missing.yaml"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = Load(c, t.TempDir())
+	require.ErrorContains(t, err, "is a directory")
 	path := filepath.Join(t.TempDir(), "broken.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("oidc: [\n"), 0o600))
 	_, err = Load(c, path)
