@@ -90,11 +90,11 @@ jobs:
   binaries:
     name: goreleaser (cli binaries)
     runs-on: ubuntu-latest
-    # Overrides the workflow-level `contents: read`: GoReleaser needs to create
-    # the GitHub Release, upload assets, and open a PR for the regenerated
-    # Casks/tempogate.rb in this repo (in-repo Homebrew tap).
+    # GoReleaser creates the GitHub Release, uploads assets, pushes a cask
+    # branch, and opens a PR for the in-repo Homebrew tap.
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
         with:
