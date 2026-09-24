@@ -224,7 +224,7 @@ Kubernetes deployment is covered by the chart in
 OCI artifact, so no repo clone is needed:
 
 ```bash
-helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.1.0
+helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.3.0
 ```
 
 The chart is versioned independently of the binary; pick the version from
