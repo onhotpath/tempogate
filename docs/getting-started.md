@@ -75,7 +75,8 @@ from a checkout):
 
 ```bash
 brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
-brew install tempogate
+brew trust --cask onhotpath/tempogate/tempogate
+brew install --cask tempogate
 ```
 
 Point it at the demo issuer and sign in once:
