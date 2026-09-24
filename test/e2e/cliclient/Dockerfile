@@ -8,7 +8,7 @@
 # Build context is the repo root so the binary shares the module (and its jwx
 # pin) with tempogate. Built only by the e2e test via testcontainers.
 # syntax=docker/dockerfile:1.24
-ARG GO_VERSION=1.26.3
+ARG GO_VERSION=1.27.1
 ARG HEADLESS_SHELL_IMAGE=chromedp/headless-shell:131.0.6778.86
 
 FROM golang:${GO_VERSION}-alpine AS builder
@@ -17,8 +17,6 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 ENV CGO_ENABLED=0
-# jwx/v4 pulls in encoding/json/v2, still behind this experiment gate.
-ENV GOEXPERIMENT=jsonv2
 # The cliclient stands in for a developer laptop, which only ever runs the
 # CLI subcommands (login/token/version). The lean build drops the SQLite +
 # OIDC + admin subtree along with the server-bound subcommands, so the

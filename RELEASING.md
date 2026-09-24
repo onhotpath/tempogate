@@ -2,7 +2,7 @@
 
 Every release produces **two artifacts** from one trigger:
 
-1. A **multi-arch container image** → `ghcr.io/fenmoai/tempogate` (the full
+1. A **multi-arch container image** → `ghcr.io/onhotpath/tempogate` (the full
    server: `serve`/`migrate`/`keys` + all modules), built by the `publish`
    job (Docker buildx + QEMU).
 2. A **lean standalone CLI** (`login`/`token`/`version` only — no
@@ -83,13 +83,13 @@ artifact on that workflow run.
 
 ```bash
 # binaries
-gh release download vX.Y.Z --repo fenmoai/tempogate --pattern checksums.txt \
+gh release download vX.Y.Z --repo onhotpath/tempogate --pattern checksums.txt \
   --pattern 'tempogate_*'
 sha256sum -c --ignore-missing checksums.txt
 ./tempogate version --detailed          # tag / commit / buildDate populated
 
 # container
-docker pull ghcr.io/fenmoai/tempogate:vX.Y.Z
+docker pull ghcr.io/onhotpath/tempogate:vX.Y.Z
 
 # homebrew (stable only): confirm the Casks/tempogate.rb bump landed on main
 brew update && brew upgrade tempogate
@@ -102,7 +102,7 @@ repo, no extra token — GoReleaser pushes it with the workflow's default
 `GITHUB_TOKEN`). Users install with:
 
 ```bash
-brew tap fenmoai/tempogate https://github.com/fenmoai/tempogate
+brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
 brew install tempogate
 ```
 
@@ -133,7 +133,7 @@ workflow is
 
 | Goal | Do this | You get |
 | --- | --- | --- |
-| **Cut a chart release** | Bump `charts/tempogate/Chart.yaml` `version:` (semver) in a PR; merge to `main` | OCI artifact `oci://ghcr.io/fenmoai/charts/tempogate:X.Y.Z` · GitHub Release `chart-vX.Y.Z` with the `.tgz` attached · the `chart-vX.Y.Z` tag, created by the workflow |
+| **Cut a chart release** | Bump `charts/tempogate/Chart.yaml` `version:` (semver) in a PR; merge to `main` | OCI artifact `oci://ghcr.io/onhotpath/charts/tempogate:X.Y.Z` · GitHub Release `chart-vX.Y.Z` with the `.tgz` attached · the `chart-vX.Y.Z` tag, created by the workflow |
 | **Cut it explicitly** | `git tag chart-vX.Y.Z && git push origin chart-vX.Y.Z` — the tagged commit's `Chart.yaml` `version` must equal `X.Y.Z` | Same as above |
 
 ### Versioning rules
@@ -151,8 +151,8 @@ workflow is
 
 ### One-time registry setup
 
-The first push creates `ghcr.io/fenmoai/charts/tempogate` as a **private**
-package. For `helm install oci://ghcr.io/fenmoai/charts/tempogate` to work
+The first push creates `ghcr.io/onhotpath/charts/tempogate` as a **private**
+package. For `helm install oci://ghcr.io/onhotpath/charts/tempogate` to work
 **without authentication**, a maintainer must, once, set that package's
 visibility to **public** in the org's GitHub Packages settings and link it
 to this repository. Later versions inherit the setting.
@@ -170,8 +170,8 @@ GitHub Release.
 
 ```bash
 # the published OCI artifact resolves and templates cleanly
-helm template t oci://ghcr.io/fenmoai/charts/tempogate --version X.Y.Z >/dev/null
+helm template t oci://ghcr.io/onhotpath/charts/tempogate --version X.Y.Z >/dev/null
 
 # the GitHub Release exists with the packaged chart attached
-gh release view chart-vX.Y.Z --repo fenmoai/tempogate
+gh release view chart-vX.Y.Z --repo onhotpath/tempogate
 ```

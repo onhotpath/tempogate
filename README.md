@@ -1,9 +1,9 @@
 # tempogate
 
-[![ci](https://github.com/fenmoai/tempogate/actions/workflows/ci.yml/badge.svg)](https://github.com/fenmoai/tempogate/actions/workflows/ci.yml)
+[![ci](https://github.com/onhotpath/tempogate/actions/workflows/ci.yml/badge.svg)](https://github.com/onhotpath/tempogate/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Go Reference](https://pkg.go.dev/badge/github.com/fenmoai/tempogate.svg)](https://pkg.go.dev/github.com/fenmoai/tempogate)
-[![codecov](https://codecov.io/gh/fenmoai/tempogate/graph/badge.svg?token=6WiKK8pF1p)](https://codecov.io/gh/fenmoai/tempogate)
+[![Go Reference](https://pkg.go.dev/badge/github.com/onhotpath/tempogate.svg)](https://pkg.go.dev/github.com/onhotpath/tempogate)
+[![codecov](https://codecov.io/gh/onhotpath/tempogate/graph/badge.svg?token=6WiKK8pF1p)](https://codecov.io/gh/onhotpath/tempogate)
 
 > A single-binary OIDC provider and OAuth2 authorization server that gives
 > self-hosted [Temporal](https://temporal.io/) browser SSO and JWT machine-auth
@@ -141,11 +141,11 @@ identity-mapping layer matures.
 Run a published image (once a release is cut):
 
 ```bash
-docker run --rm -p 8000:8000 ghcr.io/fenmoai/tempogate:latest
+docker run --rm -p 8000:8000 ghcr.io/onhotpath/tempogate:latest
 curl http://127.0.0.1:8000/healthz
 ```
 
-Container images are published to `ghcr.io/fenmoai/tempogate`:
+Container images are published to `ghcr.io/onhotpath/tempogate`:
 
 | Tag | Meaning |
 | --- | --- |
@@ -165,14 +165,14 @@ dispatch builds attach the binaries to the workflow run only.
 On macOS, via the Homebrew tap (hosted in this repository):
 
 ```bash
-brew tap fenmoai/tempogate https://github.com/fenmoai/tempogate
+brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
 brew install tempogate
 ```
 
 Or download a release asset directly (Linux x86_64 shown — pick your os/arch):
 
 ```bash
-gh release download vX.Y.Z --repo fenmoai/tempogate \
+gh release download vX.Y.Z --repo onhotpath/tempogate \
   --pattern 'tempogate_*_linux_x86_64.tar.gz' --pattern checksums.txt
 sha256sum -c --ignore-missing checksums.txt
 tar -xzf tempogate_*_linux_x86_64.tar.gz
@@ -184,7 +184,7 @@ Cutting a release? See [RELEASING.md](RELEASING.md).
 Build from source:
 
 ```bash
-git clone git@github.com:fenmoai/tempogate.git
+git clone git@github.com:onhotpath/tempogate.git
 cd tempogate
 make build
 ./.bin/tempogate serve            # listens on 127.0.0.1:8000
@@ -202,11 +202,11 @@ Kubernetes deployment is covered by the chart in
 OCI artifact, so no repo clone is needed:
 
 ```bash
-helm install tempogate oci://ghcr.io/fenmoai/charts/tempogate --version 0.1.0
+helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.1.0
 ```
 
 The chart is versioned independently of the binary; pick the version from
-the [chart releases](https://github.com/fenmoai/tempogate/releases?q=chart-v).
+the [chart releases](https://github.com/onhotpath/tempogate/releases?q=chart-v).
 
 ## Personal tokens from a laptop
 
@@ -310,10 +310,7 @@ flow. Both assert that the minted JWT authenticates a gRPC `ListNamespaces`
 and that an unauthenticated call is rejected. It is behind a `//go:build e2e`
 tag and a dedicated CI job, so the default `make ci` stays fast.
 
-Go 1.26+ is required. A dependency (`lestrrat-go/jwx/v4`) uses
-`encoding/json/v2`, so builds need `GOEXPERIMENT=jsonv2`; the `make` targets
-export it for you. Set it yourself if you invoke `go build`/`go test`
-directly. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Go 1.27+ is required. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentation
 
@@ -340,7 +337,7 @@ directly. See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Security
 
 Report vulnerabilities via
-[GitHub Security Advisories](https://github.com/fenmoai/tempogate/security/advisories/new)
+[GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new)
 — see [SECURITY.md](SECURITY.md). **Do not** open public issues for security
 reports.
 

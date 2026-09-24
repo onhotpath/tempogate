@@ -7,15 +7,15 @@ type: application
 version: 0.2.0
 
 # The tempogate image tag this chart defaults to. `image.tag` overrides it;
-# when unset the Deployment pulls ghcr.io/fenmoai/tempogate:<appVersion>.
+# when unset the Deployment pulls ghcr.io/onhotpath/tempogate:<appVersion>.
 appVersion: "0.1.0"
 
 # tempogate is a pure-Go binary; nothing here needs a bleeding-edge API.
 kubeVersion: ">=1.25.0-0"
 
-home: https://github.com/fenmoai/tempogate
+home: https://github.com/onhotpath/tempogate
 sources:
-  - https://github.com/fenmoai/tempogate
+  - https://github.com/onhotpath/tempogate
 keywords:
   - temporal
   - oidc
@@ -25,4 +25,4 @@ keywords:
   - authz
 maintainers:
   - name: tempogate maintainers
-    url: https://github.com/fenmoai/tempogate
+    url: https://github.com/onhotpath/tempogate

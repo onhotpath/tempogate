@@ -82,4 +82,4 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(github.com/fenmoai/tempogate)
+        - prefix(github.com/onhotpath/tempogate)

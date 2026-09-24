@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fenmoai/tempogate/api"
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 // newKeys builds a keypair-backed JWKS source for WithWellKnown, reusing the

@@ -15,8 +15,8 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwt"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/api"
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 // memKeyStore satisfies keys.KeyStore structurally — the consumer-side

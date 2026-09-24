@@ -15,9 +15,9 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/admin"
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/admin"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 // KeysIntegrationSuite wires a real sqlite store, a real *keys.Keys (with a

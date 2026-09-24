@@ -6,8 +6,8 @@ import (
 
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 type Params struct {

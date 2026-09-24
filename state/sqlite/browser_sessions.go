@@ -9,7 +9,7 @@ import (
 	sqlite3 "modernc.org/sqlite"
 	sqlite3lib "modernc.org/sqlite/lib"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 // ErrDuplicateBrowserSession is returned by SaveBrowserSession when a row

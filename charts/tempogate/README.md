@@ -23,7 +23,7 @@ helm install tempogate ./charts/tempogate \
 From the published OCI registry:
 
 ```bash
-helm install tempogate oci://ghcr.io/fenmoai/charts/tempogate \
+helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate \
   --version 0.1.0
 ```
 
@@ -86,7 +86,7 @@ auth:
 | Key | Default | Description |
 | --- | --- | --- |
 | `replicaCount` | `1` | Pods. MUST stay `1` (SQLite single-writer). |
-| `image.repository` | `ghcr.io/fenmoai/tempogate` | Image repository. |
+| `image.repository` | `ghcr.io/onhotpath/tempogate` | Image repository. |
 | `image.tag` | `""` | Image tag; defaults to the chart `appVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Image pull secrets. |

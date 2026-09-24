@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 
-	"github.com/fenmoai/tempogate/cli"
+	"github.com/onhotpath/tempogate/cli"
 )
 
 type LoginCmdSuite struct {

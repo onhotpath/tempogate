@@ -48,7 +48,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 // adminCreateBody mirrors admin.createBody (kept here as a black-box JSON

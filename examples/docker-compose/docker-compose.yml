@@ -43,7 +43,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
     # Or pin a published image instead of building from source:
-    # image: ghcr.io/fenmoai/tempogate:latest
+    # image: ghcr.io/onhotpath/tempogate:latest
     command: ["migrate"]
     # Named volumes are root-owned; the distroless image runs as nonroot and
     # could not create the SQLite file. Running as root here (and in serve)
@@ -59,7 +59,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
-    # image: ghcr.io/fenmoai/tempogate:latest
+    # image: ghcr.io/onhotpath/tempogate:latest
     command: ["serve"]
     user: "0:0"
     environment:

@@ -18,8 +18,8 @@ import (
 	jwxjwt "github.com/lestrrat-go/jwx/v4/jwt"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 // toStringSlice converts the permissions claim (decoded as []any) to []string

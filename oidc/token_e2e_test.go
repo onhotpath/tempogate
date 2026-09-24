@@ -15,11 +15,11 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwt"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/api"
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/oidc"
-	"github.com/fenmoai/tempogate/oidc/google"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 // TokenE2ESuite exercises the whole authorization-code flow against the real

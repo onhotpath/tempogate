@@ -9,7 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 // sessionSigningKeyBytes is the required HMAC-SHA256 key length. RFC 4231

@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/fenmoai/tempogate/admin"
+	"github.com/onhotpath/tempogate/admin"
 )
 
 // integration_keys_test.go extends StoreSuite (defined in store_test.go) with

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fenmoai/tempogate/api"
+	"github.com/onhotpath/tempogate/api"
 )
 
 func newTestServer(t *testing.T, r *api.Readiness) (*httptest.Server, func()) {

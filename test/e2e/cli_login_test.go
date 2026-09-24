@@ -48,7 +48,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/fenmoai/tempogate/cli"
+	"github.com/onhotpath/tempogate/cli"
 )
 
 const (

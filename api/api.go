@@ -22,7 +22,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"github.com/fenmoai/tempogate/buildinfo"
+	"github.com/onhotpath/tempogate/buildinfo"
 )
 
 type apiConfig struct {

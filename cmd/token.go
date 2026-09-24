@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"github.com/fenmoai/tempogate/cli"
+	"github.com/onhotpath/tempogate/cli"
 )
 
 // tokenRefresher resolves a usable token, renewing it near expiry. It is a

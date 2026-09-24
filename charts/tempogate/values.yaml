@@ -11,7 +11,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/fenmoai/tempogate
+  repository: ghcr.io/onhotpath/tempogate
   pullPolicy: IfNotPresent
   # Defaults to the chart appVersion when empty.
   tag: ""

@@ -61,9 +61,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/perms"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/perms"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 const (

@@ -16,7 +16,7 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwt"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/oidc/google"
 )
 
 const (

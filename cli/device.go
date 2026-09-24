@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 const (

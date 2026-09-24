@@ -1,6 +1,6 @@
 // Package buildinfo exposes ldflag-injected build metadata.
 //
-// Values are populated at link time via -X github.com/fenmoai/tempogate/buildinfo.<var>.
+// Values are populated at link time via -X github.com/onhotpath/tempogate/buildinfo.<var>.
 // When unset (e.g. `go run`), accessors return "dev" / "unknown" sentinels.
 package buildinfo
 

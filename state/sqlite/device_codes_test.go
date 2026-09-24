@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 // device_codes_test.go extends StoreSuite with the RFC 8628 device-code

@@ -9,7 +9,7 @@ import (
 
 	jwxjwt "github.com/lestrrat-go/jwx/v4/jwt"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 // memDeviceFlowStore is a fully-stateful in-memory oidc.DeviceCodeStore for

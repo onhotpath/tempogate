@@ -19,9 +19,9 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
-	"github.com/fenmoai/tempogate/api"
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 const readHeaderTimeout = 10 * time.Second

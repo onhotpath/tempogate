@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fenmoai/tempogate/admin"
+	"github.com/onhotpath/tempogate/admin"
 )
 
 // denylistSeedOpts is the minimal valid IntegrationKey shape — non-empty

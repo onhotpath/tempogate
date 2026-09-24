@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 // browser_sessions_test.go extends StoreSuite with the first-party browser

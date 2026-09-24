@@ -16,8 +16,8 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 var testSigningKeyB64 = base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))

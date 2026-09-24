@@ -8,7 +8,7 @@ import (
 	sqlite3 "modernc.org/sqlite"
 	sqlite3lib "modernc.org/sqlite/lib"
 
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 // ErrDuplicateKid is returned by SaveKeypair when a keypair with the given

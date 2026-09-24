@@ -11,10 +11,10 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
-	"github.com/fenmoai/tempogate/config"
-	"github.com/fenmoai/tempogate/keys"
-	tlog "github.com/fenmoai/tempogate/log"
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/config"
+	"github.com/onhotpath/tempogate/keys"
+	tlog "github.com/onhotpath/tempogate/log"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 type StoreSuite struct {

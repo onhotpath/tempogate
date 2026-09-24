@@ -9,7 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/api"
+	"github.com/onhotpath/tempogate/api"
 )
 
 type GenOASCmdSuite struct {

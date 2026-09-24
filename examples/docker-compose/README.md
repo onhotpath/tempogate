@@ -66,7 +66,7 @@ See the header of `docker-compose.host-network.yml`.
 | `temporal-ui` | `temporalio/ui:2.32.0` | Web UI, configured only via stock `TEMPORAL_AUTH_*` |
 
 To run a published image instead of building tempogate from source, swap the
-`build:` block for `image: ghcr.io/fenmoai/tempogate:latest` (commented in
+`build:` block for `image: ghcr.io/onhotpath/tempogate:latest` (commented in
 `docker-compose.yml`).
 
 ## Configuration
