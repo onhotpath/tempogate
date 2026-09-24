@@ -77,11 +77,11 @@ func TestLoadEmptyEnvironmentOverridesYAML(t *testing.T) {
 }
 
 func TestLoadUsesSingleUnderscoreEnvironmentNames(t *testing.T) {
-	t.Setenv("HTTP__LISTENER", "0.0.0.0:9999")
+	t.Setenv("HTTP_LISTENER", "0.0.0.0:9999")
 	c := defaultConfig()
 	_, err := Load(c, "")
 	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1:8000", c.HTTP.Listener.String())
+	require.Equal(t, "0.0.0.0:9999", c.HTTP.Listener.String())
 }
 
 func TestLoadRejectsInvalidDurationAndListener(t *testing.T) {
