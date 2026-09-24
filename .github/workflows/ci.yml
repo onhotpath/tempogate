@@ -3,8 +3,7 @@ name: ci
 on:
   push:
     branches: [main]
-    # GoReleaser commits the regenerated Homebrew cask to main on each stable
-    # release (in-repo tap); that bot commit touches only Casks/** and must
+    # Merging the generated Homebrew cask PR touches only Casks/** and must
     # not spawn a no-op CI run. PRs are unaffected (paths-ignore is push-only).
     paths-ignore: ['Casks/**']
   pull_request:
