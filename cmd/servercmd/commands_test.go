@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	xloadtype "github.com/gojekfarm/xtools/xload/type"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
@@ -12,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
@@ -35,11 +35,11 @@ func TestFxWiresServerSubcommands(t *testing.T) {
 			api.NewReadiness,
 			func(r *api.Readiness) *api.Servers { return api.New(r) },
 			fx.Annotate(
-				func() xloadtype.Listener { return xloadtype.Listener{} },
+				func() config.Listener { return config.Listener{} },
 				fx.ResultTags(`name:"http"`),
 			),
 			fx.Annotate(
-				func() xloadtype.Listener { return xloadtype.Listener{} },
+				func() config.Listener { return config.Listener{} },
 				fx.ResultTags(`name:"admin"`),
 			),
 			fx.Annotate(

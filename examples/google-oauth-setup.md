@@ -35,7 +35,7 @@ in *Testing* you must add each user under *Test users*.
 ![Google Auth Platform — Audience](img/google-oauth/02-consent-screen-audience.png)
 
 > The domain gate that actually controls who gets in is tempogate's
-> `OIDC__ALLOWED_DOMAINS`, applied to Google's verified email **after**
+> `OIDC_ALLOWED_DOMAINS`, applied to Google's verified email **after**
 > sign-in — not this screen. Consent-screen *Internal* and
 > `ALLOWED_DOMAINS` are independent layers; set both.
 
@@ -51,7 +51,7 @@ Services → Credentials → Create credentials → OAuth client ID").
   (`https://tempogate.example.com`); either works.
 - **Authorized redirect URIs:** add exactly **tempogate's issuer + `/callback/google`**:
 
-  | tempogate `OIDC__ISSUER` | Authorized redirect URI |
+  | tempogate `OIDC_ISSUER` | Authorized redirect URI |
   | --- | --- |
   | `https://tempogate.example.com` | `https://tempogate.example.com/callback/google` |
   | `https://tempogate.example.com/idp` (sub-path hosting) | `https://tempogate.example.com/idp/callback/google` |
@@ -68,8 +68,8 @@ Google shows a **Client ID** and **Client secret**. They map to:
 
 | Google value | tempogate env var | Helm value |
 | --- | --- | --- |
-| Client ID | `OIDC__GOOGLE__CLIENT_ID` | `auth.upstream.google.clientIdSecretRef` |
-| Client secret | `OIDC__GOOGLE__CLIENT_SECRET` | `auth.upstream.google.clientSecretSecretRef` |
+| Client ID | `OIDC_GOOGLE_CLIENT_ID` | `auth.upstream.google.clientIdSecretRef` |
+| Client secret | `OIDC_GOOGLE_CLIENT_SECRET` | `auth.upstream.google.clientSecretSecretRef` |
 
 ![Client ID and secret](img/google-oauth/04-credentials.png)
 
@@ -79,11 +79,11 @@ Never commit the client secret.
 
 ## 5. Verify
 
-Set the four required SSO env vars (`OIDC__ISSUER`, `OIDC__CLIENTS`,
-`OIDC__ALLOWED_DOMAINS`, and the two `OIDC__GOOGLE__*` credentials — full
+Set the four required SSO env vars (`OIDC_ISSUER`, `OIDC_CLIENTS`,
+`OIDC_ALLOWED_DOMAINS`, and the two `OIDC_GOOGLE_*` credentials — full
 reference in [docs/configuration.md](../docs/configuration.md)), start
 tempogate, and complete a Web UI or `tempogate login` sign-in. A
 `redirect_uri_mismatch` from Google means step 3's URI does not exactly equal
-`OIDC__ISSUER` + `/callback/google`.
+`OIDC_ISSUER` + `/callback/google`.
 
 The end-to-end walkthrough is [docs/getting-started.md](../docs/getting-started.md).

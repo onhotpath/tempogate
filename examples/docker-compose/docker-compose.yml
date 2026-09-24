@@ -25,7 +25,7 @@ services:
       dockerfile: examples/docker-compose/Dockerfile.mockoidc
     environment:
       MOCK_LISTEN: ":8081"
-      # Must equal tempogate's OIDC__GOOGLE__ISSUER_URL: it is the `iss` the
+      # Must equal tempogate's OIDC_GOOGLE_ISSUER_URL: it is the `iss` the
       # mock stamps into the id_token and the base tempogate runs OIDC
       # discovery against. The name resolves to this container in-network and
       # to 127.0.0.1 on your host (the consent screen is browser-facing).
@@ -50,8 +50,8 @@ services:
     # is what the e2e test does for the same reason — demo only.
     user: "0:0"
     environment:
-      STATE__SQLITE__PATH: /state/state.db
-      OIDC__ISSUER: "http://tempogate:8000"
+      STATE_SQLITE_PATH: /state/state.db
+      OIDC_ISSUER: "http://tempogate:8000"
     volumes:
       - tempogate-state:/state
 
@@ -63,12 +63,12 @@ services:
     command: ["serve"]
     user: "0:0"
     environment:
-      HTTP__LISTENER: "0.0.0.0:8000"
-      STATE__SQLITE__PATH: /state/state.db
-      LOG__LEVEL: "${LOG_LEVEL:-info}"
+      HTTP_LISTENER: "0.0.0.0:8000"
+      STATE_SQLITE_PATH: /state/state.db
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
       # Externally reachable base URL — advertised as `issuer`, derives
       # jwks_uri. Same string on host and in-network (see header comment).
-      OIDC__ISSUER: "http://tempogate:8000"
+      OIDC_ISSUER: "http://tempogate:8000"
       # Four registered clients:
       #   - temporal-ui            (confidential, see CLIENT_SECRETS): Web UI SSO.
       #   - tempogate-cli          (public, PKCE):                     loopback `tempogate login`.
@@ -76,20 +76,20 @@ services:
       #                             `tempogate login --device` — see docs/cli-device-login.md.
       #   - tempogate-device-ui    (confidential, see CLIENT_SECRETS): tempogate's own
       #                             verification page bouncing through Google SSO.
-      OIDC__CLIENTS: "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1:,tempogate-device:,tempogate-device-ui:http://tempogate:8000/device/sso-callback"
-      OIDC__CLIENT_SECRETS: "temporal-ui:${TEMPORAL_UI_CLIENT_SECRET:-local-temporal-ui-confidential-secret},tempogate-device-ui:${TEMPOGATE_DEVICE_UI_CLIENT_SECRET:-local-tempogate-device-ui-confidential-secret}"
+      OIDC_CLIENTS: "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1:,tempogate-device:,tempogate-device-ui:http://tempogate:8000/device/sso-callback"
+      OIDC_CLIENT_SECRETS: "temporal-ui:${TEMPORAL_UI_CLIENT_SECRET:-local-temporal-ui-confidential-secret},tempogate-device-ui:${TEMPOGATE_DEVICE_UI_CLIENT_SECRET:-local-tempogate-device-ui-confidential-secret}"
       # Device flow: HMAC key signing the short-lived verification-page session
       # cookie. Base64url-encoded 32-byte randomness. Demo value below; in real
       # deployments generate once with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`
       # and supply via a Secret. Must be stable across rolling restarts.
-      OIDC__SESSION_SIGNING_KEY: "${TEMPOGATE_SESSION_SIGNING_KEY:-rR2qre32BN8f7gFU8Al1szcjZz9R8Ks2g8jtoJNizls}"
-      OIDC__ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
+      OIDC_SESSION_SIGNING_KEY: "${TEMPOGATE_SESSION_SIGNING_KEY:-rR2qre32BN8f7gFU8Al1szcjZz9R8Ks2g8jtoJNizls}"
+      OIDC_ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
       # Point tempogate's upstream Google client at the bundled mock.
-      OIDC__GOOGLE__CLIENT_ID: "tempogate-upstream"
-      OIDC__GOOGLE__CLIENT_SECRET: "tempogate-upstream-secret"
-      OIDC__GOOGLE__AUTH_ENDPOINT: "http://mockoidc:8081/auth"
-      OIDC__GOOGLE__TOKEN_ENDPOINT: "http://mockoidc:8081/token"
-      OIDC__GOOGLE__ISSUER_URL: "http://mockoidc:8081"
+      OIDC_GOOGLE_CLIENT_ID: "tempogate-upstream"
+      OIDC_GOOGLE_CLIENT_SECRET: "tempogate-upstream-secret"
+      OIDC_GOOGLE_AUTH_ENDPOINT: "http://mockoidc:8081/auth"
+      OIDC_GOOGLE_TOKEN_ENDPOINT: "http://mockoidc:8081/token"
+      OIDC_GOOGLE_ISSUER_URL: "http://mockoidc:8081"
     ports:
       - "8000:8000"
     depends_on:

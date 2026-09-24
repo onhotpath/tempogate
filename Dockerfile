@@ -30,10 +30,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -X 'github.com/onhotpath/tempogate/buildinfo.gitCommit=${GIT_COMMIT}' \
         -X 'github.com/onhotpath/tempogate/buildinfo.buildDate=${BUILD_DATE}'" \
       -o /out/tempogate .
+RUN mkdir -p /out/state
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/tempogate /tempogate
+COPY --chown=nonroot:nonroot --from=builder /out/state /var/lib/tempogate
 
 USER nonroot:nonroot
 ENTRYPOINT ["/tempogate"]

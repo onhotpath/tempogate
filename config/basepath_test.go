@@ -1,7 +1,7 @@
 package config
 
 // TestIssuerBasePath pins the single-source-of-truth rule: the base path tempogate
-// mounts its OIDC surface under is exactly the path component of OIDC__ISSUER,
+// mounts its OIDC surface under is exactly the path component of OIDC_ISSUER,
 // normalised to a leading slash with no trailing slash (empty ⇒ root, the
 // historical behaviour). Trailing-slash handling mirrors the existing
 // strings.TrimRight(issuer, "/") in api/wellknown.go and oidc.New.

@@ -81,7 +81,7 @@ brew install tempogate
 Point it at the demo issuer and sign in once:
 
 ```bash
-export TEMPOGATE__ISSUER=http://tempogate:8000
+export TEMPOGATE_ISSUER=http://tempogate:8000
 tempogate login                                  # browser sign-in, once
 export TEMPORAL_AUTH_TOKEN=$(tempogate token)    # thereafter; auto-refreshes
 ```

@@ -32,7 +32,7 @@ const (
 
 	// DeviceSSOCallbackPath is the loopback redirect_uri the internal
 	// tempogate-device-ui client registers under. It must match the value
-	// operators configure for that client in OIDC__CLIENTS; the registrar's
+	// operators configure for that client in OIDC_CLIENTS; the registrar's
 	// graph-time validation rejects a deployment where they have drifted.
 	DeviceSSOCallbackPath = DevicePath + "/sso-callback"
 
@@ -49,7 +49,7 @@ const (
 
 	// DefaultInternalDeviceUIClientID is the client_id tempogate registers
 	// for its own verification-UI side. It is operator-configured in
-	// OIDC__CLIENTS / OIDC__CLIENT_SECRETS rather than auto-injected so
+	// OIDC_CLIENTS / OIDC_CLIENT_SECRETS rather than auto-injected so
 	// active verification sessions survive a rolling restart.
 	DefaultInternalDeviceUIClientID = "tempogate-device-ui"
 
@@ -91,13 +91,13 @@ var devicePages = map[string]string{
 // ClientRegistry. The registrar wraps it into an actionable graph-time
 // failure so a deployment never silently lands the verification UI on top
 // of an unconfigured internal client.
-var ErrInternalDeviceUIClientMissing = errors.New("oidc: internal device-ui client not registered in OIDC__CLIENTS")
+var ErrInternalDeviceUIClientMissing = errors.New("oidc: internal device-ui client not registered in OIDC_CLIENTS")
 
 // ErrInternalDeviceUIClientNotConfidential is returned by NewDeviceUI when
 // the internal client is registered without a secret. The verification
 // bounce authenticates the client at /token via that secret, so a public
 // registration would silently break the round-trip.
-var ErrInternalDeviceUIClientNotConfidential = errors.New("oidc: internal device-ui client must be confidential (set its secret in OIDC__CLIENT_SECRETS)")
+var ErrInternalDeviceUIClientNotConfidential = errors.New("oidc: internal device-ui client must be confidential (set its secret in OIDC_CLIENT_SECRETS)")
 
 // ErrInvalidUpstreamIDPOrigin is returned by NewDeviceUI when a non-empty
 // upstream IdP authorization endpoint URL fails to parse into a CSP form-
@@ -204,7 +204,7 @@ func WithDeviceUILogger(l *slog.Logger) DeviceUIOption {
 // flow unless its origin is in the source list.
 //
 // rawAuthEndpoint is the same value that wires the Authorizer's upstream
-// endpoint (OIDC__GOOGLE__AUTH_ENDPOINT) — pass it verbatim, the constructor
+// endpoint (OIDC_GOOGLE_AUTH_ENDPOINT) — pass it verbatim, the constructor
 // extracts scheme + host. An empty value leaves the directive at 'self',
 // which is correct only when the upstream IdP shares the issuer's origin
 // (typically integration tests with an in-process mock).
@@ -213,7 +213,7 @@ func WithUpstreamIDPOrigin(rawAuthEndpoint string) DeviceUIOption {
 }
 
 // NewDeviceUI constructs the device-flow verification UI handler. signingKey
-// is the same OIDC__SESSION_SIGNING_KEY the SessionManager uses: the bounce
+// is the same OIDC_SESSION_SIGNING_KEY the SessionManager uses: the bounce
 // state is HMAC-signed under it so one operator secret backs the entire
 // device-flow surface. The internal tempogate-device-ui client must be
 // present in clients and carry a non-empty secret; missing or public

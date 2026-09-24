@@ -22,7 +22,7 @@ const (
 
 	// defaultDeviceClientID is the public client_id the headless CLI presents
 	// to tempogate for the device flow. The operator registers it once in
-	// OIDC__CLIENTS; it is deliberately distinct from the loopback CLI
+	// OIDC_CLIENTS; it is deliberately distinct from the loopback CLI
 	// (tempogate-cli) and from tempogate's own internal verification-page
 	// client (tempogate-device-ui) so the audit log answers cleanly which
 	// flow any given event belongs to.
@@ -120,7 +120,7 @@ func WithDeviceIssuer(rawURL string) DeviceOption {
 }
 
 // WithDeviceClientID overrides the client_id presented to tempogate. Defaults
-// to "tempogate-device"; must match a registered public OIDC__CLIENTS entry.
+// to "tempogate-device"; must match a registered public OIDC_CLIENTS entry.
 // An empty argument is ignored so callers can pass through a flag value
 // without a nil-check.
 func WithDeviceClientID(id string) DeviceOption {
@@ -245,7 +245,7 @@ const (
 // or the polling deadline elapses.
 func (f *DeviceFlow) Run(ctx context.Context) (Token, error) {
 	if f.issuer == "" {
-		return Token{}, errors.New("cli: issuer is required (pass --issuer or set TEMPOGATE__ISSUER)")
+		return Token{}, errors.New("cli: issuer is required (pass --issuer or set TEMPOGATE_ISSUER)")
 	}
 
 	init, err := f.requestDeviceCode(ctx)

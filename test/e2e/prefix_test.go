@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Acceptance proof for sub-path hosting: the real tempogate image, run with an
-// OIDC__ISSUER that carries a path, serves its entire OIDC surface under that
+// OIDC_ISSUER that carries a path, serves its entire OIDC surface under that
 // path while /healthz and /readyz stay at the root (k8s-probe-only, never
 // path-routed). This closes the real-binary/fx/config gap that the api-package
 // httptest coverage cannot reach; the authorize→Google→token loopback under a
@@ -35,16 +35,16 @@ func TestSubPathIssuerHosting(t *testing.T) {
 	issuer := tempogateIssuer + basePath // http://tempogate:8000/idp
 
 	env := map[string]string{
-		"HTTP__LISTENER":               "0.0.0.0:8000",
-		"STATE__SQLITE__PATH":          "/state/state.db",
-		"OIDC__ISSUER":                 issuer,
-		"OIDC__CLIENTS":                "ui:https://app.example.com/",
-		"OIDC__ALLOWED_DOMAINS":        "example.com",
-		"OIDC__GOOGLE__CLIENT_ID":      "tempogate-upstream",
-		"OIDC__GOOGLE__CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC__GOOGLE__AUTH_ENDPOINT":  mockIssuer + "/auth",
-		"OIDC__GOOGLE__TOKEN_ENDPOINT": mockIssuer + "/token",
-		"OIDC__GOOGLE__ISSUER_URL":     mockIssuer,
+		"HTTP_LISTENER":              "0.0.0.0:8000",
+		"STATE_SQLITE_PATH":          "/state/state.db",
+		"OIDC_ISSUER":                issuer,
+		"OIDC_CLIENTS":               "ui:https://app.example.com/",
+		"OIDC_ALLOWED_DOMAINS":       "example.com",
+		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":  mockIssuer + "/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT": mockIssuer + "/token",
+		"OIDC_GOOGLE_ISSUER_URL":     mockIssuer,
 	}
 	// Path-prefixed issuer ⇒ the device-ui's registered callback also
 	// lives under the prefix; pass the prefixed issuer so the registration

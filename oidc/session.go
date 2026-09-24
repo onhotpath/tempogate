@@ -99,7 +99,7 @@ func WithSessionClock(now func() time.Time) SessionOption {
 }
 
 // WithSessionTTL overrides the default 5-minute session lifetime. Operators
-// pick this via OIDC__SESSION_TTL.
+// pick this via OIDC_SESSION_TTL.
 func WithSessionTTL(d time.Duration) SessionOption {
 	return func(m *SessionManager) { m.ttl = d }
 }
@@ -123,7 +123,7 @@ func WithCookiePath(path string) SessionOption {
 
 // NewSessionManager builds a SessionManager. signingKey is the HMAC-SHA256
 // key the cookie's MAC is computed under; callers are expected to sieve a
-// length-32 key out of OIDC__SESSION_SIGNING_KEY at config load (failing
+// length-32 key out of OIDC_SESSION_SIGNING_KEY at config load (failing
 // fast on misconfiguration) so this constructor stays unconditional.
 func NewSessionManager(store BrowserSessionStore, signingKey []byte, opts ...SessionOption) *SessionManager {
 	m := &SessionManager{

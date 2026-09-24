@@ -14,7 +14,7 @@
 // because the CLI never talks to Google directly: the only redirect Google
 // (here, mockgoogle) ever sees is tempogate's own fixed /callback/google. The
 // http://127.0.0.1:<ephemeral>/callback loopback URI is validated solely
-// against tempogate's client-registry prefix (OIDC__CLIENTS contains
+// against tempogate's client-registry prefix (OIDC_CLIENTS contains
 // `tempogate-cli:http://127.0.0.1:`), so a fresh ephemeral port each run needs
 // no registration anywhere. See docs/cli-loopback-login.md.
 //
@@ -58,7 +58,7 @@ const (
 
 	// e2eSessionSigningKeyB64 is "0123456789abcdef0123456789abcdef" — 32 ASCII
 	// bytes, base64url-encoded without padding — the length the oidc fx graph
-	// requires for OIDC__SESSION_SIGNING_KEY. Stable across runs so the
+	// requires for OIDC_SESSION_SIGNING_KEY. Stable across runs so the
 	// deployment is reproducible; the key is shared by every e2e setupCLIStack
 	// caller (loopback + device-flow). It only protects the intra-cluster
 	// verification-UI bounce, so a public test literal is fine.
@@ -66,11 +66,11 @@ const (
 )
 
 // addDeviceUIServerEnv layers onto an existing tempogate e2e env map the
-// OIDC__* keys the server's fx graph has required since the device-flow
+// OIDC_* keys the server's fx graph has required since the device-flow
 // verification UI's signed-cookie session work landed: the signing key,
 // the internal `tempogate-device-ui` client (registered with a confidential
-// secret), and its callback under callbackIssuer. Existing OIDC__CLIENTS /
-// OIDC__CLIENT_SECRETS entries are preserved — the device-ui registration
+// secret), and its callback under callbackIssuer. Existing OIDC_CLIENTS /
+// OIDC_CLIENT_SECRETS entries are preserved — the device-ui registration
 // is appended — so harnesses that already register their own clients
 // (loopback CLI, temporal-ui SSO, noop admin tests) keep working unchanged.
 // callbackIssuer is the issuer URL the device-ui callback hangs off of
@@ -78,19 +78,19 @@ const (
 // form so the registered redirect matches what the handler builds).
 func addDeviceUIServerEnv(env map[string]string, callbackIssuer string) {
 	deviceUIRegistration := deviceUIClientID + ":" + callbackIssuer + "/device/sso-callback"
-	if existing := env["OIDC__CLIENTS"]; existing != "" {
-		env["OIDC__CLIENTS"] = existing + "," + deviceUIRegistration
+	if existing := env["OIDC_CLIENTS"]; existing != "" {
+		env["OIDC_CLIENTS"] = existing + "," + deviceUIRegistration
 	} else {
-		env["OIDC__CLIENTS"] = deviceUIRegistration
+		env["OIDC_CLIENTS"] = deviceUIRegistration
 	}
 	deviceUISecretEntry := deviceUIClientID + ":" + deviceUIClientSecret
-	if existing := env["OIDC__CLIENT_SECRETS"]; existing != "" {
-		env["OIDC__CLIENT_SECRETS"] = existing + "," + deviceUISecretEntry
+	if existing := env["OIDC_CLIENT_SECRETS"]; existing != "" {
+		env["OIDC_CLIENT_SECRETS"] = existing + "," + deviceUISecretEntry
 	} else {
-		env["OIDC__CLIENT_SECRETS"] = deviceUISecretEntry
+		env["OIDC_CLIENT_SECRETS"] = deviceUISecretEntry
 	}
-	env["OIDC__SESSION_SIGNING_KEY"] = e2eSessionSigningKeyB64
-	env["OIDC__SESSION_TTL"] = "5m"
+	env["OIDC_SESSION_SIGNING_KEY"] = e2eSessionSigningKeyB64
+	env["OIDC_SESSION_TTL"] = "5m"
 }
 
 // jwtPattern matches a compact JWS (three base64url segments) so the token a
@@ -298,7 +298,7 @@ func (s *cliStack) runToken(ctx context.Context, t *testing.T) string {
 
 // setupCLIStack brings up tempogate + mockgoogle + temporal + cliclient (the
 // shared headless-Chrome + tempogate-binary container). extraTempogateEnv is
-// merged onto the base OIDC__* config so the device-flow acceptance proof can
+// merged onto the base OIDC_* config so the device-flow acceptance proof can
 // register its extra client_ids + signing key without forcing the loopback
 // proof to carry inert config.
 func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[string]string) *cliStack {
@@ -336,16 +336,16 @@ func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[s
 	// stack; addDeviceUIServerEnv adds the verification-UI's internal
 	// client + session signing key the server fx graph requires.
 	tgEnv := map[string]string{
-		"HTTP__LISTENER":               "0.0.0.0:8000",
-		"STATE__SQLITE__PATH":          "/state/state.db",
-		"OIDC__ISSUER":                 tempogateIssuer,
-		"OIDC__CLIENTS":                cliClientID + ":http://127.0.0.1:," + deviceClientID + ":cli",
-		"OIDC__ALLOWED_DOMAINS":        "example.com",
-		"OIDC__GOOGLE__CLIENT_ID":      "tempogate-upstream",
-		"OIDC__GOOGLE__CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC__GOOGLE__AUTH_ENDPOINT":  mockIssuer + "/auth",
-		"OIDC__GOOGLE__TOKEN_ENDPOINT": mockIssuer + "/token",
-		"OIDC__GOOGLE__ISSUER_URL":     mockIssuer,
+		"HTTP_LISTENER":              "0.0.0.0:8000",
+		"STATE_SQLITE_PATH":          "/state/state.db",
+		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_CLIENTS":               cliClientID + ":http://127.0.0.1:," + deviceClientID + ":cli",
+		"OIDC_ALLOWED_DOMAINS":       "example.com",
+		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":  mockIssuer + "/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT": mockIssuer + "/token",
+		"OIDC_GOOGLE_ISSUER_URL":     mockIssuer,
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	for _, m := range extraTempogateEnv {

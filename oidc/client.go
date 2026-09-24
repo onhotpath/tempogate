@@ -36,8 +36,8 @@ type Client struct {
 }
 
 // ClientRegistry is the v1 client allowlist: client_id → Client. There is no
-// admin UI; it is populated once from OIDC__CLIENTS (and, for the confidential
-// carve-out, OIDC__CLIENT_SECRETS).
+// admin UI; it is populated once from OIDC_CLIENTS (and, for the confidential
+// carve-out, OIDC_CLIENT_SECRETS).
 type ClientRegistry map[string]Client
 
 // ParseClientRegistry parses a comma-separated list of "id:redirect_uri_prefix"
@@ -69,7 +69,7 @@ func ParseClientRegistry(raw string) (ClientRegistry, error) {
 // WithSecrets overlays confidential-client secrets onto an already-parsed
 // registry from a comma-separated list of "id:secret" entries (first ':'
 // splits, so the secret may contain ':'). It is deliberately a separate
-// source from OIDC__CLIENTS: the redirect allowlist stays the primary,
+// source from OIDC_CLIENTS: the redirect allowlist stays the primary,
 // always-present config, and the PKCE carve-out is an explicit, auditable
 // opt-in. A secret for an unregistered client_id, a duplicate, or an empty
 // id/secret is an error so the relaxation can never be enabled by accident.

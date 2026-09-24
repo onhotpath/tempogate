@@ -27,7 +27,7 @@ func TestAppSuite(t *testing.T) {
 //
 // The device-flow verification UI (oidc.NewDeviceUI) pulls *SessionManager
 // into the api_registrars group, which in turn requires
-// OIDC__SESSION_SIGNING_KEY at graph construction. Two OIDC client
+// OIDC_SESSION_SIGNING_KEY at graph construction. Two OIDC client
 // registrations (tempogate-device-ui plus its secret) are also required
 // so newDeviceUIRegistrar's internal-client validation passes. Stubbing
 // both here keeps the app-graph smoke test self-contained without taking
@@ -38,11 +38,11 @@ func (s *AppSuite) TestNew() {
 	// (or secret-scanner) can tell at a glance this is fixture data, not
 	// a leaked key.
 	const fixtureSessionKey = "0123456789abcdef0123456789abcdef"
-	s.T().Setenv("STATE__SQLITE__PATH", filepath.Join(s.T().TempDir(), "state.db"))
-	s.T().Setenv("OIDC__SESSION_SIGNING_KEY", base64.RawURLEncoding.EncodeToString([]byte(fixtureSessionKey)))
-	s.T().Setenv("OIDC__CLIENTS", "tempogate-device-ui:https://tempogate.example.com/idp/device/sso-callback")
-	s.T().Setenv("OIDC__CLIENT_SECRETS", "tempogate-device-ui:app-test-secret")
-	s.T().Setenv("OIDC__ISSUER", "https://tempogate.example.com/idp")
+	s.T().Setenv("STATE_SQLITE_PATH", filepath.Join(s.T().TempDir(), "state.db"))
+	s.T().Setenv("OIDC_SESSION_SIGNING_KEY", base64.RawURLEncoding.EncodeToString([]byte(fixtureSessionKey)))
+	s.T().Setenv("OIDC_CLIENTS", "tempogate-device-ui:https://tempogate.example.com/idp/device/sso-callback")
+	s.T().Setenv("OIDC_CLIENT_SECRETS", "tempogate-device-ui:app-test-secret")
+	s.T().Setenv("OIDC_ISSUER", "https://tempogate.example.com/idp")
 
 	ran := false
 	a := fxtest.New(s.T(),

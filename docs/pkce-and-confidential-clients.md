@@ -115,14 +115,14 @@ Net properties:
 The carve-out is an explicit, auditable opt-in kept **separate** from the
 primary client allowlist:
 
-* `OIDC__CLIENTS` — comma-separated `id:redirect_uri_prefix`. Every client
+* `OIDC_CLIENTS` — comma-separated `id:redirect_uri_prefix`. Every client
   declared here is **public**: PKCE mandatory.
-* `OIDC__CLIENT_SECRETS` — comma-separated `id:secret`. An entry promotes an
+* `OIDC_CLIENT_SECRETS` — comma-separated `id:secret`. An entry promotes an
   already-registered client to **confidential**. A secret for an
   unregistered `id`, a duplicate, or an empty value fails fast at startup,
   so the relaxation cannot be half-configured or enabled by a typo.
 
-Keeping secrets out of `OIDC__CLIENTS` means the redirect allowlist — the
+Keeping secrets out of `OIDC_CLIENTS` means the redirect allowlist — the
 always-present, security-critical config — is unchanged, and turning the
 carve-out on for a client is a visible, deliberate second step.
 

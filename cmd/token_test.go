@@ -41,7 +41,7 @@ func (s *TokenCmdSuite) TestDefaultRefresherDelegatesToEnsureFresh() {
 }
 
 func (s *TokenCmdSuite) TestRequiresIssuer() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "")
+	s.T().Setenv("TEMPOGATE_ISSUER", "")
 
 	cmd := newTokenCmd(zap.NewNop())
 	cmd.SetOut(new(testWriter))
@@ -53,7 +53,7 @@ func (s *TokenCmdSuite) TestRequiresIssuer() {
 }
 
 func (s *TokenCmdSuite) TestPrintsAccessTokenOnly() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	tokenRefresher = func(_ context.Context, _, issuer string) (cli.Token, error) {
 		s.Equal("https://tempogate.example.com", issuer, "env issuer must reach EnsureFresh")
 		return cli.Token{AccessToken: "fresh.jwt.token", RefreshToken: "r"}, nil
@@ -70,7 +70,7 @@ func (s *TokenCmdSuite) TestPrintsAccessTokenOnly() {
 }
 
 func (s *TokenCmdSuite) TestTokenPathResolutionFailurePropagates() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	s.T().Setenv("HOME", "")
 	s.T().Setenv("USERPROFILE", "")
 
@@ -87,7 +87,7 @@ func (s *TokenCmdSuite) TestTokenPathResolutionFailurePropagates() {
 }
 
 func (s *TokenCmdSuite) TestRefreshErrorPropagates() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	tokenRefresher = func(_ context.Context, _, _ string) (cli.Token, error) {
 		return cli.Token{}, errors.New("cli: no token file; run `tempogate login` first")
 	}

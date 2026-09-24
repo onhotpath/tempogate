@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	xloadtype "github.com/gojekfarm/xtools/xload/type"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -28,13 +27,13 @@ func (s *ConfigSuite) TestNew() {
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
@@ -60,19 +59,19 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "log and http overridden by env",
 			env: map[string]string{
-				"LOG__LEVEL":     "debug",
-				"HTTP__LISTENER": "0.0.0.0:9000",
+				"LOG_LEVEL":     "debug",
+				"HTTP_LISTENER": "0.0.0.0:9000",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "debug"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(0, 0, 0, 0),
 						Port: 9000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
@@ -98,18 +97,18 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "admin listener overridden by env",
 			env: map[string]string{
-				"ADMIN__LISTENER": "127.0.0.1:9091",
+				"ADMIN_LISTENER": "127.0.0.1:9091",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 9091,
 					},
@@ -135,20 +134,20 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "sqlite overridden by env",
 			env: map[string]string{
-				"STATE__SQLITE__PATH":         "/tmp/tempogate.db",
-				"STATE__SQLITE__MAX_CONNS":    "8",
-				"STATE__SQLITE__BUSY_TIMEOUT": "2s",
+				"STATE_SQLITE_PATH":         "/tmp/tempogate.db",
+				"STATE_SQLITE_MAX_CONNS":    "8",
+				"STATE_SQLITE_BUSY_TIMEOUT": "2s",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
@@ -174,18 +173,18 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "oidc issuer overridden by env",
 			env: map[string]string{
-				"OIDC__ISSUER": "https://tempogate.internal.example.com",
+				"OIDC_ISSUER": "https://tempogate.internal.example.com",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
@@ -211,20 +210,20 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "oidc clients and google overridden by env",
 			env: map[string]string{
-				"OIDC__CLIENTS":               "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1",
-				"OIDC__GOOGLE__CLIENT_ID":     "google-client-123.apps.googleusercontent.com",
-				"OIDC__GOOGLE__AUTH_ENDPOINT": "http://127.0.0.1:9999/mock/auth",
+				"OIDC_CLIENTS":              "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1",
+				"OIDC_GOOGLE_CLIENT_ID":     "google-client-123.apps.googleusercontent.com",
+				"OIDC_GOOGLE_AUTH_ENDPOINT": "http://127.0.0.1:9999/mock/auth",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
@@ -252,21 +251,21 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "callback allowlist and google credentials overridden by env",
 			env: map[string]string{
-				"OIDC__ALLOWED_DOMAINS":        "example.com,corp.example.org",
-				"OIDC__GOOGLE__CLIENT_SECRET":  "gocspx-secret",
-				"OIDC__GOOGLE__TOKEN_ENDPOINT": "http://127.0.0.1:9999/mock/token",
-				"OIDC__GOOGLE__ISSUER_URL":     "http://127.0.0.1:9999",
+				"OIDC_ALLOWED_DOMAINS":       "example.com,corp.example.org",
+				"OIDC_GOOGLE_CLIENT_SECRET":  "gocspx-secret",
+				"OIDC_GOOGLE_TOKEN_ENDPOINT": "http://127.0.0.1:9999/mock/token",
+				"OIDC_GOOGLE_ISSUER_URL":     "http://127.0.0.1:9999",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
@@ -294,19 +293,19 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "session ttl and signing key overridden by env",
 			env: map[string]string{
-				"OIDC__SESSION_TTL":         "10m",
-				"OIDC__SESSION_SIGNING_KEY": "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
+				"OIDC_SESSION_TTL":         "10m",
+				"OIDC_SESSION_SIGNING_KEY": "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
 				HTTP: HTTPConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
 				},
 				Admin: AdminConfig{
-					Listener: xloadtype.Listener{
+					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},

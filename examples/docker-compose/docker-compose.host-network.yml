@@ -26,16 +26,16 @@ services:
   tempogate-migrate:
     network_mode: host
     environment:
-      OIDC__ISSUER: "http://localhost:8000"
+      OIDC_ISSUER: "http://localhost:8000"
 
   tempogate:
     network_mode: host
     environment:
-      OIDC__ISSUER: "http://localhost:8000"
-      OIDC__CLIENTS: "temporal-ui:http://localhost:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1:,tempogate-device:,tempogate-device-ui:http://localhost:8000/device/sso-callback"
-      OIDC__GOOGLE__AUTH_ENDPOINT: "http://localhost:8081/auth"
-      OIDC__GOOGLE__TOKEN_ENDPOINT: "http://localhost:8081/token"
-      OIDC__GOOGLE__ISSUER_URL: "http://localhost:8081"
+      OIDC_ISSUER: "http://localhost:8000"
+      OIDC_CLIENTS: "temporal-ui:http://localhost:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1:,tempogate-device:,tempogate-device-ui:http://localhost:8000/device/sso-callback"
+      OIDC_GOOGLE_AUTH_ENDPOINT: "http://localhost:8081/auth"
+      OIDC_GOOGLE_TOKEN_ENDPOINT: "http://localhost:8081/token"
+      OIDC_GOOGLE_ISSUER_URL: "http://localhost:8081"
 
   db:
     network_mode: host

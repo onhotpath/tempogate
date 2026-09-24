@@ -180,17 +180,17 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 
 	// --- tempogate: migrate (one-shot) then serve, sharing a volume ---
 	tgEnv := map[string]string{
-		"HTTP__LISTENER":               "0.0.0.0:8000",
-		"STATE__SQLITE__PATH":          "/state/state.db",
-		"OIDC__ISSUER":                 tempogateIssuer,
-		"OIDC__CLIENTS":                clientID + ":" + uiCallback,
-		"OIDC__CLIENT_SECRETS":         clientID + ":" + clientSecret,
-		"OIDC__ALLOWED_DOMAINS":        "example.com",
-		"OIDC__GOOGLE__CLIENT_ID":      "tempogate-upstream",
-		"OIDC__GOOGLE__CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC__GOOGLE__AUTH_ENDPOINT":  mockIssuer + "/auth",
-		"OIDC__GOOGLE__TOKEN_ENDPOINT": mockIssuer + "/token",
-		"OIDC__GOOGLE__ISSUER_URL":     mockIssuer,
+		"HTTP_LISTENER":              "0.0.0.0:8000",
+		"STATE_SQLITE_PATH":          "/state/state.db",
+		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_CLIENTS":               clientID + ":" + uiCallback,
+		"OIDC_CLIENT_SECRETS":        clientID + ":" + clientSecret,
+		"OIDC_ALLOWED_DOMAINS":       "example.com",
+		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":  mockIssuer + "/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT": mockIssuer + "/token",
+		"OIDC_GOOGLE_ISSUER_URL":     mockIssuer,
 	}
 	// The temporal-UI SSO surface this test exercises doesn't touch the
 	// device flow, but the server fx graph now requires the verification

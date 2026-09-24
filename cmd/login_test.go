@@ -42,7 +42,7 @@ func (s *LoginCmdSuite) TestDefaultRunnerDelegatesToFlow() {
 }
 
 func (s *LoginCmdSuite) TestRequiresIssuer() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "")
+	s.T().Setenv("TEMPOGATE_ISSUER", "")
 
 	cmd := newLoginCmd(zap.NewNop())
 	cmd.SetOut(new(testWriter))
@@ -51,11 +51,11 @@ func (s *LoginCmdSuite) TestRequiresIssuer() {
 	err := cmd.ExecuteContext(context.Background())
 	s.Require().Error(err)
 	s.Contains(err.Error(), "issuer is required")
-	s.Contains(err.Error(), "TEMPOGATE__ISSUER")
+	s.Contains(err.Error(), "TEMPOGATE_ISSUER")
 }
 
 func (s *LoginCmdSuite) TestEnvIssuerPrintsTokenAndPersists() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	expiry := time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC)
 	loginRunner = func(_ context.Context, _ ...cli.Option) (cli.Token, error) {
 		return cli.Token{AccessToken: "header.payload.sig", RefreshToken: "r-1", ExpiresAt: expiry}, nil
@@ -80,7 +80,7 @@ func (s *LoginCmdSuite) TestEnvIssuerPrintsTokenAndPersists() {
 }
 
 func (s *LoginCmdSuite) TestTokenPersistenceFailurePropagates() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	loginRunner = func(_ context.Context, _ ...cli.Option) (cli.Token, error) {
 		return cli.Token{AccessToken: "t", RefreshToken: "r"}, nil
 	}
@@ -102,7 +102,7 @@ func (s *LoginCmdSuite) TestTokenPersistenceFailurePropagates() {
 }
 
 func (s *LoginCmdSuite) TestTokenPathResolutionFailurePropagates() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	s.T().Setenv("HOME", "")
 	s.T().Setenv("USERPROFILE", "")
 
@@ -119,7 +119,7 @@ func (s *LoginCmdSuite) TestTokenPathResolutionFailurePropagates() {
 }
 
 func (s *LoginCmdSuite) TestFlagIssuerOverridesEnvAndErrorsPropagate() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://from-env.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://from-env.example.com")
 	loginRunner = func(_ context.Context, _ ...cli.Option) (cli.Token, error) {
 		return cli.Token{}, errors.New("cli: token exchange rejected (invalid_grant): nope")
 	}
@@ -205,7 +205,7 @@ func (s *DeviceLoginDispatchSuite) TestDispatchTable() {
 
 	for _, tc := range cases {
 		s.Run(tc.name, func() {
-			s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+			s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 			s.T().Setenv("TEMPOGATE_LOGIN_MODE", tc.envMode)
 
 			var loopbackCalls, deviceCalls int
@@ -245,7 +245,7 @@ func (s *DeviceLoginDispatchSuite) TestDispatchTable() {
 }
 
 func (s *DeviceLoginDispatchSuite) TestDevicePathPersistsTokenAndPrintsSignedIn() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	expiry := time.Date(2031, 6, 7, 8, 9, 10, 0, time.UTC)
 	deviceRunner = func(_ context.Context, _ ...cli.DeviceOption) (cli.Token, error) {
 		return cli.Token{AccessToken: "dev.payload.sig", RefreshToken: "dev-r-1", ExpiresAt: expiry}, nil
@@ -274,7 +274,7 @@ func (s *DeviceLoginDispatchSuite) TestDevicePathPersistsTokenAndPrintsSignedIn(
 }
 
 func (s *DeviceLoginDispatchSuite) TestDeviceRunnerErrorPropagates() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	deviceRunner = func(_ context.Context, _ ...cli.DeviceOption) (cli.Token, error) {
 		return cli.Token{}, errors.New("cli: user denied the device authorization")
 	}
@@ -306,7 +306,7 @@ func (s *DeviceLoginDispatchSuite) TestDefaultDeviceRunnerDelegatesToDeviceFlow(
 // the options list because counting it is enough to prove the wiring — the
 // option's effect is covered by cli's own DeviceFlow tests.
 func (s *DeviceLoginDispatchSuite) TestDevicePollDeadlineFlagAppendsOption() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 
 	cases := []struct {
 		name    string
@@ -353,7 +353,7 @@ func (s *DeviceLoginDispatchSuite) TestDevicePollDeadlineFlagAppendsOption() {
 // otherwise see the full issuer expires_in time out before figuring out
 // their flag was ignored.
 func (s *DeviceLoginDispatchSuite) TestDevicePollDeadlineRejectsNegative() {
-	s.T().Setenv("TEMPOGATE__ISSUER", "https://tempogate.example.com")
+	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
 	deviceRunner = func(_ context.Context, _ ...cli.DeviceOption) (cli.Token, error) {
 		s.FailNow("deviceRunner must not run when the flag fails validation")
 		return cli.Token{}, nil

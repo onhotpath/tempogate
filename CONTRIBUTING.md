@@ -12,7 +12,7 @@ Open a GitHub issue with:
 
 - The version (`tempogate version --detailed`).
 - A minimal reproduction — config, command line, expected vs. observed.
-- Logs at `LOG__LEVEL=debug` if possible.
+- Logs at `LOG_LEVEL=debug` if possible.
 
 For security vulnerabilities, **do not open a public issue.** Use [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new) instead — see [SECURITY.md](SECURITY.md).
 

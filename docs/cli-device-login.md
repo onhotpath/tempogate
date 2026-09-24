@@ -38,7 +38,7 @@ on the server.
 ## Quick start
 
 ```bash
-export TEMPOGATE__ISSUER=https://tempogate.example.com
+export TEMPOGATE_ISSUER=https://tempogate.example.com
 
 tempogate login --device
 ```
@@ -84,7 +84,7 @@ When you open the URL on a second device:
 1. **You are bounced through Google sign-in.** The verification page requires
    an authenticated tempogate session, and tempogate establishes one by
    sending you through its own `/authorize` chain — the same Google SSO path
-   the Web UI uses, with the same `OIDC__ALLOWED_DOMAINS` domain gate. No new
+   the Web UI uses, with the same `OIDC_ALLOWED_DOMAINS` domain gate. No new
    sign-in machinery: a session at `/device*` is just a token from
    tempogate's existing OIDC pipeline, scoped to the device-flow cookie.
 2. **The confirmation page shows the user_code prominently.** If you arrived
@@ -132,10 +132,10 @@ a fresh flow.
 
 ## Operator setup
 
-Register **two** new clients in `OIDC__CLIENTS`, on top of any existing entries:
+Register **two** new clients in `OIDC_CLIENTS`, on top of any existing entries:
 
 ```
-OIDC__CLIENTS=\
+OIDC_CLIENTS=\
   tempogate-cli:http://127.0.0.1:,\
   tempogate-device:,\
   tempogate-device-ui:https://tempogate.example.com/device/sso-callback
@@ -149,7 +149,7 @@ OIDC__CLIENTS=\
 `tempogate-device-ui` is confidential — register a secret for it:
 
 ```
-OIDC__CLIENT_SECRETS=\
+OIDC_CLIENT_SECRETS=\
   temporal-ui:…existing…,\
   tempogate-device-ui:<32+ bytes of base64url randomness, operator-managed>
 ```
@@ -159,18 +159,18 @@ The device flow also introduces a short-lived browser session at
 
 ```
 # Base64url-encoded 32 bytes of randomness:
-OIDC__SESSION_SIGNING_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
-OIDC__SESSION_TTL=5m   # default; the verification cookie's lifetime
+OIDC_SESSION_SIGNING_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+OIDC_SESSION_TTL=5m   # default; the verification cookie's lifetime
 ```
 
-`OIDC__SESSION_SIGNING_KEY` is required at startup — tempogate refuses to
+`OIDC_SESSION_SIGNING_KEY` is required at startup — tempogate refuses to
 boot if it is empty, not base64url, or does not decode to exactly 32 bytes
 (the HMAC-SHA256 key length). Both secrets above (`tempogate-device-ui`'s
-entry in `OIDC__CLIENT_SECRETS` and `OIDC__SESSION_SIGNING_KEY`) must be
+entry in `OIDC_CLIENT_SECRETS` and `OIDC_SESSION_SIGNING_KEY`) must be
 **stable across rolling restarts** — rotating them invalidates active
 approval sessions, so users mid-flow will see their verification page expire.
 
-The signed-in email is gated by `OIDC__ALLOWED_DOMAINS`, the same allowlist
+The signed-in email is gated by `OIDC_ALLOWED_DOMAINS`, the same allowlist
 the loopback flow and the Web UI use. The device flow inherits the user's
 full permissions; per-namespace scope downgrade on the approve page is not
 in this release.
@@ -189,7 +189,7 @@ in this release.
   `/device_authorization` into chat.
 * **The verification cookie is tightly scoped.** It is HttpOnly, Secure,
   `SameSite=Lax`, signed (not encrypted), path-scoped to the device-flow
-  verification UI, and has the TTL set by `OIDC__SESSION_TTL` (default 5m).
+  verification UI, and has the TTL set by `OIDC_SESSION_TTL` (default 5m).
   It is *not* a general-purpose tempogate login session — the only thing it
   authorizes is approving or denying a pending device flow.
 * **The minted token is identical to a loopback token.** Same lifetime,
@@ -209,4 +209,4 @@ in this release.
 * [docs/getting-started.md](getting-started.md) — the same demo stack with
   the device flow enabled.
 * [docs/configuration.md](configuration.md) — every env var, including
-  `OIDC__SESSION_TTL` and `OIDC__SESSION_SIGNING_KEY`.
+  `OIDC_SESSION_TTL` and `OIDC_SESSION_SIGNING_KEY`.

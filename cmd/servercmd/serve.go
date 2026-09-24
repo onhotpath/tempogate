@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/gojekfarm/xrun"
-	xloadtype "github.com/gojekfarm/xtools/xload/type"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
@@ -34,8 +34,8 @@ type serveParams struct {
 	Keys          *keys.Keys
 	Servers       *api.Servers
 	Readiness     *api.Readiness
-	Listener      xloadtype.Listener `name:"http"`
-	AdminListener xloadtype.Listener `name:"admin"`
+	Listener      config.Listener `name:"http"`
+	AdminListener config.Listener `name:"admin"`
 }
 
 func newServeCmd(p serveParams) *cobra.Command {
