@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/onhotpath/tempogate/buildinfo"
 )
 
 // NewRootCmd assembles the tempogate cobra tree from the given subcommands.
@@ -15,7 +17,9 @@ func NewRootCmd(subcommands ...*cobra.Command) *cobra.Command {
 		Short:         "OIDC + OAuth2 authorization server for self-hosted Temporal",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       buildinfo.Version(),
 	}
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	for _, sc := range subcommands {
 		rootCmd.AddCommand(sc)
 	}
