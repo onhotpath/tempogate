@@ -18,8 +18,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/admin"
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/admin"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 const testIssuer = "https://tempogate.test"

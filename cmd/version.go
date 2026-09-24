@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fenmoai/tempogate/buildinfo"
+	"github.com/onhotpath/tempogate/buildinfo"
 )
 
 type versionPayload struct {

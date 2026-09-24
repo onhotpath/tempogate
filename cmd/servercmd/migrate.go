@@ -5,7 +5,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 type migrateParams struct {

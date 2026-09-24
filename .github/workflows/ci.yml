@@ -48,9 +48,9 @@ jobs:
       # dead-code elimination. Fails loudly if a server import leaks in.
       - name: Lean CLI build guard (no server subtree)
         run: |
-          GOEXPERIMENT=jsonv2 go build -tags lean -o /dev/null .
-          leaked=$(GOEXPERIMENT=jsonv2 go list -tags lean -deps . \
-            | grep -E '^github\.com/fenmoai/tempogate/(api|state/sqlite|cmd/servercmd)$|^modernc\.org/(sqlite|libc)' || true)
+          go build -tags lean -o /dev/null .
+          leaked=$(go list -tags lean -deps . \
+            | grep -E '^github\.com/onhotpath/tempogate/(api|state/sqlite|cmd/servercmd)$|^modernc\.org/(sqlite|libc)' || true)
           if [ -n "$leaked" ]; then
             echo "server packages leaked into the lean CLI:"; echo "$leaked"; exit 1
           fi

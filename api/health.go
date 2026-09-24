@@ -6,7 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/fenmoai/tempogate/buildinfo"
+	"github.com/onhotpath/tempogate/buildinfo"
 )
 
 type healthBody struct {

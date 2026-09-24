@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/cli"
+	"github.com/onhotpath/tempogate/cli"
 )
 
 // pollResp is one scripted response for the /token endpoint. status drives

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.24
 
-ARG GO_VERSION=1.26.3
+ARG GO_VERSION=1.27.1
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
@@ -20,17 +20,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 
 ENV CGO_ENABLED=0
-# jwx/v4 pulls in encoding/json/v2, still behind this experiment gate.
-ENV GOEXPERIMENT=jsonv2
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath \
       -ldflags "-s -w \
-        -X 'github.com/fenmoai/tempogate/buildinfo.version=${VERSION}' \
-        -X 'github.com/fenmoai/tempogate/buildinfo.gitTag=${GIT_TAG}' \
-        -X 'github.com/fenmoai/tempogate/buildinfo.gitCommit=${GIT_COMMIT}' \
-        -X 'github.com/fenmoai/tempogate/buildinfo.buildDate=${BUILD_DATE}'" \
+        -X 'github.com/onhotpath/tempogate/buildinfo.version=${VERSION}' \
+        -X 'github.com/onhotpath/tempogate/buildinfo.gitTag=${GIT_TAG}' \
+        -X 'github.com/onhotpath/tempogate/buildinfo.gitCommit=${GIT_COMMIT}' \
+        -X 'github.com/onhotpath/tempogate/buildinfo.buildDate=${BUILD_DATE}'" \
       -o /out/tempogate .
 
 FROM gcr.io/distroless/static-debian12:nonroot

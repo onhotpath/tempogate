@@ -14,23 +14,19 @@ Open a GitHub issue with:
 - A minimal reproduction — config, command line, expected vs. observed.
 - Logs at `LOG__LEVEL=debug` if possible.
 
-For security vulnerabilities, **do not open a public issue.** Use [GitHub Security Advisories](https://github.com/fenmoai/tempogate/security/advisories/new) instead — see [SECURITY.md](SECURITY.md).
+For security vulnerabilities, **do not open a public issue.** Use [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new) instead — see [SECURITY.md](SECURITY.md).
 
 ## Development setup
 
 You need:
 
-- Go (version pinned in [`go.mod`](go.mod) — currently 1.26.x)
-- `GOEXPERIMENT=jsonv2` — the `lestrrat-go/jwx/v4` dependency imports
-  `encoding/json/v2`, still gated behind this experiment. The `make`
-  targets export it automatically; only set it by hand if you run
-  `go build`/`go test` directly.
+- Go (version pinned in [`go.mod`](go.mod) - currently 1.27.x)
 - Docker (only if you want to test the container build)
 
 Then:
 
 ```bash
-git clone git@github.com:fenmoai/tempogate.git
+git clone git@github.com:onhotpath/tempogate.git
 cd tempogate
 make tools     # one-time: installs gci + golangci-lint into ./.bin
 make test      # check + race + coverage
@@ -60,7 +56,7 @@ make start     # runs `tempogate serve` with build-info ldflags
 - **Top-level imports only.** No inline imports inside functions.
 - **Tests live in the same issue as the production code.** Don't split test PRs from feature PRs.
 - **Comment the *why*, not the *what*.** Well-named identifiers carry the *what*.
-- **Imports are grouped** standard / default / `prefix(github.com/fenmoai/tempogate)` — `make imports` does this for you.
+- **Imports are grouped** standard / default / `prefix(github.com/onhotpath/tempogate)` — `make imports` does this for you.
 
 ## Releasing
 

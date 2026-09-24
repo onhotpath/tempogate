@@ -3,7 +3,7 @@ package sqlite
 import (
 	"context"
 
-	"github.com/fenmoai/tempogate/admin"
+	"github.com/onhotpath/tempogate/admin"
 )
 
 // adminKeyRegistry adapts *Store to admin.KeyRegistry. The interface uses

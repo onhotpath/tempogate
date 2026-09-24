@@ -7,8 +7,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 type keysParams struct {

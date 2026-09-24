@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/api"
+	"github.com/onhotpath/tempogate/api"
 )
 
 type genOASParams struct {

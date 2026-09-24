@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 type ServeCmdSuite struct {

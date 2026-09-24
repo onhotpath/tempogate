@@ -4,7 +4,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 type serversParams struct {

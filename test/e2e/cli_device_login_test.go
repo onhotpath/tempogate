@@ -48,8 +48,8 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/fenmoai/tempogate/cli"
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/cli"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 const (

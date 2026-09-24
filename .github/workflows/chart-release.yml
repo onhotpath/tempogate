@@ -39,7 +39,7 @@ concurrency:
 
 env:
   CHART_DIR: charts/tempogate
-  OCI_REPO: oci://ghcr.io/fenmoai/charts
+  OCI_REPO: oci://ghcr.io/onhotpath/charts
 
 jobs:
   publish:
@@ -151,7 +151,7 @@ jobs:
             --notes "Install without cloning the repo:
 
           \`\`\`bash
-          helm install tempogate oci://ghcr.io/fenmoai/charts/tempogate --version ${version}
+          helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version ${version}
           \`\`\`
 
           See [\`charts/tempogate/README.md\`](https://github.com/${{ github.repository }}/blob/${tag}/charts/tempogate/README.md) for values and prerequisites."

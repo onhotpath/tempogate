@@ -10,7 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 const (

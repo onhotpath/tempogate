@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/fenmoai/tempogate/admin"
+	"github.com/onhotpath/tempogate/admin"
 )
 
 func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) error {

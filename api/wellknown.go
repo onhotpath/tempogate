@@ -7,8 +7,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 const (

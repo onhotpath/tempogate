@@ -9,7 +9,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
-	"github.com/fenmoai/tempogate/app"
+	"github.com/onhotpath/tempogate/app"
 )
 
 type AppSuite struct {

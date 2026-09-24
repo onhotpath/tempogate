@@ -23,7 +23,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 func stdHMACSHA256(key []byte) hash.Hash { return hmac.New(sha256.New, key) }

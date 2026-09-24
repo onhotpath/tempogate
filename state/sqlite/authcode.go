@@ -9,7 +9,7 @@ import (
 	sqlite3 "modernc.org/sqlite"
 	sqlite3lib "modernc.org/sqlite/lib"
 
-	"github.com/fenmoai/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 // ErrDuplicateAuthCode is returned by SaveAuthCode when a code with the same

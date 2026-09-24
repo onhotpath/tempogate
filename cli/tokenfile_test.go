@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/cli"
+	"github.com/onhotpath/tempogate/cli"
 )
 
 type TokenFileSuite struct {

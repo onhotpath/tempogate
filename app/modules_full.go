@@ -5,13 +5,13 @@ package app
 import (
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/admin"
-	"github.com/fenmoai/tempogate/api"
-	"github.com/fenmoai/tempogate/cmd/servercmd"
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/oidc"
-	"github.com/fenmoai/tempogate/oidc/google"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/admin"
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/cmd/servercmd"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 // serverModules wires the HTTP server stack (SQLite state store, signing

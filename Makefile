@@ -3,17 +3,12 @@ SHELL := /bin/bash
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 BIN_DIR     := $(PROJECT_DIR)/.bin
 BIN         := $(BIN_DIR)/tempogate
-PKG         := github.com/fenmoai/tempogate
+PKG         := github.com/onhotpath/tempogate
 BUILDINFO   := $(PKG)/buildinfo
-
-# github.com/lestrrat-go/jwx/v4 imports encoding/json/v2, which is gated
-# behind GOEXPERIMENT=jsonv2 until it graduates from experimental. Exported
-# so every recipe (build, vet, test, lint, run) compiles the same way.
-export GOEXPERIMENT := jsonv2
 
 # Pin tool versions so CI and local installs agree. Bump deliberately.
 GCI_VERSION           ?= v0.14.0
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.13.2
 
 GIT_TAG    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")

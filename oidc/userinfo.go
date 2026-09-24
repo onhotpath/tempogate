@@ -7,7 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/fenmoai/tempogate/keys"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 // bearerPrefix is the case-insensitive scheme RFC 6750 §2.1 mandates on the

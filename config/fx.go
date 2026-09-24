@@ -6,7 +6,7 @@ import (
 	xloadtype "github.com/gojekfarm/xtools/xload/type"
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/log"
+	"github.com/onhotpath/tempogate/log"
 )
 
 // Result projects narrow values out of *Config so downstream packages can

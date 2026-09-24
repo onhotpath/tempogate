@@ -3,7 +3,7 @@ package main
 import (
 	"go.uber.org/fx"
 
-	"github.com/fenmoai/tempogate/app"
+	"github.com/onhotpath/tempogate/app"
 )
 
 func main() {

@@ -9,9 +9,9 @@ import (
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
 
-	"github.com/fenmoai/tempogate/cmd"
-	"github.com/fenmoai/tempogate/config"
-	"github.com/fenmoai/tempogate/log"
+	"github.com/onhotpath/tempogate/cmd"
+	"github.com/onhotpath/tempogate/config"
+	"github.com/onhotpath/tempogate/log"
 )
 
 type appConfig struct {

@@ -13,9 +13,9 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
-	"github.com/fenmoai/tempogate/admin"
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/admin"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 // FxSuite exercises admin.Fx() end-to-end: the graph must produce a registrar

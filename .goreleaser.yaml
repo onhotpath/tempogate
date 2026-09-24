@@ -7,8 +7,7 @@
 # Built with -tags lean: the distributed CLI carries only login/token/version
 # and none of the SQLite/libc/OIDC/API server subtree (~5 MB smaller, reduced
 # attack surface). modernc.org/sqlite is dropped entirely, so CGO is off and
-# we cross-compile natively. github.com/lestrrat-go/jwx/v4 imports
-# encoding/json/v2, gated behind GOEXPERIMENT=jsonv2 — set on every build.
+# we cross-compile natively.
 version: 2
 
 project_name: tempogate
@@ -23,16 +22,15 @@ builds:
     main: .
     env:
       - CGO_ENABLED=0
-      - GOEXPERIMENT=jsonv2
     flags:
       - -trimpath
       - -tags=lean
     ldflags:
       - -s -w
-      - -X 'github.com/fenmoai/tempogate/buildinfo.version={{ .Version }}'
-      - -X 'github.com/fenmoai/tempogate/buildinfo.gitTag={{ .Tag }}'
-      - -X 'github.com/fenmoai/tempogate/buildinfo.gitCommit={{ .FullCommit }}'
-      - -X 'github.com/fenmoai/tempogate/buildinfo.buildDate={{ .Date }}'
+      - -X 'github.com/onhotpath/tempogate/buildinfo.version={{ .Version }}'
+      - -X 'github.com/onhotpath/tempogate/buildinfo.gitTag={{ .Tag }}'
+      - -X 'github.com/onhotpath/tempogate/buildinfo.gitCommit={{ .FullCommit }}'
+      - -X 'github.com/onhotpath/tempogate/buildinfo.buildDate={{ .Date }}'
     goos:
       - linux
       - darwin
@@ -59,10 +57,10 @@ checksum:
 homebrew_casks:
   - name: tempogate
     binaries: [tempogate]
-    # In-repo tap: the cask lives in fenmoai/tempogate itself (Casks/), so the
+    # In-repo tap: the cask lives in onhotpath/tempogate itself (Casks/), so the
     # default workflow GITHUB_TOKEN can push it — no second repo, no PAT.
     repository:
-      owner: fenmoai
+      owner: onhotpath
       name: tempogate
       branch: main
       token: '{{ .Env.GITHUB_TOKEN }}'
@@ -72,7 +70,7 @@ homebrew_casks:
       #   base:
       #     branch: main
     directory: Casks
-    homepage: 'https://github.com/fenmoai/tempogate'
+    homepage: 'https://github.com/onhotpath/tempogate'
     description: 'OIDC provider & OAuth2 authorization server for self-hosted Temporal — CLI'
     license: 'Apache-2.0'
     # Only stable vX.Y.Z commits the cask; rc & snapshot builds are skipped.
@@ -104,7 +102,7 @@ changelog:
 
 release:
   github:
-    owner: fenmoai
+    owner: onhotpath
     name: tempogate
   # vX.Y.Z-rc.N (any pre-release tag) is auto-marked as a GitHub pre-release;
   # vX.Y.Z publishes a full release.

@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/fenmoai/tempogate/keys"
-	"github.com/fenmoai/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 type KeysCmdSuite struct {

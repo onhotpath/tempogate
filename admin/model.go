@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fenmoai/tempogate/perms"
+	"github.com/onhotpath/tempogate/perms"
 )
 
 // Role aliases perms.Role so admin-package callers keep using the local

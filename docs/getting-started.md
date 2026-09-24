@@ -30,7 +30,7 @@ then one command:
 
 ```bash
 echo "127.0.0.1 tempogate temporal-ui mockoidc" | sudo tee -a /etc/hosts
-git clone https://github.com/fenmoai/tempogate.git
+git clone https://github.com/onhotpath/tempogate.git
 cd tempogate/examples/docker-compose
 docker compose up --build
 ```
@@ -74,7 +74,7 @@ the lean CLI (macOS shown; Linux: download the release asset, or `make build`
 from a checkout):
 
 ```bash
-brew tap fenmoai/tempogate https://github.com/fenmoai/tempogate
+brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate
 brew install tempogate
 ```
 
@@ -133,4 +133,4 @@ the admin API ships; nothing in the example depends on it.
 - **Contributing:** [`CONTRIBUTING.md`](../CONTRIBUTING.md)
 
 If a step took longer than it should have, that is a documentation bug —
-please [open an issue](https://github.com/fenmoai/tempogate/issues).
+please [open an issue](https://github.com/onhotpath/tempogate/issues).

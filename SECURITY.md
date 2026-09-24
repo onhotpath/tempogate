@@ -8,7 +8,7 @@
 
 **Do not open a public GitHub issue for security reports.**
 
-Use [GitHub Security Advisories](https://github.com/fenmoai/tempogate/security/advisories/new) for private, coordinated disclosure. Include:
+Use [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new) for private, coordinated disclosure. Include:
 
 - A description of the issue and its impact.
 - Steps to reproduce, ideally a minimal proof-of-concept.
