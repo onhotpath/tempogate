@@ -20,8 +20,8 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull test-chart test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
-        gci golangci-lint govulncheck actionlint
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull lint-chart test-chart test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools deploy-tools \
+        gci golangci-lint govulncheck actionlint kind kubeconform yq
 
 start: ## Run the binary directly with build-info ldflags injected
 	go run -ldflags "$(LDFLAGS)" .
@@ -152,20 +152,27 @@ test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI
 
 # Deployment smoke tests: install the Helm chart into a throwaway kind
 # cluster (migrate initContainer succeeds, pod becomes Ready, an upgrade
-# migrates again in a fresh pod, helm test passes) and run the
-# docker-compose example's migrate service. Need docker; kind + helm +
-# kubectl for the chart. Both build DEPLOY_IMAGE first unless SKIP_BUILD=1.
+# migrates again in a fresh pod, helm test passes) and boot the
+# docker-compose example's tempogate services. Need docker; helm + kubectl
+# for the chart. Both build DEPLOY_IMAGE first unless SKIP_BUILD=1. kind,
+# kubeconform and yq are pinned and installed into $(BIN_DIR), which is put
+# first on PATH for these targets; helm and kubectl come from the host.
 DEPLOY_IMAGE    ?= tempogate:smoke
 KIND_CLUSTER    ?= tempogate-smoke
 COMPOSE_PROJECT ?= tempogate-smoke
 
-test-chart: ## static assertions on the rendered Helm chart (helm + yq, no cluster)
-	test/deploy/chart-assertions.sh
+DEPLOY_PATH := PATH="$(BIN_DIR):$$PATH"
 
-test-deploy-kind: ## helm template + install into a throwaway kind cluster
-	IMAGE=$(DEPLOY_IMAGE) CLUSTER=$(KIND_CLUSTER) test/deploy/kind-smoke.sh
+lint-chart: kubeconform ## helm lint --strict + kubeconform -strict on the rendered chart (no cluster)
+	$(DEPLOY_PATH) test/deploy/chart-lint.sh
 
-test-deploy-compose: ## docker-compose example: tempogate-migrate must exit 0
+test-chart: yq ## static assertions on the rendered Helm chart (helm + yq, no cluster)
+	$(DEPLOY_PATH) test/deploy/chart-assertions.sh
+
+test-deploy-kind: kind ## helm template + install into a throwaway kind cluster
+	$(DEPLOY_PATH) IMAGE=$(DEPLOY_IMAGE) CLUSTER=$(KIND_CLUSTER) test/deploy/kind-smoke.sh
+
+test-deploy-compose: ## docker-compose example: config renders, migrate exits 0, tempogate boots
 	IMAGE=$(DEPLOY_IMAGE) PROJECT=$(COMPOSE_PROJECT) test/deploy/compose-smoke.sh
 
 test-deploy: test-deploy-kind test-deploy-compose ## both deployment smoke tests
@@ -178,6 +185,8 @@ gen-oas: build ## emit OpenAPI specs for both the public and admin surfaces
 	$(BIN) gen-oas --admin -f yaml > api/openapi.admin.yaml
 
 tools: gci golangci-lint govulncheck actionlint ## install pinned dev tools into $(BIN_DIR)
+
+deploy-tools: kind kubeconform yq ## install pinned deployment test tools into $(BIN_DIR)
 
 clean:
 	rm -rf $(BIN_DIR) coverage.out
@@ -198,9 +207,10 @@ help: ## list targets
 #   $(1) — make var name to set to the resolved binary path (eval'd)
 #   $(2) — full Go import path of the tool's main package
 #   $(3) — version (e.g. v1.2.3)
+#   $(4) - optional binary name (default: last element of $(2))
 define install-if-needed
-	@if [ ! -f "$(BIN_DIR)/$(notdir $(2))" ]; then \
-		echo "Installing $(2)@$(3) -> $(BIN_DIR)/$(notdir $(2))" ;\
+	@if [ ! -f "$(BIN_DIR)/$(or $(4),$(notdir $(2)))" ]; then \
+		echo "Installing $(2)@$(3) -> $(BIN_DIR)/$(or $(4),$(notdir $(2)))" ;\
 		set -e ;\
 		mkdir -p $(BIN_DIR) ;\
 		export GOTOOLCHAIN=$$(go env GOVERSION) ;\
@@ -208,11 +218,11 @@ define install-if-needed
 		cd $$TMP_DIR ;\
 		go mod init tmp >/dev/null 2>&1 ;\
 		go get $(2)@$(3) >/dev/null 2>&1 ;\
-		go build -o $(BIN_DIR)/$(notdir $(2)) $(2) ;\
+		go build -o $(BIN_DIR)/$(or $(4),$(notdir $(2))) $(2) ;\
 		cd - >/dev/null ;\
 		rm -rf $$TMP_DIR ;\
 	fi
-	$(eval $(1) := $(BIN_DIR)/$(notdir $(2)))
+	$(eval $(1) := $(BIN_DIR)/$(or $(4),$(notdir $(2))))
 endef
 
 # install-release-if-needed downloads a prebuilt tool from its GitHub release
@@ -250,3 +260,12 @@ govulncheck:
 
 actionlint:
 	$(call install-release-if-needed,ACTIONLINT,actionlint,https://github.com/rhysd/actionlint/releases/download/$(ACTIONLINT_VERSION)/$(ACTIONLINT_ARCHIVE).tar.gz,$(ACTIONLINT_SHA256_$(TOOLS_PLATFORM)),actionlint)
+
+kind:
+	$(call install-if-needed,KIND,sigs.k8s.io/kind,$(KIND_VERSION))
+
+kubeconform:
+	$(call install-if-needed,KUBECONFORM,github.com/yannh/kubeconform/cmd/kubeconform,$(KUBECONFORM_VERSION))
+
+yq:
+	$(call install-if-needed,YQ,github.com/mikefarah/yq/v4,$(YQ_VERSION),yq)

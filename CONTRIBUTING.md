@@ -33,6 +33,16 @@ make test      # check + race + coverage
 make start     # runs `tempogate serve` with build-info ldflags
 ```
 
+Changes to the Helm chart, the Dockerfile or the examples are also checked by the `deploy` workflow.
+Its jobs run the same Make targets locally (they install pinned kind, kubeconform and yq into `./.bin`; helm and kubectl come from your PATH):
+
+```bash
+make lint-chart           # helm lint --strict + kubeconform -strict, no cluster
+make test-chart           # static assertions on the rendered chart
+make test-deploy-kind     # install, upgrade and helm test in a throwaway kind cluster
+make test-deploy-compose  # docker compose config + the compose example's migrate service
+```
+
 ### Bumping Go
 
 The `go` directive in [`go.mod`](go.mod) is the single source of truth for the toolchain: CI and release read it via `setup-go`'s `go-version-file`.

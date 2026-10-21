@@ -1,0 +1,166 @@
+name: deploy
+
+# Deployment artifacts, checked on every change so they cannot drift from the
+# binary between releases (chart-release.yml only lints at publish time):
+#   chart:   helm lint --strict + kubeconform -strict on the rendered chart
+#            for several value sets, and the static chart assertions;
+#   kind:    install the chart into a kind cluster with an image built from
+#            this commit (migrate initContainer, Ready, upgrade, helm test);
+#   compose: `docker compose config` on every example compose file, and the
+#            docker-compose example's migrate service.
+# No path filter: a change anywhere in the binary can break a deployment.
+#
+# Tool versions are pinned. kind, kubeconform and yq are built by the Makefile
+# from the versions in tools.mk (verified against the Go checksum database);
+# helm and kubectl are downloaded below and verified against pinned SHA-256s.
+
+on:
+  push:
+    branches: [main]
+    # Same as ci.yml: the generated Homebrew cask PR touches only Casks/**.
+    paths-ignore: ['Casks/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+# Same as ci.yml: a new push to a PR supersedes its previous run; pushes to
+# main each get their own group (run_id), so every main commit runs in full.
+concurrency:
+  group: deploy-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Caches are restored on every run but written only from pushes to main, so
+# PR refs never write (or poison) a cache. Where two jobs share a cache, only
+# one of them writes it.
+
+env:
+  SAVE_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Helm line the chart is released with (chart-release.yml).
+  HELM_VERSION: v4.0.5
+  HELM_SHA256: 730e4e9fbff94168249ddd0b9b1b8c357b7f64815462dd88c6b39f09bf18b814
+  # Matches the kindest/node image of the KIND_VERSION in tools.mk.
+  KUBECTL_VERSION: v1.37.0
+  KUBECTL_SHA256: 6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
+  DEPLOY_IMAGE: tempogate:smoke
+
+jobs:
+  chart:
+    name: chart lint + kubeconform + assertions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Go only builds the pinned tools, so no module or build cache.
+      - id: go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Keyed like ci.yml's tools cache: the pins and the Go they are built
+      # with. Shared with the kind job; only this job saves it.
+      - id: tools
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .bin
+          key: deploy-tools-${{ runner.os }}-${{ runner.arch }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('tools.mk') }}
+
+      - name: Install helm
+        run: |
+          curl -fsSLo /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  /tmp/helm.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/helm.tgz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+          helm version
+
+      - name: Install pinned tools
+        run: make deploy-tools
+
+      - name: Save .bin tools
+        if: env.SAVE_CACHE == 'true' && steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+
+      - name: helm lint --strict + kubeconform -strict
+        run: make lint-chart
+
+      - name: Chart assertions
+        run: make test-chart
+
+  kind:
+    name: kind install + upgrade + helm test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - id: go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Restore only: the chart job saves this cache.
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .bin
+          key: deploy-tools-${{ runner.os }}-${{ runner.arch }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('tools.mk') }}
+
+      - name: Install helm + kubectl
+        run: |
+          curl -fsSLo /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  /tmp/helm.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/helm.tgz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+          curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          helm version
+          kubectl version --client
+
+      - name: Install pinned tools
+        run: make deploy-tools
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Loaded locally for kind, never pushed. Shares a layer cache scope with
+      # the compose job, which builds the same image; only this job exports
+      # it, and only on main.
+      - name: Build tempogate image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: ${{ env.DEPLOY_IMAGE }}
+          load: true
+          cache-from: type=gha,scope=deploy-tempogate
+          cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=deploy-tempogate' || '' }}
+
+      - name: kind smoke (install, migrate, Ready, upgrade, helm test)
+        run: make test-deploy-kind SKIP_BUILD=1 DEPLOY_IMAGE="$DEPLOY_IMAGE"
+
+  compose:
+    name: compose config + migrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Imports the kind job's layer cache; never exports.
+      - name: Build tempogate image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: ${{ env.DEPLOY_IMAGE }}
+          load: true
+          cache-from: type=gha,scope=deploy-tempogate
+
+      # TODO(#12): add BOOT=1 (boot `tempogate serve` to /readyz) once the
+      # example's `tempogate-device:` client entry is accepted by serve.
+      - name: compose smoke (config, migrate)
+        run: make test-deploy-compose SKIP_BUILD=1 DEPLOY_IMAGE="$DEPLOY_IMAGE"
