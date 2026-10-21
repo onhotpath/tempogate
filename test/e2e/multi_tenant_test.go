@@ -316,6 +316,8 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 		"OIDC_GOOGLE_ISSUER_URL":     "http://unused.invalid",
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
+	// The bootstrap key is temporal-system:admin, so this stack opts in.
+	addAdminAuthEnv(ctx, t, tgEnv, true)
 	stateVol := fmt.Sprintf("tempogate-multitenant-e2e-state-%d", time.Now().UnixNano())
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 

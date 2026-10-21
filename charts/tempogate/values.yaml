@@ -47,11 +47,19 @@ securityContext:
 
 service:
   type: ClusterIP
-  # tempogate currently exposes a SINGLE HTTP listener that serves the
-  # public OIDC/OAuth2 surface together with /healthz and /readyz. A
-  # dedicated admin listener is planned upstream; when it lands the chart
-  # gains a `service.admin` block without changing this key.
+  # The public listener: the OIDC/OAuth2 surface together with /healthz and
+  # /readyz. Ingress and HTTPRoute route here only.
   port: 8000
+  # Optional in-cluster Service for the admin API (/admin/keys). Disabled by
+  # default: the admin listener then stays on the pod's loopback
+  # (127.0.0.1:8081), reachable only via `kubectl port-forward`. Enabling it
+  # binds the admin listener on all pod interfaces and adds a separate
+  # `<fullname>-admin` Service that no Ingress/HTTPRoute points at. It
+  # requires admin.tokenSha256SecretRef.
+  admin:
+    enabled: false
+    type: ClusterIP
+    port: 8081
 
 # HTTP_LISTENER bind address. The binary defaults to 127.0.0.1, which is
 # unreachable through a Service; in-cluster it MUST bind all interfaces.
@@ -237,6 +245,28 @@ auth:
       authEndpoint: ""
       tokenEndpoint: ""
       issuerUrl: ""
+
+# Admin API authentication (see docs/configuration.md#admin-api). Applies
+# whether or not service.admin is enabled.
+admin:
+  # ADMIN_TOKEN_SHA256: comma-separated hex SHA-256 digests of the accepted
+  # admin bearer tokens. Supply it via an existing Secret; generate with:
+  #   token=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+  #   printf %s "$token" | sha256sum | cut -d' ' -f1
+  # Unset leaves the admin API locked: every route but /admin/healthz
+  # answers 401.
+  tokenSha256SecretRef:
+    name: ""
+    key: ""
+  # ADMIN_ALLOWED_HOSTS: Host header values the admin API accepts; an entry
+  # without a port matches any port. Empty: with service.admin enabled the
+  # chart allows the admin Service's DNS names on service.admin.port plus
+  # loopback names on any port (kubectl port-forward); otherwise the binary
+  # default (loopback on 8081) applies.
+  allowedHosts: []
+  # ADMIN_ALLOW_SYSTEM_GRANTS: allow minting cluster-wide temporal-system
+  # keys. Leave false except while minting such a key.
+  allowSystemGrants: false
 
 # Extra environment variables appended verbatim to the Deployment container
 # and the migrate Job, e.g. [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].

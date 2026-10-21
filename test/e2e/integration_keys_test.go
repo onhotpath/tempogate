@@ -16,6 +16,12 @@
 // http.Server instances, two muxes, no /admin/* registrar on the public one),
 // not of a middleware decision.
 //
+// The admin API itself is authenticated: every /admin/* route except
+// /admin/healthz needs the bearer token whose SHA-256 is in ADMIN_TOKEN_SHA256,
+// a request whose Host is not in ADMIN_ALLOWED_HOSTS is refused with 421
+// before auth runs (DNS-rebinding defence), and temporal-system grants are
+// refused unless ADMIN_ALLOW_SYSTEM_GRANTS=true.
+//
 // "JTI is in the denylist store" is asserted three ways in increasing
 // independence:
 //   - GET /admin/keys/{id} reports `revoked_at != null` (the admin contract);
@@ -30,12 +36,15 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +111,20 @@ func TestAdminKeyMintAndRevoke(t *testing.T) {
 	require.NoError(t, probe.Body.Close())
 	require.Equal(t, http.StatusNotFound, probe.StatusCode,
 		"public listener must not expose /admin/* — admin API lives on its own listener")
+
+	// --- the admin listener refuses unauthenticated and rebinding callers ---
+	systemGrant := `{"namespace":"temporal-system","role":"admin","owner":"e2e-anon"}`
+	status, body := adminRequest(t, http.MethodPost, st.adminURL+"/admin/keys", "", "", systemGrant)
+	require.Equalf(t, http.StatusUnauthorized, status, "anonymous mint must be refused: %s", body)
+	status, body = adminRequest(t, http.MethodPost, st.adminURL+"/admin/keys", "", "not-the-admin-token", systemGrant)
+	require.Equalf(t, http.StatusUnauthorized, status, "wrong-token mint must be refused: %s", body)
+	status, body = adminRequest(t, http.MethodGet, st.adminURL+"/admin/keys", "", "", "")
+	require.Equalf(t, http.StatusUnauthorized, status, "anonymous list must be refused: %s", body)
+	status, body = adminRequest(t, http.MethodPost, st.adminURL+"/admin/keys", "evil.example", e2eAdminToken, systemGrant)
+	require.Equalf(t, http.StatusMisdirectedRequest, status,
+		"a DNS-rebinding Host must be refused even with a valid token: %s", body)
+	status, _ = adminRequest(t, http.MethodGet, st.adminURL+"/admin/healthz", "evil.example", "", "")
+	require.Equal(t, http.StatusOK, status, "the liveness probe stays open")
 
 	// --- mint via the admin listener ---
 	created := mintIntegrationKey(t, st.adminURL, adminCreateBody{
@@ -186,6 +209,85 @@ func TestAdminKeyMintAndRevoke(t *testing.T) {
 	assertJTIInDenylistStore(ctx, t, st.tempogate, mintedJTI)
 }
 
+// TestAdminRefusesSystemGrantByDefault runs tempogate with the shipped default
+// ADMIN_ALLOW_SYSTEM_GRANTS=false: an authenticated caller can mint
+// namespace-scoped keys but not a cluster-wide temporal-system grant.
+func TestAdminRefusesSystemGrantByDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: skipped in -short")
+	}
+	ctx := context.Background()
+	net, err := tcnetwork.New(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = net.Remove(ctx) })
+	tg := startIntegrationKeysTempogate(ctx, t, net.Name, false)
+	adminURL := mappedHTTP(ctx, t, tg, "8081")
+
+	status, body := adminRequest(t, http.MethodPost, adminURL+"/admin/keys", "", e2eAdminToken,
+		`{"namespace":"temporal-system","role":"admin","owner":"e2e-system"}`)
+	require.Equalf(t, http.StatusForbidden, status, "temporal-system grant must be refused by default: %s", body)
+	require.NotContains(t, string(body), `"jwt"`)
+
+	created := mintIntegrationKey(t, adminURL, adminCreateBody{
+		Namespace: "payments",
+		Role:      "admin",
+		Owner:     "e2e-scoped",
+	})
+	require.NotEmpty(t, created.JWT, "namespace-scoped grants stay available without the flag")
+}
+
+// e2eAdminToken is the admin bearer token every e2e tempogate accepts; only
+// its SHA-256 reaches the container, as in production.
+const e2eAdminToken = "e2e-admin-token-not-a-secret"
+
+func e2eAdminTokenSHA256() string {
+	sum := sha256.Sum256([]byte(e2eAdminToken))
+	return hex.EncodeToString(sum[:])
+}
+
+// addAdminAuthEnv configures the admin guard. The allowlist names the Docker
+// daemon host without a port (matches any port) because the mapped host port
+// is only known once the container is running, and the test reaches the
+// admin listener through that mapping.
+func addAdminAuthEnv(ctx context.Context, t *testing.T, env map[string]string, allowSystemGrants bool) {
+	t.Helper()
+	provider, err := testcontainers.NewDockerProvider()
+	require.NoError(t, err)
+	defer func() { _ = provider.Close() }()
+	host, err := provider.DaemonHost(ctx)
+	require.NoError(t, err)
+	env["ADMIN_TOKEN_SHA256"] = e2eAdminTokenSHA256()
+	env["ADMIN_ALLOWED_HOSTS"] = host
+	env["ADMIN_ALLOW_SYSTEM_GRANTS"] = strconv.FormatBool(allowSystemGrants)
+}
+
+// adminRequest sends one admin-listener request. Empty host keeps the URL's
+// host; empty token sends no Authorization header.
+func adminRequest(t *testing.T, method, url, host, token, body string) (int, []byte) {
+	t.Helper()
+	var rdr io.Reader = http.NoBody
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
+	require.NoError(t, err)
+	if host != "" {
+		req.Host = host
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, b
+}
+
 // mintIntegrationKey POSTs to /admin/keys on the admin listener and returns
 // the decoded response. The Content-Type round-trip is what Huma's negotiation
 // requires, so a wiring slip (e.g. admin handler on the wrong mux) surfaces as
@@ -194,13 +296,8 @@ func mintIntegrationKey(t *testing.T, adminURL string, body adminCreateBody) adm
 	t.Helper()
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
-	resp, err := http.Post(adminURL+"/admin/keys",
-		"application/json", strings.NewReader(string(raw)))
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	require.Equalf(t, http.StatusCreated, resp.StatusCode,
-		"POST /admin/keys: %s", b)
+	status, b := adminRequest(t, http.MethodPost, adminURL+"/admin/keys", "", e2eAdminToken, string(raw))
+	require.Equalf(t, http.StatusCreated, status, "POST /admin/keys: %s", b)
 	var out adminCreateResp
 	require.NoError(t, json.Unmarshal(b, &out))
 	return out
@@ -208,12 +305,8 @@ func mintIntegrationKey(t *testing.T, adminURL string, body adminCreateBody) adm
 
 func fetchIntegrationKey(t *testing.T, adminURL, id string) adminKeyView {
 	t.Helper()
-	resp, err := http.Get(adminURL + "/admin/keys/" + id)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	require.Equalf(t, http.StatusOK, resp.StatusCode,
-		"GET /admin/keys/%s: %s", id, b)
+	status, b := adminRequest(t, http.MethodGet, adminURL+"/admin/keys/"+id, "", e2eAdminToken, "")
+	require.Equalf(t, http.StatusOK, status, "GET /admin/keys/%s: %s", id, b)
 	var out adminKeyView
 	require.NoError(t, json.Unmarshal(b, &out))
 	return out
@@ -221,13 +314,8 @@ func fetchIntegrationKey(t *testing.T, adminURL, id string) adminKeyView {
 
 func revokeIntegrationKey(t *testing.T, adminURL, id string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodDelete, adminURL+"/admin/keys/"+id, http.NoBody)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusNoContent, resp.StatusCode,
-		"DELETE /admin/keys/{id} must answer 204")
+	status, b := adminRequest(t, http.MethodDelete, adminURL+"/admin/keys/"+id, "", e2eAdminToken, "")
+	require.Equalf(t, http.StatusNoContent, status, "DELETE /admin/keys/{id} must answer 204: %s", b)
 }
 
 // userinfoStatus exercises the public listener's Verifier-backed /userinfo
@@ -297,7 +385,6 @@ func copyFromContainerTo(ctx context.Context, c testcontainers.Container, remote
 
 func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKeysStack {
 	t.Helper()
-	root := repoRoot(t)
 
 	net, err := tcnetwork.New(ctx)
 	require.NoError(t, err)
@@ -305,66 +392,9 @@ func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKe
 	netName := net.Name
 	alias := func(name string) map[string][]string { return map[string][]string{netName: {name}} }
 
-	// OIDC config is required for fx graph construction (the OIDC surface is
-	// always wired even when this test never drives an SSO flow). The Google
-	// endpoints point at non-routable mock hostnames intentionally: this test
-	// must not depend on a mock-Google container coming up, and the OIDC
-	// surface only contacts Google during /callback/google, which we never
-	// invoke.
-	tgEnv := map[string]string{
-		"HTTP_LISTENER":              "0.0.0.0:8000",
-		"ADMIN_LISTENER":             "0.0.0.0:8081",
-		"STATE_SQLITE_PATH":          "/state/state.db",
-		"OIDC_ISSUER":                tempogateIssuer,
-		"OIDC_CLIENTS":               "noop:https://noop.invalid/cb",
-		"OIDC_ALLOWED_DOMAINS":       "example.com",
-		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
-		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC_GOOGLE_AUTH_ENDPOINT":  "http://unused.invalid/auth",
-		"OIDC_GOOGLE_TOKEN_ENDPOINT": "http://unused.invalid/token",
-		"OIDC_GOOGLE_ISSUER_URL":     "http://unused.invalid",
-	}
-	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
-	stateVol := fmt.Sprintf("tempogate-intkeys-e2e-state-%d", time.Now().UnixNano())
-	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
-
-	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:          tgImg,
-			FromDockerfile: tgFrom,
-			Cmd:            []string{"migrate"},
-			Env:            tgEnv,
-			User:           "0:0",
-			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
-			WaitingFor:     wait.ForExit().WithExitTimeout(2 * time.Minute),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "tempogate migrate")
-	track(ctx, t, "tempogate-migrate", migrate)
-
-	// Two exposed ports prove structurally that the admin listener is a
-	// separate bind: a single http.Server cannot answer on two ports.
-	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:          tgImg,
-			FromDockerfile: tgFrom,
-			Cmd:            []string{"serve"},
-			Env:            tgEnv,
-			User:           "0:0",
-			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
-			ExposedPorts:   []string{"8000/tcp", "8081/tcp"},
-			Networks:       []string{netName},
-			NetworkAliases: alias("tempogate"),
-			WaitingFor: wait.ForAll(
-				wait.ForHTTP("/readyz").WithPort("8000/tcp"),
-				wait.ForHTTP("/admin/healthz").WithPort("8081/tcp"),
-			).WithStartupTimeoutDefault(2 * time.Minute),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "tempogate serve")
-	track(ctx, t, "tempogate", tempogate)
+	// This stack mints a temporal-system:admin key, so it opts into system
+	// grants; TestAdminRefusesSystemGrantByDefault covers the default.
+	tempogate := startIntegrationKeysTempogate(ctx, t, netName, true)
 
 	pg, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -414,4 +444,74 @@ func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKe
 		adminURL:     mappedHTTP(ctx, t, tempogate, "8081"),
 		frontendAddr: mappedAddr(ctx, t, temporal, "7233"),
 	}
+}
+
+// startIntegrationKeysTempogate migrates a fresh state volume and starts
+// `tempogate serve` on netName with both listeners exposed.
+func startIntegrationKeysTempogate(ctx context.Context, t *testing.T, netName string, allowSystemGrants bool) testcontainers.Container {
+	t.Helper()
+	root := repoRoot(t)
+
+	// OIDC config is required for fx graph construction (the OIDC surface is
+	// always wired even when this test never drives an SSO flow). The Google
+	// endpoints point at non-routable mock hostnames intentionally: this test
+	// must not depend on a mock-Google container coming up, and the OIDC
+	// surface only contacts Google during /callback/google, which we never
+	// invoke.
+	tgEnv := map[string]string{
+		"HTTP_LISTENER":              "0.0.0.0:8000",
+		"ADMIN_LISTENER":             "0.0.0.0:8081",
+		"STATE_SQLITE_PATH":          "/state/state.db",
+		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_CLIENTS":               "noop:https://noop.invalid/cb",
+		"OIDC_ALLOWED_DOMAINS":       "example.com",
+		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":  "http://unused.invalid/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT": "http://unused.invalid/token",
+		"OIDC_GOOGLE_ISSUER_URL":     "http://unused.invalid",
+	}
+	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
+	addAdminAuthEnv(ctx, t, tgEnv, allowSystemGrants)
+	stateVol := fmt.Sprintf("tempogate-intkeys-e2e-state-%d", time.Now().UnixNano())
+	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
+
+	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:          tgImg,
+			FromDockerfile: tgFrom,
+			Cmd:            []string{"migrate"},
+			Env:            tgEnv,
+			User:           "0:0",
+			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
+			WaitingFor:     wait.ForExit().WithExitTimeout(2 * time.Minute),
+		},
+		Started: true,
+	})
+	require.NoError(t, err, "tempogate migrate")
+	track(ctx, t, "tempogate-migrate", migrate)
+
+	// Two exposed ports prove structurally that the admin listener is a
+	// separate bind: a single http.Server cannot answer on two ports.
+	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:          tgImg,
+			FromDockerfile: tgFrom,
+			Cmd:            []string{"serve"},
+			Env:            tgEnv,
+			User:           "0:0",
+			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
+			ExposedPorts:   []string{"8000/tcp", "8081/tcp"},
+			Networks:       []string{netName},
+			NetworkAliases: map[string][]string{netName: {"tempogate"}},
+			WaitingFor: wait.ForAll(
+				wait.ForHTTP("/readyz").WithPort("8000/tcp"),
+				wait.ForHTTP("/admin/healthz").WithPort("8081/tcp"),
+			).WithStartupTimeoutDefault(2 * time.Minute),
+		},
+		Started: true,
+	})
+	require.NoError(t, err, "tempogate serve")
+	track(ctx, t, "tempogate", tempogate)
+	return tempogate
 }

@@ -31,6 +31,10 @@ type serversParams struct {
 	// Middlewares wrap the public OIDC operations (oidc contributes its
 	// per-client rate limiter this way).
 	Middlewares []func(huma.Context, func(huma.Context)) `group:"api_middlewares"`
+
+	// AdminMiddlewares install middleware (the admin auth guard) on the
+	// admin Surface ahead of every admin registrar.
+	AdminMiddlewares []func(huma.API) `group:"admin_middlewares"`
 }
 
 func newServers(p serversParams) *Servers {
@@ -47,6 +51,9 @@ func newServers(p serversParams) *Servers {
 	}
 	for _, m := range p.Middlewares {
 		opts = append(opts, WithMiddleware(m))
+	}
+	for _, m := range p.AdminMiddlewares {
+		opts = append(opts, WithAdminMiddleware(m))
 	}
 	return New(p.Readiness, opts...)
 }

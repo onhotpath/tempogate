@@ -114,14 +114,12 @@ tctl --address tempogate:7233 \
   namespace list      # authenticated by the tempogate JWT in TEMPORAL_AUTH_TOKEN
 ```
 
-## 4. Integration keys (planned)
+## 4. Integration keys
 
-Long-lived, revocable keys for unattended workers — minted by an operator and
-exchanged for short JWTs without any browser — are a planned admin API
-(`/admin/keys`) and a planned `service.admin` block in the chart. They are
-**not in this release**; today's machine-auth path is the CLI token above
-(short-lived, auto-refreshed). This section will gain the concrete steps when
-the admin API ships; nothing in the example depends on it.
+Long-lived, revocable keys for unattended workers are minted by an operator through the admin API (`POST /admin/keys`) on tempogate's separate admin listener.
+The admin API requires a bearer admin token configured as `ADMIN_TOKEN_SHA256`, and stays locked (401) without one; this example does not configure it, so nothing here depends on it.
+To enable it, follow [Admin API in docs/configuration.md](configuration.md#admin-api).
+The chart exposes the listener through an optional `service.admin` block, disabled by default (see the [chart README](../charts/tempogate/README.md)).
 
 ## Where to next
 
