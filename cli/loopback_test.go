@@ -39,6 +39,7 @@ type mockIssuer struct {
 	gotVerifier      string
 	gotRedirectURI   string
 	gotGrantType     string
+	gotAuthCode      string
 
 	authorize func(w http.ResponseWriter, r *http.Request, m *mockIssuer)
 	token     func(w http.ResponseWriter, r *http.Request, m *mockIssuer)
@@ -62,6 +63,7 @@ func newMockIssuer() *mockIssuer {
 		m.mu.Lock()
 		m.gotVerifier = r.Form.Get("code_verifier")
 		m.gotGrantType = r.Form.Get("grant_type")
+		m.gotAuthCode = r.Form.Get("code")
 		m.mu.Unlock()
 		m.token(w, r, m)
 	})
@@ -70,6 +72,12 @@ func newMockIssuer() *mockIssuer {
 }
 
 func (m *mockIssuer) close() { m.srv.Close() }
+
+func (m *mockIssuer) gotCode() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gotAuthCode
+}
 
 // redirectBack 302s the headless browser to the CLI's loopback callback with
 // the given query — the role tempogate's /callback/google plays for real.
@@ -174,7 +182,9 @@ func (s *LoopbackSuite) TestCustomClientIDIsSent() {
 	s.Equal("my-cli", tok.ClientID, "the token must remember its client so refresh can present it")
 }
 
-func (s *LoopbackSuite) TestStateMismatchAborts() {
+// A redirect whose state does not match is not this login's, so it cannot
+// end it either: the flow keeps waiting for the genuine one.
+func (s *LoopbackSuite) TestStateMismatchIsIgnored() {
 	s.issuer.authorize = func(w http.ResponseWriter, r *http.Request, _ *mockIssuer) {
 		redirectBack(w, r, url.Values{
 			"code":  {"auth-code-xyz"},
@@ -182,9 +192,10 @@ func (s *LoopbackSuite) TestStateMismatchAborts() {
 		})
 	}
 
-	_, err := s.newFlow().Run(context.Background())
+	_, err := s.newFlow(cli.WithCallbackTimeout(200 * time.Millisecond)).Run(context.Background())
 	s.Require().Error(err)
-	s.Contains(err.Error(), "state did not match")
+	s.Contains(err.Error(), "no authorization code received within")
+	s.Empty(s.issuer.gotCode(), "a forged code is never exchanged")
 }
 
 func (s *LoopbackSuite) TestUpstreamErrorIsSurfaced() {

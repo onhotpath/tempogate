@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -316,12 +317,12 @@ func (s *DeviceLoginDispatchSuite) TestDevicePollDeadlineFlagAppendsOption() {
 		{
 			name:    "flag set appends WithDevicePollDeadline",
 			args:    []string{"--device", "--device-poll-deadline", "7s"},
-			wantLen: 4, // issuer + client-id + output + poll-deadline
+			wantLen: 5, // issuer + client-id + output + insecure + poll-deadline
 		},
 		{
 			name:    "flag unset omits WithDevicePollDeadline",
 			args:    []string{"--device"},
-			wantLen: 3, // issuer + client-id + output only
+			wantLen: 4, // issuer + client-id + output + insecure only
 		},
 	}
 
@@ -372,4 +373,43 @@ func (s *DeviceLoginDispatchSuite) TestDevicePollDeadlineRejectsNegative() {
 	err := cmd.ExecuteContext(context.Background())
 	s.Require().Error(err)
 	s.Contains(err.Error(), "--device-poll-deadline must be non-negative")
+}
+
+// --insecure reaches both flows; without it a plain-http issuer is refused
+// before any browser opens or request is sent.
+func (s *LoginCmdSuite) TestInsecureFlagGatesPlainHTTPIssuer() {
+	origDevice := deviceRunner
+	s.T().Cleanup(func() { deviceRunner = origDevice })
+	loginRunner = func(ctx context.Context, opts ...cli.Option) (cli.Token, error) {
+		opts = append(opts, cli.WithOpenBrowser(func(string) error { return nil }), cli.WithCallbackTimeout(time.Millisecond))
+		return cli.New(opts...).Run(ctx)
+	}
+	deviceRunner = func(ctx context.Context, opts ...cli.DeviceOption) (cli.Token, error) {
+		opts = append(opts, cli.WithDeviceHTTPClient(&http.Client{Transport: failingTransport{}}))
+		return cli.NewDeviceFlow(opts...).Run(ctx)
+	}
+	run := func(args ...string) error {
+		cmd := newLoginCmd(zap.NewNop())
+		cmd.SilenceUsage = true
+		cmd.SilenceErrors = true
+		cmd.SetOut(new(testWriter))
+		cmd.SetErr(new(testWriter))
+		cmd.SetArgs(append([]string{"--issuer", "http://tempogate:8000",
+			"--token-file", filepath.Join(s.T().TempDir(), "token.json")}, args...))
+		return cmd.ExecuteContext(context.Background())
+	}
+
+	s.Require().ErrorIs(run(), cli.ErrInsecureIssuer)
+	s.Require().ErrorIs(run("--device"), cli.ErrInsecureIssuer)
+
+	err := run("--insecure")
+	s.Require().ErrorContains(err, "no authorization code received")
+	err = run("--device", "--insecure")
+	s.Require().ErrorContains(err, "device authorization request")
+}
+
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("simulated: no network")
 }

@@ -220,7 +220,7 @@ Every authorization response, success or error, carries `iss` ([RFC 9207](https:
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `TEMPOGATE_ISSUER` | _(empty)_ | Read by `tempogate login` / `tempogate token` to find the server. Equivalent to the `--issuer` flag. Never read by `tempogate serve`. |
+| `TEMPOGATE_ISSUER` | _(empty)_ | Read by `tempogate login` / `tempogate token` to find the server. Equivalent to the `--issuer` flag. Must be `https`, or plain `http` on a loopback host, unless `--insecure` is passed. Never read by `tempogate serve`. |
 
 ## Sub-path hosting
 

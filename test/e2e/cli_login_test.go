@@ -58,6 +58,11 @@ const (
 	cliTokenFile   = "/tmp/tg-token.json"
 	cliAuthURLFile = "/tmp/tempogate-authurl"
 
+	// insecureFlag is passed on every CLI call: inside the cliclient
+	// container the issuer is http://tempogate:8000, plain http to a
+	// non-loopback host, which the CLI refuses without it.
+	insecureFlag = "--insecure"
+
 	// e2eSessionSigningKeyB64 is "0123456789abcdef0123456789abcdef" — 32 ASCII
 	// bytes, base64url-encoded without padding — the length the oidc fx graph
 	// requires for OIDC_SESSION_SIGNING_KEY. Stable across runs so the
@@ -128,7 +133,7 @@ func TestCLILogin(t *testing.T) {
 	go func() {
 		code, _, err := st.client.Exec(ctx,
 			[]string{
-				"tempogate", "login",
+				"tempogate", "login", insecureFlag,
 				"--issuer", tempogateIssuer,
 				"--client-id", cliClientID,
 				"--token-file", cliTokenFile,
@@ -232,7 +237,7 @@ func TestCLILogin(t *testing.T) {
 	revoked.ExpiresAt = time.Now().Add(-time.Minute)
 	st.writeToken(ctx, t, revoked)
 	code, out, err = st.client.Exec(ctx,
-		[]string{"tempogate", "token", "--issuer", tempogateIssuer, "--token-file", cliTokenFile},
+		[]string{"tempogate", "token", insecureFlag, "--issuer", tempogateIssuer, "--token-file", cliTokenFile},
 		tcexec.Multiplexed())
 	require.NoError(t, err)
 	tokenOut, _ := io.ReadAll(out)
@@ -337,7 +342,7 @@ func (s *cliStack) runToken(ctx context.Context, t *testing.T) string {
 func (s *cliStack) runTokenFrom(ctx context.Context, t *testing.T, path string) string {
 	t.Helper()
 	code, r, err := s.client.Exec(ctx,
-		[]string{"tempogate", "token", "--issuer", tempogateIssuer, "--token-file", path},
+		[]string{"tempogate", "token", insecureFlag, "--issuer", tempogateIssuer, "--token-file", path},
 		tcexec.Multiplexed(),
 	)
 	require.NoError(t, err)

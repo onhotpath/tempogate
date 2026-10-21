@@ -25,6 +25,12 @@ const issuerEnvVar = "TEMPOGATE_ISSUER"
 // `--device=false`) on the command line always wins over this env.
 const loginModeEnvVar = "TEMPOGATE_LOGIN_MODE"
 
+// insecureFlagUsage is shared by login and token so the opt-in reads the same
+// everywhere it can be passed.
+const insecureFlagUsage = "allow a plain-http issuer on a non-loopback host. " +
+	"Development stacks only: tokens cross the network in cleartext. " +
+	"https and http://localhost / 127.0.0.0/8 / [::1] need no flag."
+
 // loginRunner builds the loopback Flow and runs it. It is a package var purely
 // so tests can drive the command against a mock issuer without launching a
 // real system browser; production code never reassigns it.
@@ -52,7 +58,7 @@ func resolveTokenPath(explicit string) (string, error) {
 func newLoginCmd(logger *zap.Logger) *cobra.Command {
 	var issuer, clientID, tokenFile string
 	var port int
-	var device bool
+	var device, insecure bool
 	var devicePollDeadline time.Duration
 
 	c := &cobra.Command{
@@ -110,6 +116,7 @@ func newLoginCmd(logger *zap.Logger) *cobra.Command {
 					cli.WithDeviceIssuer(issuer),
 					cli.WithDeviceClientID(clientID),
 					cli.WithDeviceOutput(cmd.ErrOrStderr()),
+					cli.WithDeviceInsecure(insecure),
 				}
 				if devicePollDeadline > 0 {
 					opts = append(opts, cli.WithDevicePollDeadline(devicePollDeadline))
@@ -122,6 +129,7 @@ func newLoginCmd(logger *zap.Logger) *cobra.Command {
 					cli.WithPort(port),
 					cli.WithClientID(clientID),
 					cli.WithOutput(cmd.ErrOrStderr()),
+					cli.WithInsecure(insecure),
 				)
 			}
 			if err != nil {
@@ -144,6 +152,7 @@ func newLoginCmd(logger *zap.Logger) *cobra.Command {
 	c.Flags().IntVar(&port, "port", 0, "loopback port (0 = a free ephemeral port, recommended); ignored with --device")
 	c.Flags().StringVar(&clientID, "client-id", "", "OAuth2 client_id registered with tempogate (default \"tempogate-cli\", or \"tempogate-device\" with --device)")
 	c.Flags().StringVar(&tokenFile, "token-file", "", "where to persist the token (default ~/.tempogate/token.json)")
+	c.Flags().BoolVar(&insecure, "insecure", false, insecureFlagUsage)
 	c.Flags().BoolVar(&device, "device", false,
 		"use the OAuth2 device authorization grant (RFC 8628) instead of the "+
 			"loopback browser flow. Required when this host has no browser "+

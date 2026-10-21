@@ -31,3 +31,12 @@ func WithDeviceSleep(fn func(ctx context.Context, d time.Duration) error) Device
 // test package can drive its ctx-cancel and zero-duration branches without
 // reaching into package internals.
 var DefaultSleep = defaultSleep
+
+// WithShutdownTimeout swaps the bound on the loopback listener's shutdown.
+// For tests that prove a stalled connection cannot hold Run open.
+func WithShutdownTimeout(d time.Duration) Option {
+	return func(f *Flow) { f.shutdownTimeout = d }
+}
+
+// CheckIssuer exposes the issuer transport rule for a table test.
+var CheckIssuer = checkIssuer

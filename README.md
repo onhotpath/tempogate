@@ -283,6 +283,10 @@ token to stdout, so they are safe in `$(...)`. See
 [docs/cli-loopback-login.md](docs/cli-loopback-login.md) for persistence,
 auto-refresh, the operator one-liner, and why ephemeral ports work.
 
+The issuer must be `https://`, or plain `http://` on a loopback host.
+For a plain-http development stack on another host, pass `--insecure` to `login` and `token`.
+`tempogate token` is safe to run concurrently (e.g. as a credential helper): a lock on `<token-file>.lock` lets one process refresh while the others wait and reuse its token.
+
 For hosts without a browser (remote SSH sessions, cloud dev VMs, CI debug
 shells), use `tempogate login --device` — the OAuth 2.0 device authorization
 grant ([RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)); the CLI

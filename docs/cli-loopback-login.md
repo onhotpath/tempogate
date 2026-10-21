@@ -120,9 +120,24 @@ Flags:
 | `--port`       | `0`                         | Loopback port. `0` = a free ephemeral port (recommended).        |
 | `--client-id`  | `tempogate-cli`             | Must match a registered `OIDC_CLIENTS` entry.                   |
 | `--token-file` | `~/.tempogate/token.json`   | Where the token is persisted.                                    |
+| `--insecure`   | `false`                     | Allow a plain-`http` issuer on a non-loopback host. Dev only.    |
 
 `stdout` carries only the token; all human-facing text (the authorize URL,
 progress, expiry) goes to `stderr`, so `$(tempogate login)` is safe in scripts.
+
+### https issuers only
+
+The issuer must be `https://`.
+Plain `http://` is accepted only for a loopback host (`localhost`, `127.0.0.0/8`, `[::1]`), where the traffic never leaves the machine.
+Any other plain-http issuer is refused by `tempogate login`, `tempogate login --device` and `tempogate token` before anything is sent, because the authorization code, the refresh token and the access token would cross the network in cleartext.
+For a development stack on a trusted network (e.g. `http://tempogate:8000` inside Docker Compose), pass `--insecure` to `login` and to every `token` call:
+
+```bash
+tempogate login --insecure --issuer http://tempogate:8000
+tempogate token --insecure --issuer http://tempogate:8000
+```
+
+`tempogate token` applies the check even when the stored token is still valid, so a missing `--insecure` shows up straight away rather than at the first refresh hours later.
 
 ## Persistence and `tempogate token`
 
@@ -161,7 +176,12 @@ Failure modes are explicit, never silent:
 Refresh tokens are rotated on every exchange.
 If a captured `token.json` is used after the legitimate CLI has refreshed, or the CLI refreshes after the thief has, the server sees an already-used token and revokes the whole session, so both parties are signed out.
 A session also ends after `OIDC_REFRESH_MAX_LIFETIME` (default 30 days) from the original login, however often it is refreshed, and an operator can end it with `tempogate sessions revoke`.
-Two `tempogate token` processes refreshing the same file at the same moment look like reuse too; the session ends and the next `tempogate token` asks for a fresh login.
+Two `tempogate token` processes presenting the same refresh token would look like reuse too, so renewal is serialized.
+`tempogate token` takes an exclusive lock on `<token-file>.lock` (created `0600` next to the token file and left in place) before refreshing, then re-reads the file: if another process refreshed while it waited, it prints that token instead of refreshing again.
+This makes `tempogate token` safe to run concurrently, e.g. as a credential helper that tctl or the temporal CLI invokes in parallel.
+A process waits at most 30 seconds for the lock and then fails with an error naming the lock file.
+The lock is an `flock(2)` lock, released by the kernel if its holder dies, so a stale lock file never blocks anything.
+The lock is implemented for Linux and macOS (the platforms tempogate ships for); on other platforms it is a no-op and concurrent refreshes can still end the session.
 
 ## Security properties
 
@@ -170,12 +190,15 @@ Two `tempogate token` processes refreshing the same file at the same moment look
   `BASE64URL(SHA256(verifier))` at `/authorize`, and presents the raw
   verifier at `/token`. An intercepted code cannot be redeemed.
 * **`state` is checked.** A random 256-bit `state` is generated per run and
-  constant-time compared on the callback; a mismatch aborts the login
-  (CSRF / request-forgery defence).
+  constant-time compared on the callback.
+  A callback with the wrong state is answered with an error page and otherwise ignored, so another local process or web page that finds the port cannot inject a code (CSRF / request-forgery defence) or abort the login; the genuine redirect still completes it.
+* **One outcome.** Only the first callback with the right state is used; later ones (a reload, a second tab) get a "already handled" page and cannot stall the listener.
 * **Loopback only.** The one-shot HTTP server binds `127.0.0.1`, so the
   callback is never reachable off-host.
+* **https issuers.** Tokens are only sent to an `https` issuer, or to plain `http` on a loopback host, unless `--insecure` is passed (see [https issuers only](#https-issuers-only)).
 * **Bounded wait.** If no code arrives within three minutes the command
   exits with a clear error rather than hanging the shell.
+  Once the code arrives, the listener shuts down within two seconds even if a client connection stalls.
 * **Short-lived, auto-renewed.** The minted access token follows the
   issuer's lifetime (`OIDC_ACCESS_TOKEN_TTL`, 4 hours by default); `tempogate token` renews it from the
   rotating refresh token five minutes before expiry, so a leaked access

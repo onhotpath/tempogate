@@ -18,9 +18,11 @@ import (
 const refreshSkew = 5 * time.Minute
 
 type refreshConfig struct {
-	now        func() time.Time
-	httpClient *http.Client
-	skew       time.Duration
+	now         func() time.Time
+	httpClient  *http.Client
+	skew        time.Duration
+	insecure    bool
+	lockTimeout time.Duration
 }
 
 // RefreshOption tunes EnsureFresh. The production call is the three-arg form;
@@ -40,6 +42,19 @@ func WithRefreshHTTPClient(client *http.Client) RefreshOption {
 	return func(c *refreshConfig) { c.httpClient = client }
 }
 
+// WithRefreshInsecure allows a plain-http issuer on a non-loopback host
+// (--insecure). For development stacks only: the refresh token then crosses
+// the network in cleartext.
+func WithRefreshInsecure(insecure bool) RefreshOption {
+	return func(c *refreshConfig) { c.insecure = insecure }
+}
+
+// WithRefreshLockTimeout bounds the wait for another process's refresh of
+// the same token file. Defaults to 30s.
+func WithRefreshLockTimeout(d time.Duration) RefreshOption {
+	return func(c *refreshConfig) { c.lockTimeout = d }
+}
+
 // EnsureFresh returns a usable Token, renewing it first if it is within five
 // minutes of expiry. The common path is a pure file read with no network, so
 // `tempogate token` stays fast; only the renewal path talks to the issuer.
@@ -48,23 +63,50 @@ func WithRefreshHTTPClient(client *http.Client) RefreshOption {
 // rejected refresh (revoked / rotated-away / expired) fails cleanly without
 // overwriting or silently returning the stale token, so a caller never acts
 // on a credential the server has already disowned.
+//
+// Renewal is serialized across processes by an exclusive lock on
+// "<path>.lock". tempogate rotates refresh tokens and treats a second
+// presentation of one as theft (RFC 9700 §4.14.2), revoking the whole
+// session, so two `tempogate token` started together by a credential helper
+// must not both refresh: the second waits, re-reads the file, and uses the
+// token the first one wrote.
 func EnsureFresh(ctx context.Context, path, issuer string, opts ...RefreshOption) (Token, error) {
 	cfg := &refreshConfig{
-		now:        time.Now,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		skew:       refreshSkew,
+		now:         time.Now,
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		skew:        refreshSkew,
+		lockTimeout: defaultRefreshLockTimeout,
 	}
 	for _, o := range opts {
 		o(cfg)
+	}
+
+	// Checked before the fast path so a token kept for a plain-http issuer
+	// fails now, with the fix in the message, not at its first refresh.
+	if err := checkIssuer(issuer, cfg.insecure); err != nil {
+		return Token{}, err
 	}
 
 	tok, err := Load(path)
 	if err != nil {
 		return Token{}, err
 	}
-
 	if cfg.now().Before(tok.ExpiresAt.Add(-cfg.skew)) {
 		return tok, nil
+	}
+
+	unlock, err := lockTokenFile(ctx, path, cfg.lockTimeout)
+	if err != nil {
+		return Token{}, err
+	}
+	defer unlock()
+
+	tok, err = Load(path)
+	if err != nil {
+		return Token{}, err
+	}
+	if cfg.now().Before(tok.ExpiresAt.Add(-cfg.skew)) {
+		return tok, nil // another process refreshed while we waited
 	}
 
 	if tok.RefreshToken == "" {

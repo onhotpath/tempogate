@@ -243,6 +243,9 @@ func (s *RefreshSuite) TestRefreshSucceedsButPersistFails() {
 		ExpiresAt:    s.now.Add(1 * time.Minute),
 		ClientID:     "tempogate-cli",
 	}))
+	// The refresh lock lives beside the token file; pre-create it so only the
+	// rewrite, not the lock, trips over the read-only directory.
+	s.Require().NoError(os.WriteFile(path+".lock", nil, 0o600))
 	s.Require().NoError(os.Chmod(roDir, 0o500)) // readable (Load) but not writable (Save)
 	defer func() { _ = os.Chmod(roDir, 0o700) }()
 
@@ -255,7 +258,7 @@ func (s *RefreshSuite) TestRefreshSucceedsButPersistFails() {
 	s.Equal(int32(1), s.issuer.hits.Load(), "the refresh itself did happen")
 }
 
-func (s *RefreshSuite) TestUnparseableIssuerFailsAtRequestBuild() {
+func (s *RefreshSuite) TestUnparseableIssuerIsRejected() {
 	s.Require().NoError(cli.Save(s.path, cli.Token{
 		AccessToken:  "about.to.expire",
 		RefreshToken: "r-old",
@@ -267,7 +270,7 @@ func (s *RefreshSuite) TestUnparseableIssuerFailsAtRequestBuild() {
 		cli.WithRefreshClock(func() time.Time { return s.now }),
 	)
 	s.Require().Error(err)
-	s.Contains(err.Error(), "build token request")
+	s.Contains(err.Error(), "invalid issuer")
 }
 
 func (s *RefreshSuite) TestMissingFileIsErrNoToken() {

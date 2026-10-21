@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/onhotpath/tempogate/oidc"
@@ -51,6 +52,12 @@ const (
 	// (incl. MFA), short enough that an abandoned login does not hang a shell.
 	defaultCallbackTimeout = 3 * time.Minute
 
+	// defaultShutdownTimeout bounds how long Run waits for the loopback
+	// server to drain once it has the code. Every handler returns at once, so
+	// only a stalled client connection can hit it; the login has already
+	// succeeded by then and must not hang on such a connection.
+	defaultShutdownTimeout = 2 * time.Second
+
 	// pkceVerifierBytes yields a 43-char base64url verifier — the RFC 7636
 	// §4.1 minimum, comfortably inside the 43–128 range, and exactly the
 	// shape tempogate's /token PKCE check (BASE64URL(SHA256(v))) expects.
@@ -68,6 +75,8 @@ type Flow struct {
 	clientID        string
 	scope           string
 	callbackTimeout time.Duration
+	shutdownTimeout time.Duration
+	insecure        bool
 
 	openBrowser func(rawURL string) error
 	now         func() time.Time
@@ -106,6 +115,13 @@ func WithClientID(id string) Option {
 	}
 }
 
+// WithInsecure allows a plain-http issuer on a non-loopback host (--insecure).
+// For development stacks only: the authorization code and the tokens then
+// cross the network in cleartext.
+func WithInsecure(insecure bool) Option {
+	return func(f *Flow) { f.insecure = insecure }
+}
+
 // WithOpenBrowser swaps the system-browser opener. Tests inject a function
 // that drives the authorize URL headlessly instead of launching a browser.
 func WithOpenBrowser(fn func(rawURL string) error) Option {
@@ -142,6 +158,7 @@ func New(opts ...Option) *Flow {
 		clientID:        defaultClientID,
 		scope:           loginScope,
 		callbackTimeout: defaultCallbackTimeout,
+		shutdownTimeout: defaultShutdownTimeout,
 		openBrowser:     openSystemBrowser,
 		now:             func() time.Time { return time.Now().UTC() },
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
@@ -156,8 +173,8 @@ func New(opts ...Option) *Flow {
 }
 
 // callbackResult is what the one-shot loopback handler hands back to Run: a
-// code on success, or a terminal error (state mismatch, user-declined consent,
-// or an upstream error tempogate forwarded from Google).
+// code on success, or a terminal error (user-declined consent, a missing
+// code, or an upstream error tempogate forwarded from Google).
 type callbackResult struct {
 	code string
 	err  error
@@ -170,6 +187,9 @@ type callbackResult struct {
 func (f *Flow) Run(ctx context.Context) (Token, error) {
 	if f.issuer == "" {
 		return Token{}, errors.New("cli: issuer is required (pass --issuer or set TEMPOGATE_ISSUER)")
+	}
+	if err := checkIssuer(f.issuer, f.insecure); err != nil {
+		return Token{}, err
 	}
 
 	verifier, err := f.newVerifier()
@@ -196,10 +216,10 @@ func (f *Flow) Run(ctx context.Context) (Token, error) {
 	}
 	go func() {
 		if serveErr := srv.Serve(lis); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			resultCh <- callbackResult{err: fmt.Errorf("cli: loopback server: %w", serveErr)}
+			deliver(resultCh, callbackResult{err: fmt.Errorf("cli: loopback server: %w", serveErr)})
 		}
 	}()
-	defer func() { _ = srv.Shutdown(context.Background()) }()
+	defer f.shutdown(srv)
 
 	authURL := f.authorizeURL(redirectURI, verifier, state)
 	_, _ = fmt.Fprintf(f.out, "Opening your browser to sign in.\nIf it does not open, visit:\n\n  %s\n\n", authURL)
@@ -234,39 +254,72 @@ func (f *Flow) awaitCode(ctx context.Context, resultCh <-chan callbackResult) (s
 	}
 }
 
+// shutdown stops the loopback server, waiting at most shutdownTimeout for
+// in-flight requests before closing what is left.
+func (f *Flow) shutdown(srv *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), f.shutdownTimeout)
+	defer cancel()
+	if srv.Shutdown(ctx) != nil {
+		_ = srv.Close()
+	}
+}
+
 // callbackHandler returns the one-shot handler bound on the loopback listener.
 // It answers exactly callbackPath, validates the state echo in constant time,
 // surfaces an upstream error (declined consent) as a terminal failure, and
 // always writes a human-readable page so the browser tab is not left blank.
+//
+// Any local process or web page can find and hit the port, so a request with
+// the wrong state is answered and otherwise ignored: letting it end the login
+// would hand anyone on the machine a way to abort it. Only the first request
+// carrying the right state decides the outcome; later ones (a reload, a
+// second tab) are told the login already completed, and never block on
+// resultCh, so they cannot stall the server's shutdown.
 func (f *Flow) callbackHandler(wantState string, resultCh chan<- callbackResult) http.Handler {
+	var once sync.Once
 	mux := http.NewServeMux()
 	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
 		if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(wantState)) != 1 {
-			writePage(w, http.StatusBadRequest, "Login failed", "State mismatch — possible request forgery. You can close this tab and retry.")
-			resultCh <- callbackResult{err: errors.New("cli: callback state did not match; aborting (possible CSRF)")}
+			writePage(w, http.StatusBadRequest, "Login failed", "State mismatch - this request did not come from the login in progress. You can close this tab.")
+			return
+		}
+
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			writePage(w, http.StatusConflict, "Login already handled", "This sign-in has already been handled. You can close this tab.")
 			return
 		}
 
 		if upErr := q.Get("error"); upErr != "" {
 			desc := q.Get("error_description")
 			writePage(w, http.StatusBadRequest, "Login failed", fmt.Sprintf("%s: %s", upErr, desc))
-			resultCh <- callbackResult{err: fmt.Errorf("cli: authorization failed: %s: %s", upErr, desc)}
+			deliver(resultCh, callbackResult{err: fmt.Errorf("cli: authorization failed: %s: %s", upErr, desc)})
 			return
 		}
 
 		code := q.Get("code")
 		if code == "" {
 			writePage(w, http.StatusBadRequest, "Login failed", "No authorization code in the callback. You can close this tab and retry.")
-			resultCh <- callbackResult{err: errors.New("cli: callback returned no authorization code")}
+			deliver(resultCh, callbackResult{err: errors.New("cli: callback returned no authorization code")})
 			return
 		}
 
 		writePage(w, http.StatusOK, "Login successful", "You can close this browser tab and return to your terminal.")
-		resultCh <- callbackResult{code: code}
+		deliver(resultCh, callbackResult{code: code})
 	})
 	return mux
+}
+
+// deliver hands Run the outcome without ever blocking: resultCh holds one
+// result and Run reads at most one, so a send that finds it full is moot.
+func deliver(resultCh chan<- callbackResult, r callbackResult) {
+	select {
+	case resultCh <- r:
+	default:
+	}
 }
 
 // authorizeURL builds the downstream /authorize request. code_challenge is the
