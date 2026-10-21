@@ -41,6 +41,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -85,6 +90,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -131,6 +141,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -171,6 +186,21 @@ func (s *ConfigSuite) TestNew() {
 			}(),
 		},
 		{
+			name: "key lifetimes overridden by env",
+			env: map[string]string{
+				"ADMIN_KEYS_MAX_TTL":    "720h",
+				"KEYS_RETIREMENT_GRACE": "1h",
+				"KEYS_RELOAD_INTERVAL":  "5s",
+			},
+			want: func() *Config {
+				c := defaultConfig()
+				c.Admin.Keys.MaxTTL = 720 * time.Hour
+				c.Keys.RetirementGrace = time.Hour
+				c.Keys.ReloadInterval = 5 * time.Second
+				return c
+			}(),
+		},
+		{
 			name: "admin listener overridden by env",
 			env: map[string]string{
 				"ADMIN_LISTENER": "127.0.0.1:9091",
@@ -189,6 +219,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 9091,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -234,6 +269,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -277,6 +317,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -322,6 +367,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -367,6 +417,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -414,6 +469,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -460,6 +520,11 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8081,
 					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -515,7 +580,8 @@ func (s *ConfigSuite) TestKeysEncryptionKeyFromEnv() {
 
 	got, err := New(Params{})
 	s.Require().NoError(err)
-	s.Equal(KeysConfig{EncryptionKey: "a2V5", EncryptionKeyFile: "/run/secrets/kek"}, got.Keys)
+	s.Equal("a2V5", got.Keys.EncryptionKey)
+	s.Equal("/run/secrets/kek", got.Keys.EncryptionKeyFile)
 }
 
 func (s *ConfigSuite) TestFxProjectsKeysEncryptionKey() {

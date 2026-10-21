@@ -134,9 +134,9 @@ func NewSigner(opts ...TokenOption) *Signer {
 
 // MintRequest is the per-token input for an access token. Permissions must
 // already be in Temporal's "<namespace>:<action>" form (the caller owns that
-// mapping). A zero TTL mints a token with no exp claim - appropriate for
-// long-lived integration keys whose lifetime is governed by revocation, not
-// expiry.
+// mapping). A zero TTL mints a token with no exp claim; every production
+// caller sets one, because Temporal honours only exp and JWKS, never
+// tempogate's revocation list.
 type MintRequest struct {
 	Subject     string
 	Permissions []string

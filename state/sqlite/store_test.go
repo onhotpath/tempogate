@@ -114,7 +114,7 @@ func (s *StoreSuite) TestMigrateIsIdempotent() {
 	s.Require().NoError(row.Scan(&versions))
 	migs, err := loadMigrations()
 	s.Require().NoError(err)
-	s.Equal(len(migs), versions)
+	s.Equal(len(migs), versions, "each embedded migration is recorded exactly once")
 
 	for _, want := range []string{"keypairs", "auth_requests", "auth_codes", "refresh_tokens", "integration_keys", "jti_denylist", "device_codes", "browser_sessions"} {
 		var table string
@@ -500,6 +500,10 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 		}},
 		{"LoadKeypairs", func() error {
 			_, err := s.store.LoadKeypairs(s.ctx)
+			return err
+		}},
+		{"RetireKeypair", func() error {
+			_, err := s.store.RetireKeypair(s.ctx, "x", time.Now().UTC())
 			return err
 		}},
 		{"SaveAuthRequest", func() error {

@@ -227,3 +227,34 @@ func TestEncryptStoredWithWrongKeyFails(t *testing.T) {
 	_, err := testKeys(store, otherKEK).EncryptStored(ctx, store)
 	require.ErrorIs(t, err, ErrDecryptKeypair)
 }
+
+// TestReloadAndRetireOpenEncryptedRows guards the hot-reload path: rows
+// written by another process under the KEK must reach the cache decrypted,
+// and Retire must hand back the opened keypair, never the stored ciphertext.
+func TestReloadAndRetireOpenEncryptedRows(t *testing.T) {
+	ctx := context.Background()
+	store := &rewritableStore{}
+	serving := testKeys(store, testKEK)
+	require.NoError(t, serving.Init(ctx))
+
+	rotated, err := testKeys(store, testKEK).Generate(ctx, true)
+	require.NoError(t, err)
+	require.NoError(t, serving.Reload(ctx))
+
+	latest, err := serving.Latest()
+	require.NoError(t, err)
+	require.Equal(t, rotated.Kid, latest.Kid)
+	for _, kp := range serving.All() {
+		require.Contains(t, string(kp.PrivatePEM), "BEGIN RSA PRIVATE KEY")
+	}
+	requireSigns(t, serving)
+
+	old := serving.All()[0]
+	retired, err := serving.Retire(ctx, old.Kid)
+	require.NoError(t, err)
+	require.True(t, retired.Retired())
+	require.Contains(t, string(retired.PrivatePEM), "BEGIN RSA PRIVATE KEY")
+
+	err = testKeys(store, nil).Reload(ctx)
+	require.ErrorIs(t, err, ErrNoEncryptionKey, "reload without the KEK must fail, not cache ciphertext")
+}

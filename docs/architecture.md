@@ -131,6 +131,16 @@ only as its SHA-256), reject unexpected `Host` headers to defeat DNS rebinding,
 refuse cluster-wide `temporal-system` grants unless explicitly allowed, and log
 every mint and revoke. See [docs/configuration.md](configuration.md#admin-api).
 
+**Revocation is honest about Temporal.** Temporal verifies a token against
+the JWKS and its `exp`, never against tempogate's state, so the `jti`
+denylist behind `DELETE /admin/keys/{id}` only protects tempogate's own
+endpoints. Integration keys therefore must expire (`ADMIN_KEYS_MAX_TTL`,
+90 days by default), and the hard kill switch is retiring a signing key:
+after `KEYS_RETIREMENT_GRACE` its `kid` leaves the JWKS and every token it
+signed stops verifying everywhere. `serve` re-reads keys every
+`KEYS_RELOAD_INTERVAL`, so rotation and retirement need no restart. See
+[docs/configuration.md](configuration.md#revocation-and-signing-key-retirement).
+
 **Co-hostable.** `OIDC_ISSUER` may carry a path, so the whole OIDC surface
 can serve under a prefix on a shared hostname while health probes stay at the
 root. See [docs/configuration.md](configuration.md#sub-path-hosting).

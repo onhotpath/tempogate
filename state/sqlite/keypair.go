@@ -2,8 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	sqlite3 "modernc.org/sqlite"
 	sqlite3lib "modernc.org/sqlite/lib"
@@ -34,7 +36,7 @@ func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
 
 func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT kid, alg, private_pem, public_pem, created_at
+		`SELECT `+keypairColumns+`
 		 FROM keypairs
 		 ORDER BY created_at ASC, kid ASC`,
 	)
@@ -45,9 +47,9 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 
 	var out []keys.Keypair
 	for rows.Next() {
-		var kp keys.Keypair
-		if err := rows.Scan(&kp.Kid, &kp.Alg, &kp.PrivatePEM, &kp.PublicPEM, &kp.CreatedAt); err != nil {
-			return nil, fmt.Errorf("sqlite: scan keypair: %w", err)
+		kp, err := scanKeypair(rows)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, kp)
 	}
@@ -72,4 +74,62 @@ func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, private
 		return fmt.Errorf("sqlite: update keypair: no keypair with kid %s", kid)
 	}
 	return nil
+}
+
+// RetireKeypair stamps retired_at on kid. The guard against retiring the last
+// active keypair lives in the UPDATE itself, so two processes retiring the
+// last two active keys at once cannot leave the signer with none. When no
+// row changes, a follow-up read says why: unknown kid, already retired
+// (returned unchanged so the original grace window holds), or last active.
+func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (keys.Keypair, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE keypairs SET retired_at = ?
+		 WHERE kid = ? AND retired_at IS NULL
+		   AND EXISTS (SELECT 1 FROM keypairs WHERE kid <> ? AND retired_at IS NULL)`,
+		at, kid, kid,
+	)
+	if err != nil {
+		return keys.Keypair{}, fmt.Errorf("sqlite: retire keypair: %w", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return keys.Keypair{}, fmt.Errorf("sqlite: retire keypair: %w", err)
+	}
+
+	kp, err := scanKeypair(s.db.QueryRowContext(ctx,
+		`SELECT `+keypairColumns+` FROM keypairs WHERE kid = ?`, kid))
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return keys.Keypair{}, fmt.Errorf("%w: %s", keys.ErrKeypairNotFound, kid)
+	case err != nil:
+		return keys.Keypair{}, err
+	case changed == 0 && !kp.Retired():
+		return keys.Keypair{}, fmt.Errorf("%w (kid=%s)", keys.ErrLastActiveKeypair, kid)
+	}
+	return kp, nil
+}
+
+const keypairColumns = `kid, alg, private_pem, public_pem, created_at, retired_at`
+
+// rowScanner is the Scan half shared by *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanKeypair(r rowScanner) (keys.Keypair, error) {
+	var (
+		kp      keys.Keypair
+		retired sql.NullTime
+	)
+	if err := r.Scan(&kp.Kid, &kp.Alg, &kp.PrivatePEM, &kp.PublicPEM, &kp.CreatedAt, &retired); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return keys.Keypair{}, err
+		}
+		return keys.Keypair{}, fmt.Errorf("sqlite: scan keypair: %w", err)
+	}
+	if retired.Valid {
+		t := retired.Time
+		kp.RetiredAt = &t
+	}
+	return kp, nil
 }

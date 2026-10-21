@@ -49,6 +49,10 @@ func (m *memKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error) {
 	return out, nil
 }
 
+func (m *memKeyStore) RetireKeypair(context.Context, string, time.Time) (keys.Keypair, error) {
+	return keys.Keypair{}, keys.ErrKeypairNotFound
+}
+
 // memRegistry is an in-memory admin.KeyRegistry. Inserts preserve insertion
 // order; List returns rows in id-DESC order (mirrors the sqlite behaviour the
 // real handler depends on). MarkIntegrationKeyRevoked is idempotent.
@@ -220,7 +224,20 @@ type listResp struct {
 	NextCursor string    `json:"next_cursor"`
 }
 
+// defaultExpiry fills the required expires_at for tests that are not about
+// expiry, a day after the suite's clock.
+func (s *KeysSuite) defaultExpiry(body postBody) postBody {
+	if body.ExpiresAt == nil {
+		body.ExpiresAt = ptr(s.now.Add(24 * time.Hour).Format(time.RFC3339))
+	}
+	return body
+}
+
 func (s *KeysSuite) postKey(body postBody) (*http.Response, []byte) {
+	return s.postRaw(s.defaultExpiry(body))
+}
+
+func (s *KeysSuite) postRaw(body any) (*http.Response, []byte) {
 	raw, err := json.Marshal(body)
 	s.Require().NoError(err)
 	resp, err := s.client.Post(s.srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
@@ -271,7 +288,7 @@ func (s *KeysSuite) TestPostMintsKeyReturns201() {
 
 	s.NotEmpty(got.ID)
 	s.NotEmpty(got.JWT)
-	s.Nil(got.ExpiresAt, "expires_at omitted when input nil")
+	s.NotNil(got.ExpiresAt)
 
 	// Persisted row matches the response.
 	row, err := s.registry.ByID(s.ctx, got.ID)
@@ -629,6 +646,9 @@ func (s *KeysSuite) handlerWith(reg admin.KeyRegistry, signer *keys.Signer, extr
 
 func (s *KeysSuite) doRequest(srv *httptest.Server, method, path string, body any) *http.Response {
 	var reader io.Reader
+	if b, ok := body.(postBody); ok {
+		body = s.defaultExpiry(b)
+	}
 	if body != nil {
 		raw, err := json.Marshal(body)
 		s.Require().NoError(err)
@@ -654,6 +674,47 @@ func (s *KeysSuite) TestPostExpiresAtInPastRejected() {
 	}
 	resp, raw := s.postKey(body)
 	s.Equal(http.StatusBadRequest, resp.StatusCode, "body=%s", string(raw))
+}
+
+func (s *KeysSuite) TestPostRequiresExpiresAt() {
+	resp, raw := s.postRaw(map[string]string{"namespace": "ns", "role": "read", "owner": "o"})
+	s.Equal(http.StatusBadRequest, resp.StatusCode, "body=%s", string(raw))
+	s.Contains(string(raw), "expires_at")
+	s.NotContains(string(raw), `"jwt"`)
+
+	rows, err := s.registry.List(s.ctx, admin.ListFilter{Limit: 10})
+	s.Require().NoError(err)
+	s.Empty(rows, "a key without expires_at must not be minted")
+}
+
+func (s *KeysSuite) TestPostCapsExpiresAtAtDefaultMaxTTL() {
+	at := func(d time.Duration) *string { return ptr(s.now.Add(d).Format(time.RFC3339)) }
+
+	resp, raw := s.postKey(postBody{Namespace: "ns", Role: "read", Owner: "o", ExpiresAt: at(admin.DefaultMaxTTL)})
+	s.Equal(http.StatusCreated, resp.StatusCode, "expiry exactly at the cap is allowed: %s", raw)
+
+	resp, raw = s.postKey(postBody{Namespace: "ns", Role: "read", Owner: "o", ExpiresAt: at(admin.DefaultMaxTTL + time.Second)})
+	s.Equal(http.StatusBadRequest, resp.StatusCode, "body=%s", string(raw))
+	s.Contains(string(raw), "expires_at")
+}
+
+func (s *KeysSuite) TestPostCapsExpiresAtAtConfiguredMaxTTL() {
+	srv := s.handlerWith(s.registry, s.signer, admin.WithIDGenerator(s.nextID), admin.WithMaxTTL(time.Hour))
+	defer srv.Close()
+	at := func(d time.Duration) *string { return ptr(s.now.Add(d).Format(time.RFC3339)) }
+
+	ok := s.doRequest(srv, http.MethodPost, "/admin/keys", postBody{Namespace: "ns", Role: "read", Owner: "o", ExpiresAt: at(time.Hour)})
+	s.Require().NoError(ok.Body.Close())
+	s.Equal(http.StatusCreated, ok.StatusCode)
+
+	tooLong := s.doRequest(srv, http.MethodPost, "/admin/keys", postBody{Namespace: "ns", Role: "read", Owner: "o", ExpiresAt: at(2 * time.Hour)})
+	s.Require().NoError(tooLong.Body.Close())
+	s.Equal(http.StatusBadRequest, tooLong.StatusCode)
+}
+
+func (s *KeysSuite) TestWithMaxTTLRejectsNonPositive() {
+	s.Panics(func() { admin.WithMaxTTL(0) })
+	s.Panics(func() { admin.WithMaxTTL(-time.Hour) })
 }
 
 func (s *KeysSuite) TestPostSignerErrorBubblesUp500() {

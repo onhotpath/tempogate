@@ -61,6 +61,76 @@ func (s *KeysCmdSuite) generateCmd(out *bytes.Buffer) *cobra.Command {
 	return root
 }
 
+// keysCmd runs `keys <args...>` against the suite's store and returns its
+// output.
+func (s *KeysCmdSuite) keysCmd(args ...string) (string, error) {
+	var out bytes.Buffer
+	root := newKeysCmd(supply(keysParams{
+		Store: s.store,
+		Keys:  keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048))),
+	}))
+	root.SetArgs(args)
+	root.SetOut(&out)
+	root.SetErr(new(testWriter))
+	err := root.ExecuteContext(s.ctx)
+	return out.String(), err
+}
+
+// twoKeypairs migrates the store and persists an older and a newer keypair.
+func (s *KeysCmdSuite) twoKeypairs() (keys.Keypair, keys.Keypair) {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	k := keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048)))
+	older, err := k.Generate(s.ctx, false)
+	s.Require().NoError(err)
+	newer, err := k.Generate(s.ctx, true)
+	s.Require().NoError(err)
+	return older, newer
+}
+
+func (s *KeysCmdSuite) TestRetireMarksTheKeypairRetired() {
+	older, newer := s.twoKeypairs()
+
+	out, err := s.keysCmd("retire", older.Kid)
+	s.Require().NoError(err)
+	s.Contains(out, "retired keypair: kid="+older.Kid)
+	s.Contains(out, "KEYS_RETIREMENT_GRACE")
+
+	kps, err := s.store.LoadKeypairs(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Len(kps, 2)
+	s.NotNil(kps[0].RetiredAt)
+	s.Nil(kps[1].RetiredAt)
+
+	_, err = s.keysCmd("retire", newer.Kid)
+	s.Require().ErrorIs(err, keys.ErrLastActiveKeypair)
+	s.Contains(err.Error(), "keys generate --force")
+}
+
+func (s *KeysCmdSuite) TestRetireRequiresExactlyOneKid() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	_, err := s.keysCmd("retire")
+	s.Require().Error(err)
+}
+
+func (s *KeysCmdSuite) TestRetireRejectsStaleSchema() {
+	_, err := s.keysCmd("retire", "kid")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "tempogate migrate")
+}
+
+func (s *KeysCmdSuite) TestListShowsStatus() {
+	older, newer := s.twoKeypairs()
+	_, err := s.keysCmd("retire", older.Kid)
+	s.Require().NoError(err)
+
+	out, err := s.keysCmd("list")
+	s.Require().NoError(err)
+	s.Contains(out, older.Kid)
+	s.Contains(out, newer.Kid)
+	s.Regexp(older.Kid+`\s.*retired`, out)
+	s.Regexp(newer.Kid+`\s.*active`, out)
+}
+
 func (s *KeysCmdSuite) TestRejectsUnreachableStore() {
 	s.Require().NoError(s.store.Close())
 

@@ -27,6 +27,9 @@ type Result struct {
 	AdminTokenSHA256      string        `name:"admin_token_sha256"`
 	AdminAllowedHosts     []string      `name:"admin_allowed_hosts"`
 	AdminAllowSystemGrant bool          `name:"admin_allow_system_grants"`
+	AdminKeysMaxTTL       time.Duration `name:"admin_keys_max_ttl"`
+	KeysRetirementGrace   time.Duration `name:"keys_retirement_grace"`
+	KeysReloadInterval    time.Duration `name:"keys_reload_interval"`
 	SqlitePath            string        `name:"sqlite_path"`
 	SqliteMaxConns        int           `name:"sqlite_max_conns"`
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
@@ -83,6 +86,9 @@ func project(cfg *Config) Result {
 		AdminTokenSHA256:      cfg.Admin.TokenSHA256,
 		AdminAllowedHosts:     adminAllowedHosts(cfg.Admin),
 		AdminAllowSystemGrant: cfg.Admin.AllowSystemGrants,
+		AdminKeysMaxTTL:       cfg.Admin.Keys.MaxTTL,
+		KeysRetirementGrace:   cfg.Keys.RetirementGrace,
+		KeysReloadInterval:    cfg.Keys.ReloadInterval,
 		SqlitePath:            cfg.State.Sqlite.Path,
 		SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
 		SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,

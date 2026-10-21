@@ -39,8 +39,9 @@ var ErrNotAccessToken = errors.New("keys: token is not an access token")
 // When a DenylistChecker is configured via WithDenylist, Verify rejects a
 // signature-and-claims-valid token whose jti has been revoked. Temporal's
 // frontend has no equivalent hook, so a revoked integration key keeps
-// authorizing Temporal gRPC calls until its exp fires; tempogate-mediated
-// flows (refresh, /userinfo) honor the denylist within the cache's TTL.
+// authorizing Temporal gRPC calls until its exp fires or its signing key is
+// retired past grace; tempogate-mediated flows (refresh, /userinfo) honor the
+// denylist within the cache's TTL.
 type Verifier struct {
 	keys     *Keys
 	issuer   string
@@ -60,10 +61,11 @@ func NewVerifier(opts ...TokenOption) *Verifier {
 	}
 }
 
-// Verify checks the signature against every loaded public key (kid-matched, so
-// a token minted before a --force rotation still verifies while its key is
-// retained) and enforces the temporal claims plus the configured iss/aud. It
-// returns the parsed token so callers can read sub/permissions/jti.
+// Verify checks the signature against every published public key (kid-matched,
+// so a token minted before a --force rotation still verifies until its key's
+// retirement grace elapses, the same moment the kid leaves JWKS) and enforces
+// the temporal claims plus the configured iss/aud. It returns the parsed token
+// so callers can read sub/permissions/jti.
 //
 // When a DenylistChecker is wired, the parsed token's jti is also consulted
 // against it: a revoked jti yields ErrTokenRevoked. A jti-less token (older
@@ -79,7 +81,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (jwt.Token, error) {
 	}
 
 	set := jwk.NewSet()
-	for _, kp := range v.keys.All() {
+	for _, kp := range v.keys.Published() {
 		pub, err := jwk.ParseKey(kp.PublicPEM, jwk.WithX509(true))
 		if err != nil {
 			return nil, fmt.Errorf("keys: parse public key (kid=%s): %w", kp.Kid, err)

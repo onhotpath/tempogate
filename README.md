@@ -78,7 +78,8 @@ scoping is planned; long-lived integration keys come from the admin API below.
 
 ### Integration keys (admin API)
 
-`POST /admin/keys` mints a long-lived JWT for one (namespace, role) on a separate admin listener (`ADMIN_LISTENER`, default `127.0.0.1:8081`).
+`POST /admin/keys` mints a JWT for one (namespace, role) on a separate admin listener (`ADMIN_LISTENER`, default `127.0.0.1:8081`).
+`expires_at` is required and may be at most `ADMIN_KEYS_MAX_TTL` (default 90 days) away.
 Every `/admin/*` route except `/admin/healthz` needs a bearer admin token whose SHA-256 is listed in `ADMIN_TOKEN_SHA256`; with none configured the admin API is locked (401).
 Requests whose `Host` is not in `ADMIN_ALLOWED_HOSTS` get 421, and `temporal-system` (cluster-wide) grants get 403 unless `ADMIN_ALLOW_SYSTEM_GRANTS=true`.
 Every mint and revoke is written to an `admin audit` log line.
@@ -88,13 +89,13 @@ token=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
 export ADMIN_TOKEN_SHA256=$(printf %s "$token" | sha256sum | cut -d' ' -f1)
 # after starting tempogate serve:
 curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-  -d '{"namespace":"payments","role":"worker","owner":"svc-payments"}' \
+  -d '{"namespace":"payments","role":"worker","owner":"svc-payments","expires_at":"2026-12-31T00:00:00Z"}' \
   http://127.0.0.1:8081/admin/keys
 ```
 
-See [docs/configuration.md](docs/configuration.md#admin-api) for all four settings.
+See [docs/configuration.md](docs/configuration.md#admin-api) for all the settings.
 
-### Revoking integration keys
+### Revoking integration keys and retiring signing keys
 
 `DELETE /admin/keys/:id` marks a key revoked and adds its `jti` to a
 SQLite-backed denylist. The denylist is consulted by tempogate's *own*
@@ -104,20 +105,25 @@ in-process for the instance that served the DELETE.
 The denylist is not consulted by the refresh-token grant: refresh tokens are
 opaque and have their own lifecycle (see [Sessions and refresh tokens](#sessions-and-refresh-tokens)).
 
-Temporal's frontend, however, validates JWTs with its default
-`ClaimMapper` against `/.well-known/jwks.json` only — it has no hook to
-consult a per-issuer denylist. The practical consequence:
+Temporal's frontend, however, validates JWTs against
+`/.well-known/jwks.json` and their `exp` only; it never sees the denylist.
+The practical consequence:
 
-| Verification path                   | Time until revoke takes effect       |
+| Verification path                   | Revoke takes effect                  |
 | ----------------------------------- | ------------------------------------ |
-| tempogate (`/userinfo`)             | up to **30 s** (denylist cache TTL)  |
-| Temporal frontend gRPC              | up to the **token's `exp`** lifetime |
+| tempogate (`/userinfo`)             | within **30 s** (denylist cache TTL) |
+| Temporal frontend gRPC              | only at the **token's `exp`**        |
 
-This is the acknowledged trade-off of stateless JWTs against Temporal's
-stock verifier. Mint integration keys with a deliberately bounded `exp` if
-your threat model needs an upper bound on revoke lag for Temporal gRPC; a
-future move to opaque, server-introspected keys would close the gap
-end-to-end.
+That is why every integration key must carry an `exp`. The hard kill switch
+is retiring the signing key: `tempogate keys retire <kid>` (or
+`POST /admin/signing-keys/<kid>/retire`) stops it signing at once, and after
+`KEYS_RETIREMENT_GRACE` (default 4 h) it leaves JWKS, so every token it signed
+stops verifying at tempogate and, after its next JWKS refresh, at Temporal.
+Rotate first with `tempogate keys generate --force`; a running server picks up
+both changes within `KEYS_RELOAD_INTERVAL` (default 30 s), no restart needed.
+See the [rotation runbook](docs/configuration.md#rotation-runbook).
+A future move to short-lived tokens exchanged from an opaque key would make
+revocation effective at Temporal without retiring a key.
 
 ### Sessions and refresh tokens
 

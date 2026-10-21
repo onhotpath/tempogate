@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,4 +46,30 @@ func TestSupplyProjectsLikeFx(t *testing.T) {
 
 	require.Equal(t, "/tmp/state.db", got.SqlitePath)
 	require.Equal(t, "/idp", got.OIDCBasePath)
+}
+
+// TestProjectsKeyLifetimes guards the names the admin handler, the keypair
+// aggregate and serve's reload loop inject.
+func TestProjectsKeyLifetimes(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Admin.Keys.MaxTTL = 24 * time.Hour
+	cfg.Keys.RetirementGrace = time.Minute
+	cfg.Keys.ReloadInterval = time.Second
+
+	type projected struct {
+		fx.In
+
+		MaxTTL          time.Duration `name:"admin_keys_max_ttl"`
+		RetirementGrace time.Duration `name:"keys_retirement_grace"`
+		ReloadInterval  time.Duration `name:"keys_reload_interval"`
+	}
+	var got projected
+	fxtest.New(t,
+		Supply(cfg),
+		fx.Invoke(func(p projected) { got = p }),
+	).RequireStart().RequireStop()
+
+	require.Equal(t, 24*time.Hour, got.MaxTTL)
+	require.Equal(t, time.Minute, got.RetirementGrace)
+	require.Equal(t, time.Second, got.ReloadInterval)
 }

@@ -2,6 +2,8 @@ package keys
 
 import (
 	"errors"
+	"fmt"
+	"time"
 
 	"go.uber.org/fx"
 )
@@ -9,20 +11,25 @@ import (
 type fxParams struct {
 	fx.In
 
-	Store KeyStore
+	Store           KeyStore
+	RetirementGrace time.Duration `name:"keys_retirement_grace"`
 
 	EncryptionKey     string `name:"keys_encryption_key" optional:"true"`
 	EncryptionKeyFile string `name:"keys_encryption_key_file" optional:"true"`
 }
 
-// newFx fails graph construction on a malformed KEK, so a typo is caught at
-// startup rather than when the first key is written.
+// newFx fails graph construction on a malformed KEK or a negative grace
+// (rather than letting WithRetirementGrace panic), so a typo is caught at
+// startup and the operator sees which setting is wrong.
 func newFx(p fxParams) (*Keys, error) {
+	if p.RetirementGrace < 0 {
+		return nil, fmt.Errorf("keys: KEYS_RETIREMENT_GRACE must not be negative, got %s", p.RetirementGrace)
+	}
 	kek, err := LoadEncryptionKey(p.EncryptionKey, p.EncryptionKeyFile)
 	if err != nil {
 		return nil, err
 	}
-	opts := []Option{WithStore(p.Store)}
+	opts := []Option{WithStore(p.Store), WithRetirementGrace(p.RetirementGrace)}
 	if kek != nil {
 		opts = append(opts, WithEncryptionKey(kek))
 	}

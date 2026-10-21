@@ -1,6 +1,7 @@
 // Package admin exposes tempogate's backend-callable integration-key API: a
-// service can POST to /admin/keys to mint a long-lived JWT scoped to a single
-// namespace+role, retrieve metadata, and revoke. The package owns the
+// service can POST to /admin/keys to mint an expiring JWT scoped to a single
+// namespace+role, retrieve metadata, and revoke. It also lists and retires
+// the signing keys those JWTs are signed with (/admin/signing-keys). The package owns the
 // IntegrationKey domain type, the four Huma operations, and the consumer-side
 // store interface; the JWT itself is minted via keys.Signer so the claim
 // shape stays uniform with human and CLI tokens.
@@ -50,8 +51,10 @@ var (
 // IntegrationKey is the persistent record behind a single minted JWT. ID is a
 // UUIDv7 stamped by the POST handler; JTI is the value the Signer embeds in
 // the `jti` claim of the JWT — the future denylist will key on it, which is
-// why MarkIntegrationKeyRevoked surfaces it. ExpiresAt nil means "no expiry
-// — lifetime governed by revocation"; RevokedAt nil means "active".
+// why MarkIntegrationKeyRevoked surfaces it. New keys always carry ExpiresAt;
+// nil only appears on rows minted before expiry was required, whose JWT has no
+// exp and stays valid at Temporal until its signing key is retired. RevokedAt
+// nil means "active".
 type IntegrationKey struct {
 	ID        string
 	Namespace string
@@ -76,8 +79,8 @@ func WithRole(r Role) Option { return func(k *IntegrationKey) { k.Role = r } }
 func WithOwner(o string) Option { return func(k *IntegrationKey) { k.Owner = o } }
 
 // WithExpiresAt sets the absolute expiry the JWT's `exp` claim is derived
-// from. A nil value keeps the key long-lived: Signer.Mint with TTL=0 emits no
-// `exp` claim, and revocation becomes the only way the key stops authorizing.
+// from. The POST handler refuses nil: Temporal ignores revocation, so a key
+// without `exp` could only be stopped there by retiring its signing key.
 func WithExpiresAt(t *time.Time) Option { return func(k *IntegrationKey) { k.ExpiresAt = t } }
 
 // New builds a fresh IntegrationKey from the caller-supplied options. It does
