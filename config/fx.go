@@ -18,6 +18,12 @@ type Result struct {
 	HTTPListener          Listener      `name:"http"`
 	AdminListener         Listener      `name:"admin"`
 	APIDocsEnabled        bool          `name:"api_docs_enabled"`
+	HTTPTrustedProxies    string        `name:"http_trusted_proxies"`
+	RateLimitAuthorize    int           `name:"http_rate_limit_authorize"`
+	RateLimitDeviceAuthz  int           `name:"http_rate_limit_device_authorization"`
+	RateLimitDeviceVerify int           `name:"http_rate_limit_device_verification"`
+	RateLimitToken        int           `name:"http_rate_limit_token"`
+	StateReaperInterval   time.Duration `name:"state_reaper_interval"`
 	SqlitePath            string        `name:"sqlite_path"`
 	SqliteMaxConns        int           `name:"sqlite_max_conns"`
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
@@ -50,6 +56,12 @@ func Fx() fx.Option {
 				HTTPListener:          cfg.HTTP.Listener,
 				AdminListener:         cfg.Admin.Listener,
 				APIDocsEnabled:        cfg.API.DocsEnabled,
+				HTTPTrustedProxies:    cfg.HTTP.TrustedProxies,
+				RateLimitAuthorize:    cfg.HTTP.RateLimit.Authorize,
+				RateLimitDeviceAuthz:  cfg.HTTP.RateLimit.DeviceAuthorization,
+				RateLimitDeviceVerify: cfg.HTTP.RateLimit.DeviceVerification,
+				RateLimitToken:        cfg.HTTP.RateLimit.Token,
+				StateReaperInterval:   cfg.State.ReaperInterval,
 				SqlitePath:            cfg.State.Sqlite.Path,
 				SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
 				SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,

@@ -13,6 +13,12 @@ func defaultConfig() *Config {
 				IP:   net.IPv4(127, 0, 0, 1),
 				Port: 8000,
 			},
+			RateLimit: RateLimitConfig{
+				Authorize:           30,
+				DeviceAuthorization: 10,
+				DeviceVerification:  20,
+				Token:               60,
+			},
 		},
 		Admin: AdminConfig{
 			Listener: Listener{
@@ -26,6 +32,7 @@ func defaultConfig() *Config {
 				MaxConns:    1,
 				BusyTimeout: 5 * time.Second,
 			},
+			ReaperInterval: 5 * time.Minute,
 		},
 		OIDC: OIDCConfig{
 			Issuer:             "http://127.0.0.1:8000",

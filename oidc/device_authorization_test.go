@@ -471,3 +471,28 @@ func (s *DeviceAuthorizationSuite) TestDefaultDeviceCodeGeneratorEntropy() {
 func fmtErrorf(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
 }
+
+// TestOversizedParamsRejected: scope is stored verbatim in device_codes, so
+// an unbounded one let an anonymous caller write ~1 MiB per request (H4).
+func (s *DeviceAuthorizationSuite) TestOversizedParamsRejected() {
+	cases := []struct {
+		name  string
+		param string
+		value string
+	}{
+		{"scope over 1 KiB", "scope", "openid " + strings.Repeat("a", 1024)},
+		{"client_id over 256 bytes", "client_id", strings.Repeat("a", 257)},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			f := validDeviceForm()
+			f.Set(tc.param, tc.value)
+			resp := s.post(s.srv, f.Encode())
+			defer resp.Body.Close()
+
+			s.Equal(http.StatusBadRequest, resp.StatusCode)
+			s.Equal("invalid_request", s.decodeOAuthError(resp))
+			s.Zero(s.store.count(), "nothing is persisted")
+		})
+	}
+}

@@ -131,6 +131,18 @@ func (a *Authorizer) Register(api huma.API) {
 }
 
 func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorizeOutput, error) {
+	if err := checkParamLengths(
+		paramCap{"client_id", in.ClientID, maxClientIDLen},
+		paramCap{"redirect_uri", in.RedirectURI, maxRedirectURILen},
+		paramCap{"scope", in.Scope, maxScopeLen},
+		paramCap{"state", in.State, maxStateLen},
+		paramCap{"nonce", in.Nonce, maxNonceLen},
+	); err != nil {
+		return nil, err
+	}
+	if in.CodeChallenge != "" && !validCodeChallenge(in.CodeChallenge) {
+		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge must be 43 base64url characters (S256)")
+	}
 	if in.ResponseType != "code" {
 		return nil, oauthErr(http.StatusBadRequest, "unsupported_response_type", "only response_type=code is supported")
 	}

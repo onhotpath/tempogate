@@ -33,6 +33,29 @@ type LogConfig struct {
 
 type HTTPConfig struct {
 	Listener Listener `ferry:"listener"`
+
+	// TrustedProxies (HTTP_TRUSTED_PROXIES) is a comma-separated list of
+	// CIDRs or addresses of reverse proxies in front of tempogate. Only a
+	// request whose TCP peer is in this set has its client address taken
+	// from X-Forwarded-For; any other peer's header is ignored, so a client
+	// cannot pick its own rate-limit bucket. Empty (the default) trusts no
+	// proxy: behind an ingress every client then shares the ingress's
+	// bucket.
+	TrustedProxies string `ferry:"trusted_proxies"`
+
+	RateLimit RateLimitConfig `ferry:"rate_limit"`
+}
+
+// RateLimitConfig caps how many requests one client address may send to
+// each unauthenticated endpoint that writes state or checks a credential,
+// per minute (as a burst that refills evenly). 0 disables that endpoint's
+// limit, e.g. when a fronting proxy already rate-limits.
+type RateLimitConfig struct {
+	Authorize           int `ferry:"authorize"`
+	DeviceAuthorization int `ferry:"device_authorization"`
+	// DeviceVerification limits POST /device, the user_code entry form.
+	DeviceVerification int `ferry:"device_verification"`
+	Token              int `ferry:"token"`
 }
 
 // AdminConfig configures the private admin listener. It is intentionally a
@@ -55,6 +78,10 @@ type APIConfig struct {
 
 type StateConfig struct {
 	Sqlite SqliteConfig `ferry:"sqlite"`
+
+	// ReaperInterval (STATE_REAPER_INTERVAL) is how often `serve` deletes
+	// expired rows. 0 disables the reaper.
+	ReaperInterval time.Duration `ferry:"reaper_interval"`
 }
 
 type SqliteConfig struct {

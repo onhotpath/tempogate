@@ -57,6 +57,15 @@ service:
 # unreachable through a Service; in-cluster it MUST bind all interfaces.
 listenAddress: 0.0.0.0
 
+# HTTP_TRUSTED_PROXIES: CIDRs (or addresses) of the reverse proxies in front
+# of tempogate, e.g. your ingress controller's pod CIDR. tempogate rate-limits
+# its public endpoints per client address; it reads that address from
+# X-Forwarded-For only when the connection comes from one of these. Empty
+# trusts no proxy, so behind an ingress every client shares the ingress's
+# budget. Never list a range clients can connect from directly.
+trustedProxies: []
+  # - 10.0.0.0/8
+
 ingress:
   enabled: false
   className: ""

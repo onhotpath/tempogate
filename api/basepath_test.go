@@ -158,3 +158,38 @@ func TestAdminSurfaceIsolatedFromPublic(t *testing.T) {
 		})
 	}
 }
+
+// TestMiddlewareWrapsRegistrarsWhateverTheOptionOrder: Huma binds
+// middlewares at registration, so one added after the registrar options
+// must still wrap the registrar's operations, at the root and under a base
+// path, while the admin surface stays untouched.
+func TestMiddlewareWrapsRegistrarsWhateverTheOptionOrder(t *testing.T) {
+	for _, basePath := range []string{"", "/idp"} {
+		t.Run("base path "+basePath, func(t *testing.T) {
+			var seen []string
+			mw := func(ctx huma.Context, next func(huma.Context)) {
+				seen = append(seen, ctx.Operation().OperationID)
+				next(ctx)
+			}
+			srv, res, _ := servePublic(t, basePath, api.WithRegistrar(probe), api.WithAdminRegistrar(adminProbe), api.WithMiddleware(mw))
+
+			resp, err := http.Get(srv.URL + basePath + "/probe")
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+			assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+			assert.Equal(t, []string{"probe"}, seen)
+
+			admin := httptest.NewServer(res.Admin.Handler)
+			defer admin.Close()
+			resp, err = http.Get(admin.URL + "/admin/probe")
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+			assert.Equal(t, []string{"probe"}, seen, "admin operations are not wrapped")
+		})
+	}
+}
+
+func probe(a huma.API) {
+	huma.Register(a, huma.Operation{OperationID: "probe", Method: http.MethodGet, Path: "/probe"},
+		func(context.Context, *struct{}) (*struct{}, error) { return nil, nil })
+}

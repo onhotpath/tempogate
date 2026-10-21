@@ -8,6 +8,9 @@ data:
   LOG_LEVEL: {{ .Values.log.level | quote }}
   HTTP_LISTENER: {{ printf "%s:%v" .Values.listenAddress .Values.service.port | quote }}
   STATE_SQLITE_PATH: {{ .Values.state.sqlitePath | quote }}
+  {{- with .Values.trustedProxies }}
+  HTTP_TRUSTED_PROXIES: {{ join "," . | quote }}
+  {{- end }}
   {{- with .Values.oidc.issuer }}
   OIDC_ISSUER: {{ . | quote }}
   {{- end }}

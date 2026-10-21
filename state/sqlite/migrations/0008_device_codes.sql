@@ -10,8 +10,8 @@
 -- last_polled_at + interval_seconds back the server-enforced slow_down logic
 -- (§3.5): a poll arriving sooner than interval_seconds since the last one
 -- returns slow_down and bumps interval_seconds by +5. Expiry is the handler's
--- concern (it owns the clock); the row is reaped only on consume or by a
--- sweeper, mirroring auth_codes / refresh_tokens.
+-- concern (it owns the clock); the row is deleted on consume or, once
+-- expired, by the reaper `serve` runs (reaper.go), like auth_codes.
 CREATE TABLE device_codes (
     device_code      TEXT PRIMARY KEY,
     user_code        TEXT NOT NULL UNIQUE,

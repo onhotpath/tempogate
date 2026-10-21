@@ -36,9 +36,16 @@ type FxSuite struct {
 	// SetupTest resets them to the defaults so only the validation test
 	// varies them.
 	accessTTL, refreshTTL, refreshMax time.Duration
+
+	// trustedProxies and deviceAuthzLimit feed HTTP_TRUSTED_PROXIES and one
+	// rate limit, so the startup-validation tests can break them.
+	trustedProxies   string
+	deviceAuthzLimit int
 }
 
 func (s *FxSuite) SetupTest() {
+	s.trustedProxies = ""
+	s.deviceAuthzLimit = 10
 	s.accessTTL = oidc.DefaultAccessTokenTTL
 	s.refreshTTL = oidc.DefaultRefreshTokenTTL
 	s.refreshMax = oidc.DefaultRefreshMaxLifetime
@@ -96,6 +103,11 @@ func (s *FxSuite) supplyConfigAt(issuer, basePath, clients, secrets, signingKeyB
 			fx.Annotated{Name: "oidc_refresh_max_lifetime", Target: s.refreshMax},
 			fx.Annotated{Name: "google_client_id", Target: testGoogleCID},
 			fx.Annotated{Name: "google_auth_endpoint", Target: testGoogleAuth},
+			fx.Annotated{Name: "http_trusted_proxies", Target: s.trustedProxies},
+			fx.Annotated{Name: "http_rate_limit_authorize", Target: 30},
+			fx.Annotated{Name: "http_rate_limit_device_authorization", Target: s.deviceAuthzLimit},
+			fx.Annotated{Name: "http_rate_limit_device_verification", Target: 20},
+			fx.Annotated{Name: "http_rate_limit_token", Target: 60},
 		),
 	)
 }
@@ -423,6 +435,64 @@ func (s *FxSuite) TestSessionSigningKeyValidation() {
 				fx.Invoke(func(*oidc.SessionManager) {}),
 			)
 			s.Require().Error(app.Err())
+		})
+	}
+}
+
+type middlewareParams struct {
+	fx.In
+	Registrars  []func(huma.API)                         `group:"api_registrars"`
+	Middlewares []func(huma.Context, func(huma.Context)) `group:"api_middlewares"`
+}
+
+// TestRateLimiterIsWiredIntoMiddlewares: the configured limit reaches the
+// real /device_authorization handler through the api_middlewares group.
+func (s *FxSuite) TestRateLimiterIsWiredIntoMiddlewares() {
+	s.deviceAuthzLimit = 1
+	var got middlewareParams
+	app := fxtest.New(s.T(),
+		s.supplyConfig(deviceUIFxClients),
+		oidc.Fx(),
+		fx.Populate(&got),
+	)
+	app.RequireStart()
+	defer app.RequireStop()
+	s.Require().Len(got.Middlewares, 1)
+
+	mux := http.NewServeMux()
+	api := humago.New(mux, huma.DefaultConfig("fx_test", "0.0.0"))
+	api.UseMiddleware(got.Middlewares...)
+	for _, fn := range got.Registrars {
+		fn(api)
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	post := func() int {
+		resp, err := http.Post(srv.URL+"/device_authorization", "application/x-www-form-urlencoded",
+			strings.NewReader("client_id=tempogate-device&scope=openid"))
+		s.Require().NoError(err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	s.Equal(http.StatusOK, post())
+	s.Equal(http.StatusTooManyRequests, post())
+}
+
+func (s *FxSuite) TestInvalidAbuseControlsFailStartup() {
+	for name, mutate := range map[string]func(){
+		"malformed trusted proxy": func() { s.trustedProxies = "10.0.0.0/8,proxy.internal" },
+		"negative rate limit":     func() { s.deviceAuthzLimit = -1 },
+	} {
+		s.Run(name, func() {
+			s.SetupTest()
+			mutate()
+			app := fx.New(fx.NopLogger,
+				s.supplyConfig(deviceUIFxClients),
+				oidc.Fx(),
+				fx.Invoke(func(middlewareParams) {}),
+			)
+			s.Error(app.Err())
 		})
 	}
 }

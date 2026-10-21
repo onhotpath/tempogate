@@ -303,6 +303,16 @@ func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error)
 	if err != nil {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "malformed form body")
 	}
+	if err := checkParamLengths(
+		paramCap{"client_id", form.Get("client_id"), maxClientIDLen},
+		paramCap{"redirect_uri", form.Get("redirect_uri"), maxRedirectURILen},
+		paramCap{"code", form.Get("code"), maxCredentialLen},
+		paramCap{"code_verifier", form.Get("code_verifier"), maxCredentialLen},
+		paramCap{"refresh_token", form.Get("refresh_token"), maxCredentialLen},
+		paramCap{"device_code", form.Get("device_code"), maxCredentialLen},
+	); err != nil {
+		return nil, err
+	}
 
 	switch form.Get("grant_type") {
 	case grantAuthorizationCode:

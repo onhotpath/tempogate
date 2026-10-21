@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -351,6 +352,58 @@ func (s *AuthorizeSuite) TestInvalidRequestsReturnOAuth2Errors() {
 			s.Zero(s.store.count())
 		})
 	}
+}
+
+// TestOversizedParamsRejected caps every client-controlled value before
+// anything is written: an anonymous caller could otherwise store ~1 MiB per
+// request (H4).
+func (s *AuthorizeSuite) TestOversizedParamsRejected() {
+	long := func(n int) string { return strings.Repeat("a", n) }
+	cases := []struct {
+		name  string
+		param string
+		value string
+	}{
+		{"state over 512 bytes", "state", long(513)},
+		{"nonce over 512 bytes", "nonce", long(513)},
+		{"scope over 1 KiB", "scope", "openid " + long(1024)},
+		{"client_id over 256 bytes", "client_id", long(257)},
+		{"redirect_uri over 2 KiB", "redirect_uri", testRedirectURI + "?" + long(2048)},
+		{"code_challenge shorter than 43", "code_challenge", long(42)},
+		{"code_challenge longer than 43", "code_challenge", long(44)},
+		{"code_challenge not base64url", "code_challenge", long(42) + "="},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			q := validParams()
+			q.Set(tc.param, tc.value)
+			resp := s.get(s.srv, q)
+			defer resp.Body.Close()
+
+			s.Equal(http.StatusBadRequest, resp.StatusCode)
+			var body struct {
+				Error string `json:"error"`
+				Desc  string `json:"error_description"`
+			}
+			s.Require().NoError(json.NewDecoder(resp.Body).Decode(&body))
+			s.Equal("invalid_request", body.Error)
+			s.Contains(body.Desc, tc.param)
+			s.Empty(resp.Header.Get("Location"))
+			s.Zero(s.store.count(), "nothing is persisted")
+		})
+	}
+}
+
+func (s *AuthorizeSuite) TestParamsAtTheCapAreAccepted() {
+	q := validParams()
+	q.Set("state", strings.Repeat("s", 512))
+	q.Set("nonce", strings.Repeat("n", 512))
+	q.Set("scope", "openid "+strings.Repeat("x", 1024-len("openid ")))
+	resp := s.get(s.srv, q)
+	defer resp.Body.Close()
+
+	s.Equal(http.StatusFound, resp.StatusCode)
+	s.Equal(1, s.store.count())
 }
 
 func (s *AuthorizeSuite) TestStorePersistFailureIsServerError() {

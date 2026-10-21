@@ -777,3 +777,39 @@ func (s *TokenSuite) TestDefaultRefreshGeneratorIsOpaque() {
 	s.Require().NoError(err)
 	s.Len(raw, 32)
 }
+
+// TestOversizedParamsRejected bounds the credentials /token hashes and looks
+// up; the limits are generous upper bounds, not format checks.
+func (s *TokenSuite) TestOversizedParamsRejected() {
+	long := strings.Repeat("a", 1025)
+	cases := []struct {
+		name  string
+		param string
+		form  url.Values
+	}{
+		{"code", "code", authCodeForm()},
+		{"code_verifier", "code_verifier", authCodeForm()},
+		{"redirect_uri", "redirect_uri", authCodeForm()},
+		{"client_id", "client_id", authCodeForm()},
+		{"refresh_token", "refresh_token", url.Values{"grant_type": {"refresh_token"}, "client_id": {"ui"}}},
+		{"device_code", "device_code", url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "client_id": {"tempogate-device"}}},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			s.store.putCode(s.authCode("code-1"))
+			tc.form.Set(tc.param, long+strings.Repeat("a", 2048))
+			resp := s.post(tc.form)
+			defer resp.Body.Close()
+
+			s.Equal(http.StatusBadRequest, resp.StatusCode)
+			var body struct {
+				Error string `json:"error"`
+				Desc  string `json:"error_description"`
+			}
+			s.Require().NoError(json.NewDecoder(resp.Body).Decode(&body))
+			s.Equal("invalid_request", body.Error)
+			s.Contains(body.Desc, tc.param)
+		})
+	}
+	s.Empty(s.store.savedRefresh, "no token was issued")
+}
