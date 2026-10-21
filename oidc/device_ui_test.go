@@ -1272,8 +1272,7 @@ func (s *DeviceUISuite) TestEnterPageCSPIncludesUpstreamFormActionSource() {
 	resp, err := s.client.Get(local.URL + "/device")
 	s.Require().NoError(err)
 	defer resp.Body.Close()
-	body := readBody(s.T(), resp)
-	s.Contains(body, "form-action 'self' https://accounts.google.com;",
+	s.Contains(resp.Header.Get("Content-Security-Policy"), "form-action 'self' https://accounts.google.com;",
 		"device_enter CSP must whitelist the upstream IdP origin alongside 'self'")
 }
 
@@ -1286,10 +1285,10 @@ func (s *DeviceUISuite) TestEnterPageCSPDefaultsToSelfWithoutUpstream() {
 	resp, err := s.client.Do(s.req(http.MethodGet, "/device"))
 	s.Require().NoError(err)
 	defer resp.Body.Close()
-	body := readBody(s.T(), resp)
-	s.Contains(body, "form-action 'self';",
+	csp := resp.Header.Get("Content-Security-Policy")
+	s.Contains(csp, "form-action 'self';",
 		"entry page form-action must default to 'self' when no upstream origin is wired")
-	s.NotContains(body, "form-action 'self' ",
+	s.NotContains(csp, "form-action 'self' ",
 		"no trailing source should leak in when upstream is unset")
 }
 
@@ -1317,10 +1316,10 @@ func (s *DeviceUISuite) TestConfirmPageCSPStaysAtSelf() {
 	s.Require().NoError(err)
 	defer resp.Body.Close()
 	s.Equal(http.StatusOK, resp.StatusCode)
-	body := readBody(s.T(), resp)
-	s.Contains(body, "form-action 'self';",
-		"confirm page form-action must stay at 'self' — its POSTs are same-origin")
-	s.NotContains(body, "accounts.google.com",
+	csp := resp.Header.Get("Content-Security-Policy")
+	s.Contains(csp, "form-action 'self';",
+		"confirm page form-action must stay at 'self': its POSTs are same-origin")
+	s.NotContains(csp, "accounts.google.com",
 		"upstream origin must not leak into post-SSO pages")
 }
 
@@ -1401,15 +1400,15 @@ func TestNewDeviceUIUpstreamOriginVariants(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
-			b, _ := io.ReadAll(resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			body := string(b)
+			csp := resp.Header.Get("Content-Security-Policy")
 			wantSubstring := "form-action 'self';"
 			if tc.want != "" {
 				wantSubstring = "form-action 'self' " + tc.want + ";"
 			}
-			if !strings.Contains(body, wantSubstring) {
-				t.Fatalf("expected %q in rendered CSP, got: %s", wantSubstring, formActionSlice(body))
+			if !strings.Contains(csp, wantSubstring) {
+				t.Fatalf("expected %q in the CSP header, got: %s", wantSubstring, formActionSlice(csp))
 			}
 		})
 	}
@@ -1417,13 +1416,13 @@ func TestNewDeviceUIUpstreamOriginVariants(t *testing.T) {
 
 // formActionSlice extracts the form-action directive substring (up to the
 // next ';') so test failure messages stay readable instead of dumping the
-// entire <head> CSP meta tag.
-func formActionSlice(body string) string {
-	i := strings.Index(body, "form-action ")
+// entire policy.
+func formActionSlice(csp string) string {
+	i := strings.Index(csp, "form-action ")
 	if i < 0 {
-		return "(no form-action in body)"
+		return "(no form-action in CSP)"
 	}
-	tail := body[i:]
+	tail := csp[i:]
 	if j := strings.Index(tail, ";"); j >= 0 {
 		return tail[:j]
 	}

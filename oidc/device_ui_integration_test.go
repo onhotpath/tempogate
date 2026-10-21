@@ -343,8 +343,7 @@ func (s *DeviceUIIntegrationSuite) TestEnterPageCSPAllowsCrossOriginUpstreamIDP(
 	defer resp.Body.Close()
 	s.Require().Equal(http.StatusOK, resp.StatusCode)
 
-	body := readBody(s.T(), resp)
-	s.Contains(body, "form-action 'self' "+wantSource+";",
+	s.Contains(resp.Header.Get("Content-Security-Policy"), "form-action 'self' "+wantSource+";",
 		"the entry page CSP must whitelist the upstream IdP's origin in its form-action directive")
 }
 

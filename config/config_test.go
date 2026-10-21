@@ -367,6 +367,15 @@ func (s *ConfigSuite) TestNew() {
 				},
 			},
 		},
+		{
+			name: "api docs opted in by env",
+			env:  map[string]string{"API_DOCS_ENABLED": "true"},
+			want: func() *Config {
+				c := defaultConfig()
+				c.API.DocsEnabled = true
+				return c
+			}(),
+		},
 	}
 
 	for _, tc := range cases {

@@ -1,10 +1,4 @@
 {{define "title"}}Enter device code{{end}}
-{{/* The form below POSTs same-origin to tempogate, which 303s through
-     /authorize and then 302s onward to the upstream IdP. CSP3 §6.7.2.5
-     enforces form-action against every URL in that redirect chain, so the
-     upstream IdP's origin has to be in the source list or the browser
-     refuses the cross-origin hop and the device flow silently stalls. */}}
-{{define "form_action_sources"}}'self'{{with .UpstreamFormActionSource}} {{.}}{{end}}{{end}}
 {{define "content" -}}
 <h1>Sign in to your device</h1>
 <p>Type the code shown on your terminal or device, then continue.</p>

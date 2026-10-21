@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -98,6 +100,10 @@ type clientKeyCtxKey struct{}
 
 //go:embed templates/*.html
 var deviceUITemplatesFS embed.FS
+
+// inlineStylePattern finds the one inline <style> block in base.html, whose
+// hash the page CSP allows.
+var inlineStylePattern = regexp.MustCompile(`(?s)<style>(.*?)</style>`)
 
 // devicePages enumerates the template files that compose each rendered page.
 // Each set is loaded as base.html plus the page-specific child; the child
@@ -189,6 +195,12 @@ type DeviceUI struct {
 	// device_enter page's CSP form-action directive. Empty when the operator
 	// hasn't wired an origin (e.g., tests whose mock IdP shares the issuer).
 	upstreamFormActionSource string
+
+	// enterPagePolicy and pagePolicy are the Content-Security-Policy
+	// headers for the entry page and for every other page. Only the entry
+	// page's form leaves the origin, so only it lists the upstream IdP.
+	enterPagePolicy string
+	pagePolicy      string
 
 	// logger is the operator-facing structured log sink. Every failure path
 	// that the SSO callback collapses into the generic "could not be
@@ -343,7 +355,56 @@ func NewDeviceUI(
 	}
 	u.pages = pages
 
+	styleSource, err := inlineStyleSource()
+	if err != nil {
+		return nil, fmt.Errorf("oidc: load device-ui templates: %w", err)
+	}
+	// CSP3 §6.7.2.5 enforces form-action against every URL in the redirect
+	// chain a form submission follows. The entry form POSTs same-origin,
+	// which 303s through /authorize and then 302s to the upstream IdP, so
+	// the IdP's origin has to be a source or the browser refuses the
+	// cross-origin hop and the device flow silently stalls.
+	enterFormAction := "'self'"
+	if u.upstreamFormActionSource != "" {
+		enterFormAction += " " + u.upstreamFormActionSource
+	}
+	u.enterPagePolicy = devicePagePolicy(styleSource, enterFormAction)
+	u.pagePolicy = devicePagePolicy(styleSource, "'self'")
+
 	return u, nil
+}
+
+// devicePagePolicy is the CSP for a device-ui page. It is sent as a header,
+// not a <meta> tag: browsers ignore frame-ancestors in meta, and the confirm
+// page is what a clickjacking page would frame. Styles are allowed by hash
+// rather than 'unsafe-inline', so injected markup cannot style itself.
+func devicePagePolicy(styleSource, formActionSources string) string {
+	return "default-src 'none'; style-src " + styleSource + "; form-action " + formActionSources +
+		"; base-uri 'none'; frame-ancestors 'none'"
+}
+
+// inlineStyleSource returns the CSP hash source for base.html's inline
+// <style> block. Hashing the embedded template at startup keeps the policy
+// in step with the CSS without a hand-maintained constant. html/template
+// emits literal template text verbatim, so the rendered block hashes the
+// same.
+func inlineStyleSource() (string, error) {
+	base, err := deviceUITemplatesFS.ReadFile("templates/base.html")
+	if err != nil {
+		return "", err
+	}
+	return styleHashSource(base)
+}
+
+// styleHashSource hashes the single <style> block in tmpl. More than one
+// would need one hash each, so it is refused rather than half-allowed.
+func styleHashSource(tmpl []byte) (string, error) {
+	blocks := inlineStylePattern.FindAllSubmatch(tmpl, -1)
+	if len(blocks) != 1 {
+		return "", fmt.Errorf("base.html: want exactly one <style> block, found %d", len(blocks))
+	}
+	sum := sha256.Sum256(blocks[0][1])
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'", nil
 }
 
 // upstreamFormActionSource collapses an upstream IdP authorization-endpoint
@@ -466,12 +527,15 @@ func (u *DeviceUI) Register(api huma.API) {
 // htmlOutput is the shared response shape for any device-ui page that just
 // renders HTML. Status must be set (huma writes it verbatim); htmlPage
 // defaults it to 200. Cache-Control: no-store keeps the user_code and email
-// off intermediary caches.
+// off intermediary caches. ContentSecurityPolicy and ReferrerPolicy replace
+// the listener-wide defaults; see htmlPage.
 type htmlOutput struct {
-	Status       int
-	ContentType  string `header:"Content-Type"`
-	CacheControl string `header:"Cache-Control"`
-	Body         []byte
+	Status                int
+	ContentType           string `header:"Content-Type"`
+	CacheControl          string `header:"Cache-Control"`
+	ContentSecurityPolicy string `header:"Content-Security-Policy"`
+	ReferrerPolicy        string `header:"Referrer-Policy"`
+	Body                  []byte
 }
 
 // deviceRedirectOrPage is the shared response shape for handlers that may
@@ -480,12 +544,14 @@ type htmlOutput struct {
 // unused fields cost nothing on the wire and the two branches stay in one
 // typed struct.
 type deviceRedirectOrPage struct {
-	Status       int
-	Location     string `header:"Location"`
-	SetCookie    string `header:"Set-Cookie"`
-	ContentType  string `header:"Content-Type"`
-	CacheControl string `header:"Cache-Control"`
-	Body         []byte
+	Status                int
+	Location              string `header:"Location"`
+	SetCookie             string `header:"Set-Cookie"`
+	ContentType           string `header:"Content-Type"`
+	CacheControl          string `header:"Cache-Control"`
+	ContentSecurityPolicy string `header:"Content-Security-Policy"`
+	ReferrerPolicy        string `header:"Referrer-Policy"`
+	Body                  []byte
 }
 
 type deviceEnterGetInput struct {
@@ -519,14 +585,15 @@ type deviceDecisionInput struct {
 // display form so the user sees what they typed on the device.
 func (u *DeviceUI) handleEnterGet(_ context.Context, in *deviceEnterGetInput) (*htmlOutput, error) {
 	body, err := u.render("enter", map[string]any{
-		"PostURL":                  u.publicPath(DevicePath),
-		"PrefilledUserCode":        formatUserCode(canonicalUserCode(in.UserCode)),
-		"UpstreamFormActionSource": u.upstreamFormActionSource,
+		"PostURL":           u.publicPath(DevicePath),
+		"PrefilledUserCode": formatUserCode(canonicalUserCode(in.UserCode)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("oidc: device-ui enter render: %w", err)
 	}
-	return u.htmlPage(body), nil
+	out := u.htmlPage(body)
+	out.ContentSecurityPolicy = u.enterPagePolicy
+	return out, nil
 }
 
 // handleEnterPost is the dispatcher: validate the user_code lookup, then
@@ -698,12 +765,7 @@ func (u *DeviceUI) handleConfirm(ctx context.Context, in *deviceConfirmInput) (*
 	if err != nil {
 		return nil, fmt.Errorf("oidc: device-ui confirm render: %w", err)
 	}
-	return &deviceRedirectOrPage{
-		Status:       http.StatusOK,
-		ContentType:  "text/html; charset=utf-8",
-		CacheControl: "no-store",
-		Body:         body,
-	}, nil
+	return u.redirectOrPage(u.htmlPage(body)), nil
 }
 
 // handleDecision is the single funnel for the approve and deny POSTs. The
@@ -957,26 +1019,35 @@ func (u *DeviceUI) publicPath(p string) string {
 	return strings.TrimRight(u.issuerURL.Path, "/") + p
 }
 
+// htmlPage wraps a rendered page with its headers. The page policy allows
+// the inline stylesheet the listener default would block. Referrer-Policy
+// stays same-origin rather than the listener's no-referrer because under
+// no-referrer a browser sends "Origin: null" on the Approve/Deny POST, which
+// originAllowed rejects.
 func (u *DeviceUI) htmlPage(body []byte) *htmlOutput {
 	return &htmlOutput{
-		Status:       http.StatusOK,
-		ContentType:  "text/html; charset=utf-8",
-		CacheControl: "no-store",
-		Body:         body,
+		Status:                http.StatusOK,
+		ContentType:           "text/html; charset=utf-8",
+		CacheControl:          "no-store",
+		ContentSecurityPolicy: u.pagePolicy,
+		ReferrerPolicy:        "same-origin",
+		Body:                  body,
+	}
+}
+
+func (u *DeviceUI) redirectOrPage(p *htmlOutput) *deviceRedirectOrPage {
+	return &deviceRedirectOrPage{
+		Status:                p.Status,
+		ContentType:           p.ContentType,
+		CacheControl:          p.CacheControl,
+		ContentSecurityPolicy: p.ContentSecurityPolicy,
+		ReferrerPolicy:        p.ReferrerPolicy,
+		Body:                  p.Body,
 	}
 }
 
 func (u *DeviceUI) errorPage(reason string) *deviceRedirectOrPage {
-	body, err := u.render("error", map[string]any{"Reason": reason})
-	if err != nil {
-		body = []byte("device verification error")
-	}
-	return &deviceRedirectOrPage{
-		Status:       http.StatusOK,
-		ContentType:  "text/html; charset=utf-8",
-		CacheControl: "no-store",
-		Body:         body,
-	}
+	return u.redirectOrPage(u.errorHTMLPage(reason))
 }
 
 func (u *DeviceUI) errorHTMLPage(reason string) *htmlOutput {

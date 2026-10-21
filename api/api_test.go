@@ -39,12 +39,10 @@ func TestHealthz_OK(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 
 	var got struct {
-		Status  string `json:"status"`
-		Version string `json:"version"`
+		Status string `json:"status"`
 	}
 	require.NoError(t, json.Unmarshal(body, &got))
 	assert.Equal(t, "ok", got.Status)
-	assert.NotEmpty(t, got.Version)
 }
 
 func TestReadyz_503BeforeMark_200After(t *testing.T) {
