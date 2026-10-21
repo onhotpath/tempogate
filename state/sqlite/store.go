@@ -1,6 +1,11 @@
 // Package sqlite is the concrete SQLite-backed implementation that satisfies
 // the per-consumer state interfaces defined across the codebase via Go's
 // structural typing (see state/doc.go).
+//
+// Not-found and duplicate errors are the bare sentinels, never annotated with
+// the key they were looked up by: those keys are auth codes, refresh tokens,
+// device and user codes, session ids, and OAuth state, and error text ends up
+// in logs.
 package sqlite
 
 import (

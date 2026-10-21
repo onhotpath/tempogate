@@ -22,6 +22,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/onhotpath/tempogate/api/requestid"
 	"github.com/onhotpath/tempogate/ratelimit"
 )
 
@@ -464,7 +465,11 @@ func (u *DeviceUI) Register(api huma.API) {
 		Summary:     "Device-flow verification: show the user_code entry form",
 		Tags:        []string{"oidc"},
 	}, func(ctx context.Context, in *deviceEnterGetInput) (*htmlOutput, error) {
-		return u.handleEnterGet(ctx, in)
+		out, err := u.handleEnterGet(ctx, in)
+		if err != nil {
+			return u.serverErrorHTML(ctx, "device-ui-enter", err), nil
+		}
+		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -476,7 +481,11 @@ func (u *DeviceUI) Register(api huma.API) {
 		Middlewares:   huma.Middlewares{withClientKey},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceEnterPostInput) (*deviceRedirectOrPage, error) {
-		return u.handleEnterPost(ctx, in)
+		out, err := u.handleEnterPost(ctx, in)
+		if err != nil {
+			return u.serverErrorPage(ctx, "device-ui-submit", err), nil
+		}
+		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -487,7 +496,11 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:          []string{"oidc"},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceSSOCallbackInput) (*deviceRedirectOrPage, error) {
-		return u.handleSSOCallback(ctx, in)
+		out, err := u.handleSSOCallback(ctx, in)
+		if err != nil {
+			return u.serverErrorPage(ctx, "device-ui-sso-callback", err), nil
+		}
+		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -498,7 +511,11 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceConfirmInput) (*deviceRedirectOrPage, error) {
-		return u.handleConfirm(ctx, in)
+		out, err := u.handleConfirm(ctx, in)
+		if err != nil {
+			return u.serverErrorPage(ctx, "device-ui-confirm", err), nil
+		}
+		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -509,7 +526,11 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
-		return u.handleDecision(ctx, in, true)
+		out, err := u.handleDecision(ctx, in, true)
+		if err != nil {
+			return u.serverErrorHTML(ctx, "device-ui-approve", err), nil
+		}
+		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -520,7 +541,11 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
-		return u.handleDecision(ctx, in, false)
+		out, err := u.handleDecision(ctx, in, false)
+		if err != nil {
+			return u.serverErrorHTML(ctx, "device-ui-deny", err), nil
+		}
+		return out, nil
 	})
 }
 
@@ -1056,6 +1081,27 @@ func (u *DeviceUI) errorHTMLPage(reason string) *htmlOutput {
 		body = []byte("device verification error")
 	}
 	return u.htmlPage(body)
+}
+
+// serverErrorPage and serverErrorHTML turn an unexpected handler error into
+// the HTML error page at 500. Left to Huma, the error would reach the browser
+// as a JSON problem document, which the verification page cannot render. The
+// cause is logged under the request id the page shows, so a user's report
+// can be matched to the log line without the page exposing internals.
+func (u *DeviceUI) serverErrorPage(ctx context.Context, op string, err error) *deviceRedirectOrPage {
+	return u.redirectOrPage(u.serverErrorHTML(ctx, op, err))
+}
+
+func (u *DeviceUI) serverErrorHTML(ctx context.Context, op string, err error) *htmlOutput {
+	id := requestid.FromContext(ctx)
+	u.logger.ErrorContext(ctx, "device-ui request failed",
+		"op", op,
+		"request_id", id,
+		"err", err,
+	)
+	out := u.errorHTMLPage("Something went wrong on our side. Restart the sign-in from your device. (request id " + id + ")")
+	out.Status = http.StatusInternalServerError
+	return out
 }
 
 // requestFromCookieHeader builds the minimal http.Request a SessionManager

@@ -50,6 +50,11 @@ func (e *oauthError) Error() string { return e.Code + ": " + e.Desc }
 
 func (e *oauthError) GetStatus() int { return e.status }
 
+// ClientSafe marks the body as written for the client, so the 5xx sanitizer
+// (api.ClientSafeError) keeps the OAuth shape. Descriptions are fixed text:
+// never put an internal error's message in one.
+func (e *oauthError) ClientSafe() {}
+
 func oauthErr(status int, code, desc string) *oauthError {
 	return &oauthError{status: status, Code: code, Desc: desc}
 }

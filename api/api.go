@@ -21,8 +21,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"go.uber.org/zap"
 
-	"github.com/onhotpath/tempogate/buildinfo"
+	"github.com/onhotpath/tempogate/api/requestid"
 )
 
 type apiConfig struct {
@@ -44,6 +45,8 @@ type apiConfig struct {
 	adminMiddlewares []func(huma.API)
 	basePath         string
 	docs             bool
+	// logger receives the detail of every 5xx the sanitizer hides from clients.
+	logger *zap.Logger
 }
 
 type Option func(*apiConfig)
@@ -92,6 +95,11 @@ func WithBasePath(p string) Option {
 	return func(c *apiConfig) { c.basePath = p }
 }
 
+// WithLogger sets where 5xx details are logged. Defaults to a no-op logger.
+func WithLogger(l *zap.Logger) Option {
+	return func(c *apiConfig) { c.logger = l }
+}
+
 // Surface is one structurally isolated handler tree: a Huma API for OpenAPI
 // generation and the http.Handler that actually serves it. Prefix is the
 // URL prefix the API's routes are mounted under (empty unless basePath is
@@ -116,6 +124,9 @@ func New(readiness *Readiness, opts ...Option) *Servers {
 	for _, o := range opts {
 		o(cfg)
 	}
+	if cfg.logger == nil {
+		cfg.logger = zap.NewNop()
+	}
 
 	return &Servers{
 		Public: newPublic(readiness, cfg),
@@ -134,14 +145,14 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 		for _, fn := range cfg.registrars {
 			fn(a)
 		}
-		return &Surface{API: a, Handler: withSecurityHeaders(mux), Prefix: ""}
+		return &Surface{API: a, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: ""}
 	}
 
 	// Base-path mode: a minimal health adapter at the root (no OpenAPI/docs
 	// surface — health is k8s-probe-only), and a full OIDC adapter under
 	// basePath so the discovery document, the iss claim, and the served
 	// routes stay in lockstep with no proxy StripPrefix.
-	healthCfg := huma.DefaultConfig("tempogate", buildinfo.Version())
+	healthCfg := newHumaConfig("tempogate", cfg.logger)
 	withoutDocs(&healthCfg)
 	healthAPI := humago.NewWithPrefix(mux, "", healthCfg)
 	registerHealth(healthAPI, readiness)
@@ -152,7 +163,7 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 		fn(oidcAPI)
 	}
 
-	return &Surface{API: oidcAPI, Handler: withSecurityHeaders(mux), Prefix: cfg.basePath}
+	return &Surface{API: oidcAPI, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: cfg.basePath}
 }
 
 func newAdmin(cfg *apiConfig) *Surface {
@@ -160,7 +171,7 @@ func newAdmin(cfg *apiConfig) *Surface {
 	// No docs routes, ever: Huma serves them outside the operation
 	// middleware chain, so the admin guard below could not cover them.
 	// `tempogate gen-oas --admin` emits the admin spec instead.
-	hc := huma.DefaultConfig("tempogate-admin", buildinfo.Version())
+	hc := newHumaConfig("tempogate-admin", cfg.logger)
 	withoutDocs(&hc)
 	a := humago.NewWithPrefix(mux, "", hc)
 	// Huma binds the middleware chain when an operation is registered, so
@@ -174,11 +185,11 @@ func newAdmin(cfg *apiConfig) *Surface {
 	for _, fn := range cfg.adminRegistrars {
 		fn(a)
 	}
-	return &Surface{API: a, Handler: withSecurityHeaders(mux), Prefix: ""}
+	return &Surface{API: a, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: ""}
 }
 
 func (c *apiConfig) humaConfig(title string) huma.Config {
-	hc := huma.DefaultConfig(title, buildinfo.Version())
+	hc := newHumaConfig(title, c.logger)
 	if !c.docs {
 		withoutDocs(&hc)
 	}

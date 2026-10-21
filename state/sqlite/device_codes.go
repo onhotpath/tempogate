@@ -232,7 +232,7 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 		return fmt.Errorf("sqlite: decide device code rows: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrDeviceCodeNotPending, userCode)
+		return ErrDeviceCodeNotPending
 	}
 	return nil
 }

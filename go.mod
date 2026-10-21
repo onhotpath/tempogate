@@ -10,6 +10,7 @@ require (
 	github.com/gojekfarm/xrun v0.4.0
 	github.com/google/uuid v1.6.0
 	github.com/lestrrat-go/jwx/v4 v4.5.0
+	github.com/moby/moby/api v1.54.1
 	github.com/onhotpath/ferry v0.2.0
 	github.com/onhotpath/ferry/driver/env v0.2.0
 	github.com/onhotpath/ferry/driver/yaml v0.2.0
@@ -64,7 +65,6 @@ require (
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
-	github.com/moby/moby/api v1.54.1 // indirect
 	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
