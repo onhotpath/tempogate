@@ -86,7 +86,7 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 
 	authorizer := oidc.New(store, reg, s.issuer, testGoogleCID, s.mg.issuer()+"/auth")
 	callback := oidc.NewCallback(store, upstream, "example.com")
-	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store))
+	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	deviceAuth := oidc.NewDeviceAuthorization(store, reg, s.issuer)
 
 	// The integration server is httptest TLS so the production cookie

@@ -49,8 +49,8 @@ the gap Temporal's own docs already describe: point the Web UI at
 └──────────────┘
 ```
 
-One binary with subcommands `serve`, `login`, `token`, `keys`, `migrate`,
-`version`. State is pluggable; the default is SQLite on a PVC via the pure-Go
+One binary with subcommands `serve`, `login`, `token`, `keys`, `sessions`,
+`migrate`, `version`. State is pluggable; the default is SQLite on a PVC via the pure-Go
 `modernc.org/sqlite` driver, with embedded migrations applied by
 `tempogate migrate`.
 
@@ -78,10 +78,11 @@ scoping and an admin API for long-lived integration keys are planned.
 
 `DELETE /admin/keys/:id` marks a key revoked and adds its `jti` to a
 SQLite-backed denylist. The denylist is consulted by tempogate's *own*
-verifier (refresh-token exchange, `/userinfo`) through a 30 s read-through
-cache, so a revoke takes effect on those flows within 30 s on a single
-instance, and is hydrated synchronously in-process for the instance that
-served the DELETE.
+verifier (`/userinfo`) through a 30 s read-through cache, so a revoke takes
+effect there within 30 s on a single instance, and is hydrated synchronously
+in-process for the instance that served the DELETE.
+The denylist is not consulted by the refresh-token grant: refresh tokens are
+opaque and have their own lifecycle (see [Sessions and refresh tokens](#sessions-and-refresh-tokens)).
 
 Temporal's frontend, however, validates JWTs with its default
 `ClaimMapper` against `/.well-known/jwks.json` only — it has no hook to
@@ -89,7 +90,7 @@ consult a per-issuer denylist. The practical consequence:
 
 | Verification path                   | Time until revoke takes effect       |
 | ----------------------------------- | ------------------------------------ |
-| tempogate (refresh, `/userinfo`)    | up to **30 s** (denylist cache TTL)  |
+| tempogate (`/userinfo`)             | up to **30 s** (denylist cache TTL)  |
 | Temporal frontend gRPC              | up to the **token's `exp`** lifetime |
 
 This is the acknowledged trade-off of stateless JWTs against Temporal's
@@ -97,6 +98,23 @@ stock verifier. Mint integration keys with a deliberately bounded `exp` if
 your threat model needs an upper bound on revoke lag for Temporal gRPC; a
 future move to opaque, server-introspected keys would close the gap
 end-to-end.
+
+### Sessions and refresh tokens
+
+A sign-in (Web UI SSO, `tempogate login`, or the device flow) starts a
+session: a chain of single-use refresh tokens, each rotated on use.
+Every refresh is governed by:
+
+- **Idle lifetime** (`OIDC_REFRESH_TOKEN_TTL`, default 7 days): a session not refreshed for this long ends.
+- **Absolute lifetime** (`OIDC_REFRESH_MAX_LIFETIME`, default 30 days): counted from the original sign-in and never extended by rotation, so every user goes back through Google at least this often.
+- **Domain re-check**: `OIDC_ALLOWED_DOMAINS` is re-applied on every refresh. Removing a domain ends its users' sessions at their next refresh.
+- **Reuse detection** ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)): presenting an already-rotated refresh token revokes the whole session, including the newer token, and logs a `refresh_token_reuse` warning with the session's family id, client and email (never the token).
+  Two concurrent refreshes of the same token count as reuse too, so the loser's session ends and it signs in again.
+- **Operator revocation**: `tempogate sessions list [--email <e>]` shows live sessions (never token values); `tempogate sessions revoke --email <e>` ends every session of a user and `--family <id>` ends one.
+  Run them where the state volume is mounted, e.g. `kubectl exec deploy/tempogate -- /tempogate sessions revoke --email alice@example.com`.
+
+Revocation stops refreshes; access tokens already issued stay valid at the Temporal frontend until they expire (`OIDC_ACCESS_TOKEN_TTL`, default 4 hours).
+Lower it if you need a shorter revoke lag.
 
 New here? [docs/getting-started.md](docs/getting-started.md) takes you from
 nothing to a working Web-UI SSO + CLI token in under ten minutes, with no
@@ -280,7 +298,10 @@ separator.
 | `OIDC_ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. May include a path (e.g. `https://host/idp`) — see [Sub-path hosting](#sub-path-hosting) |
 | `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri` allowlist of **exact** redirect URIs (repeat an id for several). Loopback `http://127.0.0.1/<path>` entries match any port. Register the CLI as `tempogate-cli:http://127.0.0.1/callback` and the device CLI as `tempogate-device:` |
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
-| `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in |
+| `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in and again on every refresh |
+| `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access/id token |
+| `OIDC_REFRESH_TOKEN_TTL` | No | `168h` (7 days) | Idle lifetime of each rotated refresh token |
+| `OIDC_REFRESH_MAX_LIFETIME` | No | `720h` (30 days) | Absolute session lifetime from sign-in; rotation never extends it. See [Sessions and refresh tokens](#sessions-and-refresh-tokens) |
 | `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
 | `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
 | `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |

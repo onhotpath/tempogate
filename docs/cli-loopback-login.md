@@ -152,12 +152,16 @@ export TEMPORAL_AUTH_TOKEN=$(tempogate token)
 Failure modes are explicit, never silent:
 
 * no token file yet → a clear "run `tempogate login` first" error;
-* a revoked / already-rotated / expired refresh token → the renewal fails
-  cleanly **without** overwriting the stored file or emitting the stale
-  token, so nothing downstream acts on a credential the server has disowned.
+* a revoked / already-rotated / expired refresh token, a session past its
+  absolute lifetime, or an email whose domain is no longer allowed → the
+  renewal fails cleanly **without** overwriting the stored file or emitting
+  the stale token, so nothing downstream acts on a credential the server has
+  disowned. Run `tempogate login` again.
 
-Refresh tokens are rotated on every exchange (the server invalidates the old
-one), so a captured `token.json` is usable at most until the next refresh.
+Refresh tokens are rotated on every exchange.
+If a captured `token.json` is used after the legitimate CLI has refreshed, or the CLI refreshes after the thief has, the server sees an already-used token and revokes the whole session, so both parties are signed out.
+A session also ends after `OIDC_REFRESH_MAX_LIFETIME` (default 30 days) from the original login, however often it is refreshed, and an operator can end it with `tempogate sessions revoke`.
+Two `tempogate token` processes refreshing the same file at the same moment look like reuse too; the session ends and the next `tempogate token` asks for a fresh login.
 
 ## Security properties
 
@@ -173,7 +177,7 @@ one), so a captured `token.json` is usable at most until the next refresh.
 * **Bounded wait.** If no code arrives within three minutes the command
   exits with a clear error rather than hanging the shell.
 * **Short-lived, auto-renewed.** The minted access token follows the
-  issuer's lifetime (4 hours in v1); `tempogate token` renews it from the
+  issuer's lifetime (`OIDC_ACCESS_TOKEN_TTL`, 4 hours by default); `tempogate token` renews it from the
   rotating refresh token five minutes before expiry, so a leaked access
   token has a bounded blast radius without forcing a re-login.
 * **At rest.** The persisted credential is `0600` under a `0700` directory

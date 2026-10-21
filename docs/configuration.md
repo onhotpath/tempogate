@@ -40,7 +40,7 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens. Back it with durable storage — losing it rotates signing keys and invalidates every issued refresh token. |
+| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. |
 | `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise; horizontal scaling needs a shared backend (not yet available). |
 | `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before erroring. |
 
@@ -52,7 +52,10 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 | `OIDC_CLIENTS` | for any login | _(empty)_ | Comma-separated `id:redirect_uri`. The first `:` splits id from URI, so the URI keeps its scheme. Each value is an **exact** redirect URI, never a prefix: see [Redirect URI registration](#redirect-uri-registration). Repeat an id to register several URIs. An empty value (`tempogate-device:`) registers a device-only client. **Every client here is public - PKCE is mandatory.** Register the loopback CLI as `tempogate-cli:http://127.0.0.1/callback`; the device flow additionally needs `tempogate-device:` and `tempogate-device-ui:<issuer>/device/sso-callback` (see [docs/cli-device-login.md](cli-device-login.md)); the server refuses to start if `tempogate-device-ui` is not registered for that exact callback. Invalid entries stop the server at startup. |
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | no | `false` | Dev only. Allows plain-`http` redirect URIs for non-loopback hosts in `OIDC_CLIENTS` (e.g. `http://temporal-ui:8080/auth/sso/callback` in a local Docker Compose stack). Leave it off in production: a code sent over plain http to a remote host can be read on the network. |
 | `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. The deliberately-separate, auditable opt-in that promotes a registered client to **confidential** (the PKCE carve-out) — e.g. the Temporal Web UI, which does not implement PKCE; also `tempogate-device-ui`, which tempogate uses as a client of itself when bouncing the verification page through Google SSO. An entry for an unregistered id fails fast. See [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md). |
-| `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated, exact-match email-domain gate applied to Google's verified email after sign-in. **Empty means nobody is admitted.** |
+| `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated, exact-match email-domain gate applied to Google's verified email after sign-in, and re-applied to the session's email on every refresh: removing a domain ends its users' sessions at their next refresh (and revokes them). **Empty means nobody is admitted.** |
+| `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; lifetime of each access/id token. This is also the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. |
+| `OIDC_REFRESH_TOKEN_TTL` | no | `168h` | Go duration (7 days); idle lifetime of each rotated refresh token. A session not refreshed for this long ends. Must not exceed `OIDC_REFRESH_MAX_LIFETIME`. |
+| `OIDC_REFRESH_MAX_LIFETIME` | no | `720h` | Go duration (30 days); absolute session lifetime counted from the original sign-in. Rotation never extends it: no refresh token outlives sign-in + this value, so every user goes back through Google at least this often. Not to be confused with `OIDC_SESSION_TTL`, which is the device-flow verification page's cookie. See [Refresh-token sessions](#refresh-token-sessions). |
 | `OIDC_SESSION_SIGNING_KEY` | yes | _(empty)_ | Base64url-encoded 32-byte HMAC key. Signs the verification-page session cookie and the SSO-bounce `state` parameter used by the [device flow](cli-device-login.md), each under its own domain-separation label so neither verifies as the other. Generate once with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`, keep stable across rolling restarts, and supply via a Secret. **Tempogate refuses to boot** if this is empty, not base64url, or does not decode to exactly 32 bytes. |
 | `OIDC_SESSION_TTL` | no | `5m` | Go duration; TTL of the verification-page session cookie used by the [device flow](cli-device-login.md). The cookie is path-scoped to the device-flow routes (`/device` at a root issuer, `<issuer-path>/device` under [sub-path hosting](#sub-path-hosting)) and is not a general-purpose login session; keeping it short bounds how long an approval window stays open. It is `Secure` unless `OIDC_ISSUER` is plain `http://` (local or compose setups), because browsers never send a `Secure` cookie back over http. |
 | `OIDC_GOOGLE_CLIENT_ID` | for any login | _(empty)_ | Upstream Google OAuth client id. |
@@ -68,6 +71,27 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 **Device verification rate limits** have no configuration keys.
 Failed user-code attempts on the verification pages are limited to 20 per minute per client IP and 5 per minute per verification session, in memory on each replica (see [docs/cli-device-login.md](cli-device-login.md#security-notes)).
 The client IP is the TCP peer; `X-Forwarded-For` is not read, so behind a reverse proxy all clients share the proxy's IP budget (one client spending it throttles code entry for the rest for up to a minute) and the per-session budget still applies.
+
+### Refresh-token sessions
+
+Each sign-in starts a session: a family of single-use refresh tokens that rotate on every exchange.
+A refresh is refused with `invalid_grant` when the session is idle past `OIDC_REFRESH_TOKEN_TTL`, older than `OIDC_REFRESH_MAX_LIFETIME`, revoked, or its email domain is no longer in `OIDC_ALLOWED_DOMAINS`.
+Presenting a token that was already rotated revokes the whole family ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)) and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`; a domain refusal logs `refresh_domain_not_allowed`.
+Token values are never logged.
+
+Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
+
+```bash
+tempogate sessions list [--email alice@example.com]   # family id, client, email, sign-in, last rotation, expiry
+tempogate sessions revoke --email alice@example.com   # every session of a user
+tempogate sessions revoke --family <family-id>        # one session
+```
+
+In Kubernetes, run them in the serving pod, e.g. `kubectl exec deploy/tempogate -- /tempogate sessions revoke --email alice@example.com`.
+Revocation stops refreshes immediately; access tokens already issued remain valid until they expire (`OIDC_ACCESS_TOKEN_TTL`).
+The integration-key jti denylist is not consulted for refresh tokens.
+
+Upgrading to migration `0011` keeps existing sessions: each existing refresh token becomes its own family, with its sign-in time set to when it was last refreshed, so it ends at most `OIDC_REFRESH_MAX_LIFETIME` later.
 
 ### Redirect URI registration
 

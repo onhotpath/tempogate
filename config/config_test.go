@@ -46,8 +46,11 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:     "http://127.0.0.1:8000",
-					SessionTTL: 5 * time.Minute,
+					Issuer:             "http://127.0.0.1:8000",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -84,8 +87,53 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:     "http://127.0.0.1:8000",
-					SessionTTL: 5 * time.Minute,
+					Issuer:             "http://127.0.0.1:8000",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
+					Google: GoogleConfig{
+						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
+						TokenEndpoint: "https://oauth2.googleapis.com/token",
+						IssuerURL:     "https://accounts.google.com",
+					},
+				},
+			},
+		},
+		{
+			name: "token lifetimes overridden by env",
+			env: map[string]string{
+				"OIDC_ACCESS_TOKEN_TTL":     "30m",
+				"OIDC_REFRESH_TOKEN_TTL":    "24h",
+				"OIDC_REFRESH_MAX_LIFETIME": "168h",
+			},
+			want: &Config{
+				Log: LogConfig{Level: "info"},
+				HTTP: HTTPConfig{
+					Listener: Listener{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 8000,
+					},
+				},
+				Admin: AdminConfig{
+					Listener: Listener{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 8081,
+					},
+				},
+				State: StateConfig{
+					Sqlite: SqliteConfig{
+						Path:        "/var/lib/tempogate/state.db",
+						MaxConns:    1,
+						BusyTimeout: 5 * time.Second,
+					},
+				},
+				OIDC: OIDCConfig{
+					Issuer:             "http://127.0.0.1:8000",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     30 * time.Minute,
+					RefreshTokenTTL:    24 * time.Hour,
+					RefreshMaxLifetime: 7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -121,8 +169,11 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:     "http://127.0.0.1:8000",
-					SessionTTL: 5 * time.Minute,
+					Issuer:             "http://127.0.0.1:8000",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -160,8 +211,11 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:     "http://127.0.0.1:8000",
-					SessionTTL: 5 * time.Minute,
+					Issuer:             "http://127.0.0.1:8000",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -197,8 +251,11 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:     "https://tempogate.internal.example.com",
-					SessionTTL: 5 * time.Minute,
+					Issuer:             "https://tempogate.internal.example.com",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -236,9 +293,12 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:     "http://127.0.0.1:8000",
-					Clients:    "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1/callback",
-					SessionTTL: 5 * time.Minute,
+					Issuer:             "http://127.0.0.1:8000",
+					Clients:            "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1/callback",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						ClientID:      "google-client-123.apps.googleusercontent.com",
 						AuthEndpoint:  "http://127.0.0.1:9999/mock/auth",
@@ -278,6 +338,9 @@ func (s *ConfigSuite) TestNew() {
 					Issuer:                    "http://127.0.0.1:8000",
 					AllowInsecureRedirectURIs: true,
 					SessionTTL:                5 * time.Minute,
+					AccessTokenTTL:            4 * time.Hour,
+					RefreshTokenTTL:           7 * 24 * time.Hour,
+					RefreshMaxLifetime:        30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -316,9 +379,12 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:         "http://127.0.0.1:8000",
-					AllowedDomains: "example.com,corp.example.org",
-					SessionTTL:     5 * time.Minute,
+					Issuer:             "http://127.0.0.1:8000",
+					AllowedDomains:     "example.com,corp.example.org",
+					SessionTTL:         5 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						ClientSecret:  "gocspx-secret",
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
@@ -356,9 +422,12 @@ func (s *ConfigSuite) TestNew() {
 					},
 				},
 				OIDC: OIDCConfig{
-					Issuer:            "http://127.0.0.1:8000",
-					SessionTTL:        10 * time.Minute,
-					SessionSigningKey: "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
+					Issuer:             "http://127.0.0.1:8000",
+					SessionTTL:         10 * time.Minute,
+					AccessTokenTTL:     4 * time.Hour,
+					RefreshTokenTTL:    7 * 24 * time.Hour,
+					RefreshMaxLifetime: 30 * 24 * time.Hour,
+					SessionSigningKey:  "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",

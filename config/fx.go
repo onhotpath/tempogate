@@ -29,6 +29,9 @@ type Result struct {
 	OIDCAllowedDomains    string        `name:"oidc_allowed_domains"`
 	OIDCSessionTTL        time.Duration `name:"oidc_session_ttl"`
 	OIDCSessionSigningKey string        `name:"oidc_session_signing_key"`
+	OIDCAccessTokenTTL    time.Duration `name:"oidc_access_token_ttl"`
+	OIDCRefreshTokenTTL   time.Duration `name:"oidc_refresh_token_ttl"`
+	OIDCRefreshMaxLife    time.Duration `name:"oidc_refresh_max_lifetime"`
 	GoogleClientID        string        `name:"google_client_id"`
 	GoogleClientSecret    string        `name:"google_client_secret"`
 	GoogleAuthEndpoint    string        `name:"google_auth_endpoint"`
@@ -56,6 +59,9 @@ func Fx() fx.Option {
 				OIDCAllowedDomains:    cfg.OIDC.AllowedDomains,
 				OIDCSessionTTL:        cfg.OIDC.SessionTTL,
 				OIDCSessionSigningKey: cfg.OIDC.SessionSigningKey,
+				OIDCAccessTokenTTL:    cfg.OIDC.AccessTokenTTL,
+				OIDCRefreshTokenTTL:   cfg.OIDC.RefreshTokenTTL,
+				OIDCRefreshMaxLife:    cfg.OIDC.RefreshMaxLifetime,
 				GoogleClientID:        cfg.OIDC.Google.ClientID,
 				GoogleClientSecret:    cfg.OIDC.Google.ClientSecret,
 				GoogleAuthEndpoint:    cfg.OIDC.Google.AuthEndpoint,

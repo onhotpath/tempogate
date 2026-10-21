@@ -75,24 +75,30 @@ func (m *memKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error) {
 	return out, nil
 }
 
-// memTokenStore satisfies oidc.TokenStore structurally. ConsumeAuthCode and
-// ConsumeRefresh delete the row so single-use / rotation are exercised by the
-// suite, not just asserted in prose; ConsumeRefresh honours the client
-// binding the same way the sqlite store's DELETE does.
+// memTokenStore satisfies oidc.TokenStore structurally. ConsumeAuthCode
+// deletes the code and ConsumeRefresh tombstones the token, so single use,
+// rotation and reuse detection are exercised by the suite, not just asserted
+// in prose; ConsumeRefresh honours the client binding and family revocation
+// the same way the sqlite store's conditional UPDATE does.
 type memTokenStore struct {
 	mu                sync.Mutex
 	codes             map[string]oidc.AuthCode
 	refresh           map[string]oidc.Refresh
+	consumed          map[string]bool
+	revokedFamilies   map[string]bool
 	savedRefresh      []oidc.Refresh
 	consumeCodeErr    error
 	consumeRefreshErr error
 	saveRefreshErr    error
+	revokeErr         error
 }
 
 func newMemTokenStore() *memTokenStore {
 	return &memTokenStore{
-		codes:   map[string]oidc.AuthCode{},
-		refresh: map[string]oidc.Refresh{},
+		codes:           map[string]oidc.AuthCode{},
+		refresh:         map[string]oidc.Refresh{},
+		consumed:        map[string]bool{},
+		revokedFamilies: map[string]bool{},
 	}
 }
 
@@ -102,10 +108,13 @@ func (m *memTokenStore) putCode(ac oidc.AuthCode) {
 	m.codes[ac.Code] = ac
 }
 
+// putRefresh seeds a live token, replacing any earlier row or tombstone
+// under the same value.
 func (m *memTokenStore) putRefresh(r oidc.Refresh) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.refresh[r.Token] = r
+	delete(m.consumed, r.Token)
 }
 
 func (m *memTokenStore) ConsumeAuthCode(_ context.Context, code string) (oidc.AuthCode, error) {
@@ -128,12 +137,15 @@ func (m *memTokenStore) SaveRefresh(_ context.Context, r oidc.Refresh) error {
 	if m.saveRefreshErr != nil {
 		return m.saveRefreshErr
 	}
+	if m.revokedFamilies[r.FamilyID] {
+		return oidc.ErrRefreshFamilyRevoked
+	}
 	m.savedRefresh = append(m.savedRefresh, r)
 	m.refresh[r.Token] = r
 	return nil
 }
 
-func (m *memTokenStore) ConsumeRefresh(_ context.Context, token, clientID string) (oidc.Refresh, error) {
+func (m *memTokenStore) ConsumeRefresh(_ context.Context, token, clientID string, _ time.Time) (oidc.Refresh, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.consumeRefreshErr != nil {
@@ -143,15 +155,45 @@ func (m *memTokenStore) ConsumeRefresh(_ context.Context, token, clientID string
 	if !ok || r.ClientID != clientID {
 		return oidc.Refresh{}, oidc.ErrRefreshNotFound
 	}
-	delete(m.refresh, token)
+	if m.consumed[token] {
+		return r, oidc.ErrRefreshReused
+	}
+	if m.revokedFamilies[r.FamilyID] {
+		return oidc.Refresh{}, oidc.ErrRefreshNotFound
+	}
+	m.consumed[token] = true
 	return r, nil
 }
 
+func (m *memTokenStore) RevokeRefreshFamily(_ context.Context, familyID string, _ time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.revokeErr != nil {
+		return 0, m.revokeErr
+	}
+	n := 0
+	for tok, r := range m.refresh {
+		if r.FamilyID == familyID && !m.consumed[tok] && !m.revokedFamilies[familyID] {
+			n++
+		}
+	}
+	m.revokedFamilies[familyID] = true
+	return n, nil
+}
+
+// hasRefresh reports whether token is live: saved, not consumed, and not in a
+// revoked family.
 func (m *memTokenStore) hasRefresh(token string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.refresh[token]
-	return ok
+	r, ok := m.refresh[token]
+	return ok && !m.consumed[token] && !m.revokedFamilies[r.FamilyID]
+}
+
+func (m *memTokenStore) familyRevoked(familyID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revokedFamilies[familyID]
 }
 
 func (m *memTokenStore) lastRefresh() oidc.Refresh {
@@ -214,6 +256,7 @@ func (s *TokenSuite) SetupTest() {
 		oidc.WithTokenClock(func() time.Time { return signNow }),
 		oidc.WithRefreshGenerator(func() (string, error) { return fixedRefresh, nil }),
 		oidc.WithDeviceCodeStore(s.deviceStore),
+		oidc.WithAllowedDomains("example.com"),
 	)
 	mux := http.NewServeMux()
 	tok.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -476,7 +519,9 @@ func (s *TokenSuite) TestAuthorizationCodeGrantMintsVerifiableJWT() {
 	gotJTI, ok := tok.JwtID()
 	s.Require().True(ok)
 	s.Equal(gotJTI, saved.JTI, "refresh row must reference the access token jti")
-	s.Equal(30*24*time.Hour, saved.ExpiresAt.Sub(saved.CreatedAt))
+	s.Equal(oidc.DefaultRefreshTokenTTL, saved.ExpiresAt.Sub(saved.CreatedAt), "a new session gets the idle lifetime")
+	s.True(saved.AuthTime.Equal(signNow), "auth_time is the sign-in time")
+	s.NotEmpty(saved.FamilyID)
 }
 
 func (s *TokenSuite) TestReusedCodeIsInvalidGrant() {
@@ -596,8 +641,10 @@ func (s *TokenSuite) TestRefreshTokenGrantRotatesAndMintsSamePermissions() {
 		JTI:       "old-jti",
 		ClientID:  "ui",
 		Email:     "alice@example.com",
+		FamilyID:  "old-family",
+		AuthTime:  signNow,
 		CreatedAt: signNow,
-		ExpiresAt: signNow.Add(30 * 24 * time.Hour),
+		ExpiresAt: signNow.Add(7 * 24 * time.Hour),
 	})
 
 	f := url.Values{}

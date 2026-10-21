@@ -60,8 +60,8 @@ Temporal.
 ## Design decisions
 
 **Single binary, subcommands.** One distroless binary with `serve`, `login`,
-`token`, `keys`, `migrate`, `version`. Operators run `serve`; the same binary
-is the laptop CLI. Migrations are embedded and applied by `migrate`.
+`token`, `keys`, `sessions`, `migrate`, `version`. Operators run `serve`; the
+same binary is the laptop CLI. Migrations are embedded and applied by `migrate`.
 
 **Pluggable state, SQLite by default.** The state store (signing keypair,
 authorization codes, refresh tokens) is an interface; the default is SQLite on
@@ -69,6 +69,18 @@ a PersistentVolumeClaim via the pure-Go `modernc.org/sqlite` driver — no CGO,
 no external database to run a small deployment. SQLite tolerates one writer,
 so the deployment is single-replica until a shared backend lands; the chart
 enforces this (`replicaCount: 1`, autoscaling off, `Recreate` strategy).
+
+**Refresh tokens are a revocable session, not a bearer forever.** Each
+sign-in starts a refresh-token family: single-use tokens that rotate on every
+exchange and carry the original sign-in time (`auth_time`) and a family id.
+A refresh is refused once the session is idle for `OIDC_REFRESH_TOKEN_TTL` or
+older than `OIDC_REFRESH_MAX_LIFETIME` from sign-in, or when the email's
+domain has left `OIDC_ALLOWED_DOMAINS` (which also revokes the family).
+Rotated tokens are kept as tombstones rather than deleted, so presenting one
+again is recognised as reuse and revokes the whole family (RFC 9700
+§4.14.2). Operators revoke by email or family with `tempogate sessions
+revoke`. The jti denylist used for integration keys plays no part here: it
+covers JWTs, and refresh tokens are opaque rows.
 
 **Migration is a separate step.** `serve` refuses to run against a stale
 schema. In Kubernetes a dedicated `migrate` Job runs alongside the release

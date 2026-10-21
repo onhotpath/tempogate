@@ -147,7 +147,7 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, oauthErr(http.StatusBadGateway, "upstream_error", "could not complete Google sign-in")
 	}
 
-	if !verified || !c.domainAllowed(email) {
+	if !verified || !emailDomainAllowed(c.allowedDomains, email) {
 		return forbiddenPage(email), nil
 	}
 
@@ -178,13 +178,15 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 	})
 }
 
-func (c *Callback) domainAllowed(email string) bool {
+// emailDomainAllowed is the OIDC_ALLOWED_DOMAINS gate, shared by the
+// callback (at sign-in) and the refresh grant (on every renewal) so the two
+// cannot disagree about who is admitted.
+func emailDomainAllowed(allowed map[string]struct{}, email string) bool {
 	at := strings.LastIndexByte(email, '@')
 	if at < 0 || at == len(email)-1 {
 		return false
 	}
-	domain := strings.ToLower(email[at+1:])
-	_, ok := c.allowedDomains[domain]
+	_, ok := allowed[strings.ToLower(email[at+1:])]
 	return ok
 }
 
