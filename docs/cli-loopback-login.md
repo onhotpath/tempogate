@@ -139,6 +139,11 @@ tempogate token --insecure --issuer http://tempogate:8000
 
 `tempogate token` applies the check even when the stored token is still valid, so a missing `--insecure` shows up straight away rather than at the first refresh hours later.
 
+The same rule covers redirects.
+If the issuer (or a proxy in front of it) answers a CLI request with a redirect to plain `http` on a non-loopback host, the CLI stops with an error instead of following it, unless `--insecure` is passed.
+A redirect to a different host is always refused: a `307`/`308` re-sends the request body, which holds the refresh token or the authorization code and PKCE verifier.
+Same-host redirects, such as an `http` to `https` upgrade, are still followed.
+
 ## Persistence and `tempogate token`
 
 `tempogate login` does not just print the token — it also writes the access

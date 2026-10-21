@@ -198,6 +198,7 @@ func NewDeviceFlow(opts ...DeviceOption) *DeviceFlow {
 	for _, o := range opts {
 		o(f)
 	}
+	f.httpClient = guardRedirects(f.httpClient, f.insecure)
 	return f
 }
 
@@ -437,6 +438,11 @@ func (f *DeviceFlow) pollOnce(ctx context.Context, deviceCode string) (Token, po
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Token{}, 0, ctxErr
+		}
+		if errors.Is(err, ErrUnsafeRedirect) {
+			// Not a network blip: retrying would hit the same redirect until
+			// the device code expires.
+			return Token{}, 0, fmt.Errorf("cli: poll request: %w", err)
 		}
 		return Token{}, actionTransient, nil
 	}

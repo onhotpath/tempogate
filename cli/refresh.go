@@ -80,6 +80,7 @@ func EnsureFresh(ctx context.Context, path, issuer string, opts ...RefreshOption
 	for _, o := range opts {
 		o(cfg)
 	}
+	cfg.httpClient = guardRedirects(cfg.httpClient, cfg.insecure)
 
 	// Checked before the fast path so a token kept for a plain-http issuer
 	// fails now, with the fix in the message, not at its first refresh.

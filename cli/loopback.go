@@ -169,6 +169,7 @@ func New(opts ...Option) *Flow {
 	for _, o := range opts {
 		o(f)
 	}
+	f.httpClient = guardRedirects(f.httpClient, f.insecure)
 	return f
 }
 
