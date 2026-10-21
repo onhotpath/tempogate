@@ -10,6 +10,7 @@ BUILDINFO   := $(PKG)/buildinfo
 GCI_VERSION           ?= v0.14.0
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.9.0
+ACTIONLINT_VERSION    ?= v1.7.12
 
 GIT_TAG    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -22,8 +23,8 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go ci vuln go-version-check gen-oas clean help tools \
-        gci golangci-lint govulncheck
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go ci vuln go-version-check check-supply-chain gen-oas clean help tools \
+        gci golangci-lint govulncheck actionlint
 
 start: ## Run the binary directly with build-info ldflags injected
 	go run -ldflags "$(LDFLAGS)" .
@@ -69,16 +70,26 @@ vuln: govulncheck ## govulncheck ./... (fails on reachable vulnerabilities only)
 
 # go.mod's go directive is the single source of truth for the toolchain
 # (CI and release read it via setup-go's go-version-file). Dockerfiles cannot
-# read go.mod, so their ARG GO_VERSION defaults are kept in step by Renovate
-# (renovate.json groups them with the go directive); this catches drift.
-go-version-check: ## assert every Dockerfile ARG GO_VERSION matches go.mod's go directive
+# read go.mod, so each takes its builder from an ARG GO_IMAGE default
+# (golang:X.Y.Z-alpine@sha256:...) whose tag and digest Renovate updates
+# together, grouped with the go directive (renovate.json); this catches drift
+# and any golang image used without the ARG.
+go-version-check: ## assert every Dockerfile ARG GO_IMAGE tag matches go.mod's go directive
 	@want=$$(go list -m -f '{{.GoVersion}}'); \
-	bad=$$(grep -rnE --include='Dockerfile*' --exclude-dir=.bin '^ARG GO_VERSION=' . | awk -F= -v want="$$want" '$$2 != want'); \
+	bad=$$(grep -rnE --include='Dockerfile*' --exclude-dir=.bin '^ARG GO_IMAGE=|^FROM .*golang:' . \
+		| awk -v want="ARG GO_IMAGE=golang:$$want-alpine@sha256:" 'index($$0, want) == 0'); \
 	if [ -z "$$want" ] || [ -n "$$bad" ]; then \
-		echo "check: ARG GO_VERSION must match go.mod's go directive ($$want):"; \
+		echo "check: ARG GO_IMAGE must be golang:$$want-alpine@sha256:... to match go.mod's go directive:"; \
 		echo "$$bad"; \
 		exit 1; \
 	fi
+
+# Supply-chain guard: actionlint on every workflow, plus scripts/check-pins.sh
+# (every action pinned to a commit SHA, every Dockerfile base image and
+# syntax frontend pinned to a digest). Renovate keeps the pins current.
+check-supply-chain: actionlint ## actionlint + assert actions and base images are pinned by digest
+	$(ACTIONLINT)
+	./scripts/check-pins.sh
 
 imports-check: gci ## assert gci import grouping is already applied
 	@d=$$($(GCI) diff --skip-generated -s standard -s default -s "prefix($(PKG))" . </dev/null); \
@@ -125,14 +136,14 @@ test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
 
-ci: check lint vuln test-run ## fmt/vet/imports + lint + govulncheck + tests (used by GitHub Actions)
+ci: check lint vuln check-supply-chain test-run ## fmt/vet/imports + lint + govulncheck + supply-chain pins + tests (used by GitHub Actions)
 	@go tool cover -func=coverage.out | tail -1
 
 gen-oas: build ## emit OpenAPI specs for both the public and admin surfaces
 	$(BIN) gen-oas -f yaml > api/openapi.yaml
 	$(BIN) gen-oas --admin -f yaml > api/openapi.admin.yaml
 
-tools: gci golangci-lint govulncheck ## install pinned dev tools into $(BIN_DIR)
+tools: gci golangci-lint govulncheck actionlint ## install pinned dev tools into $(BIN_DIR)
 
 clean:
 	rm -rf $(BIN_DIR) coverage.out
@@ -178,3 +189,6 @@ golangci-lint:
 
 govulncheck:
 	$(call install-if-needed,GOVULNCHECK,golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))
+
+actionlint:
+	$(call install-if-needed,ACTIONLINT,github.com/rhysd/actionlint/cmd/actionlint,$(ACTIONLINT_VERSION))

@@ -22,7 +22,7 @@ independently of the binary — see [Helm chart releases](#helm-chart-releases).
 | --- | --- | --- |
 | **Full release** | `git tag vX.Y.Z && git push origin vX.Y.Z` | Images `:vX.Y.Z` `:X.Y` `:X` `:latest` · published GitHub Release with lean CLI binaries + `checksums.txt` · PR to update `Casks/tempogate.rb` (`brew install --cask tempogate` after merge and one-time cask trust) |
 | **Release candidate** | `git tag vX.Y.Z-rc.N && git push origin vX.Y.Z-rc.N` | Image `:vX.Y.Z-rc.N` only · GitHub Release marked **pre-release** with the same binaries · Homebrew **not** touched |
-| **Test / dev build** | Actions → **release** workflow → **Run workflow** → pick branch/SHA | Image `:sha-<short>` · snapshot binaries attached to the **workflow run** (no GitHub Release, ~14-day retention) · Homebrew **not** touched |
+| **Test / dev build** | Actions → **release** workflow → **Run workflow** → `main` or a `v*` tag | Image `:sha-<short>` of the built commit · snapshot binaries attached to the **workflow run** (no GitHub Release, ~14-day retention) · Homebrew **not** touched |
 
 ## Versioning rules
 
@@ -36,7 +36,7 @@ independently of the binary — see [Helm chart releases](#helm-chart-releases).
 
 ## Before you tag
 
-1. `main` is green: `make ci` passes (fmt/vet/imports + lint + govulncheck + tests) and the
+1. `main` is green: `make ci` passes (fmt/vet/imports + lint + govulncheck + supply-chain pins + tests) and the
    "Lean CLI build guard" is happy.
 2. Release notes are auto-generated from commit subjects since the previous
    tag, so use Conventional Commits (`feat:`, `fix:`, …). `docs:`, `test:`,
@@ -65,9 +65,9 @@ On a stable tag GoReleaser also opens a PR for the regenerated
 `Casks/tempogate.rb` in the in-repo Homebrew tap.
 Merge that PR to publish the cask on `main`.
 
-For a **dev build**, don't tag — run the workflow manually and choose the
-branch/SHA. You get a `:sha-<short>` image and the binaries as a downloadable
-artifact on that workflow run.
+For a **dev build**, do not tag: run the workflow manually.
+The workflow builds only `main` or an existing `v*` tag (the `ref` input, or the run ref if empty) and fails on anything else, so a pull request or other branch can never reach GHCR.
+You get a `:sha-<short>` image named after the commit actually built, plus the binaries as a downloadable artifact on that workflow run.
 
 ## What ships where
 
@@ -81,14 +81,28 @@ artifact on that workflow run.
 
 ## Verify a release
 
+Images, the chart and `checksums.txt` are signed with [cosign](https://docs.sigstore.dev/cosign/) keyless signing.
+The signing certificate names the workflow and ref that produced the artifact, so verification pins both; you need cosign v3 or later.
+
 ```bash
-# binaries
+# binaries: signature over checksums.txt, then the archives against it
 gh release download vX.Y.Z --repo onhotpath/tempogate --pattern checksums.txt \
-  --pattern 'tempogate_*'
+  --pattern checksums.txt.sigstore.json --pattern 'tempogate_*'
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "https://github.com/onhotpath/tempogate/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum -c --ignore-missing checksums.txt
 ./tempogate version --detailed          # tag / commit / buildDate populated
 
-# container
+# container: signature, then SLSA provenance and SBOM attestations
+cosign verify ghcr.io/onhotpath/tempogate:vX.Y.Z \
+  --certificate-identity "https://github.com/onhotpath/tempogate/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+docker buildx imagetools inspect ghcr.io/onhotpath/tempogate:vX.Y.Z \
+  --format '{{json .Provenance}}'       # per-platform SLSA provenance (mode=max)
+docker buildx imagetools inspect ghcr.io/onhotpath/tempogate:vX.Y.Z \
+  --format '{{json .SBOM}}'             # per-platform SPDX SBOM
 docker pull ghcr.io/onhotpath/tempogate:vX.Y.Z
 
 # homebrew (stable only): merge the cask PR, then verify the bump on main
@@ -118,6 +132,11 @@ download` works with your existing `gh auth` and needs no extra setup.
 
 The cask update uses PR mode in [`.goreleaser.yaml`](.goreleaser.yaml)
 because `main` requires changes through a PR.
+
+The macOS binary is not Apple-signed or notarized, because that needs a paid Apple Developer account the project does not have.
+The cask therefore strips the `com.apple.quarantine` attribute on install so Gatekeeper does not block it, which also skips Gatekeeper's check.
+Integrity rests on the sha256 the cask pins and the cosign-signed `checksums.txt`.
+Notarization is the real fix and remains open.
 
 ## Rollback
 
@@ -174,6 +193,11 @@ GitHub Release.
 ```bash
 # the published OCI artifact resolves and templates cleanly
 helm template t oci://ghcr.io/onhotpath/charts/tempogate --version X.Y.Z >/dev/null
+
+# the chart is cosign-signed by chart-release.yml (tag push or main merge)
+cosign verify ghcr.io/onhotpath/charts/tempogate:X.Y.Z \
+  --certificate-identity-regexp '^https://github.com/onhotpath/tempogate/\.github/workflows/chart-release\.yml@refs/(heads/main|tags/chart-v.+)$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 # the GitHub Release exists with the packaged chart attached
 gh release view chart-vX.Y.Z --repo onhotpath/tempogate

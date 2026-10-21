@@ -54,6 +54,20 @@ checksum:
   name_template: 'checksums.txt'
   algorithm: sha256
 
+# Keyless cosign signature over checksums.txt, which covers every archive.
+# The certificate is issued to the release workflow's GitHub OIDC identity
+# (release.yml grants id-token: write); the bundle ships as
+# checksums.txt.sigstore.json. See RELEASING.md to verify.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: '${artifact}.sigstore.json'
+    args:
+      - sign-blob
+      - '--bundle=${signature}'
+      - '${artifact}'
+      - '--yes'
+
 homebrew_casks:
   - name: tempogate
     binaries: [tempogate]
@@ -72,8 +86,13 @@ homebrew_casks:
     license: 'Apache-2.0'
     # Only stable vX.Y.Z commits the cask; rc & snapshot builds are skipped.
     skip_upload: auto
-    # Unsigned binary: strip the Gatekeeper quarantine xattr so `tempogate`
-    # runs without a security prompt. Interim until macOS notarization.
+    # Trade-off, kept deliberately: the macOS binary is not Apple-signed or
+    # notarized (that needs a paid Apple Developer account this project does
+    # not have), so Gatekeeper would refuse to run it. The hook strips the
+    # com.apple.quarantine xattr so `tempogate` runs without a prompt, which
+    # also skips Gatekeeper's check of the binary. Integrity rests on brew's
+    # sha256 check of the archive (pinned in the cask) and the cosign-signed
+    # checksums.txt on the release. Notarization is the real fix.
     hooks:
       post:
         install: |
