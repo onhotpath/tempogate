@@ -64,6 +64,10 @@ Temporal.
 **Single binary, subcommands.** One distroless binary with `serve`, `login`,
 `token`, `keys`, `sessions`, `migrate`, `version`. Operators run `serve`; the
 same binary is the laptop CLI. Migrations are embedded and applied by `migrate`.
+Each server subcommand builds only the dependencies it uses, when it runs:
+`serve` (and `gen-oas`) need the full OIDC configuration, while `migrate`,
+`keys` and `sessions` need just the state store (`STATE_SQLITE_PATH`) and
+`version` nothing.
 
 **Pluggable state, SQLite by default.** The state store (signing keypair,
 authorization codes, refresh tokens) is an interface; the default is SQLite on

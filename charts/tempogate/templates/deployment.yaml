@@ -53,10 +53,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "tempogate.configMapName" . }}
-          {{- $secretEnv := include "tempogate.secretEnv" . | trim }}
-          {{- if $secretEnv }}
+          {{- $env := printf "%s\n%s" (include "tempogate.secretEnv" . | trim) (include "tempogate.extraEnv" . | trim) | trim }}
+          {{- if $env }}
           env:
-            {{- $secretEnv | nindent 12 }}
+            {{- $env | nindent 12 }}
           {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:

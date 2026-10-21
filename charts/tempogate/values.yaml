@@ -188,9 +188,9 @@ oidc:
   # docs/cli-device-login.md. The `tempogate serve` Deployment REFUSES
   # TO BOOT if this is empty, not base64url, or does not decode to
   # exactly 32 bytes — set this before upgrading or the Deployment will
-  # crash-loop (the migrate Job constructs only the SQLite store and is
-  # unaffected). Supply it via an existing Secret you create out of
-  # band; generate the value once with:
+  # crash-loop. The migrate Job does not need it: `tempogate migrate`
+  # builds only the SQLite store and never receives secrets. Supply it via
+  # an existing Secret you create out of band; generate the value once with:
   #   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
   # The key MUST stay stable across rolling restarts: rotating it
   # invalidates every active approval session.
@@ -238,8 +238,8 @@ auth:
       tokenEndpoint: ""
       issuerUrl: ""
 
-# Extra environment variables appended verbatim to the container (and the
-# migrate Job), e.g. [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].
+# Extra environment variables appended verbatim to the Deployment container
+# and the migrate Job, e.g. [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].
 extraEnv: []
 
 # Extra volumes / mounts on the Deployment (the state PVC is wired

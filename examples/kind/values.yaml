@@ -1,6 +1,9 @@
 # Helm values overlay for a local kind / k3d cluster.
 #
 #   kind create cluster
+#   kubectl create secret generic tempogate-kind \
+#     --from-literal=session-signing-key="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" \
+#     --from-literal=client-secrets="tempogate-device-ui:$(openssl rand -hex 32)"
 #   helm install tempogate ./charts/tempogate --values examples/kind/values.yaml
 #   kubectl rollout status deploy/tempogate
 #   kubectl port-forward svc/tempogate 8000:8000 &
@@ -30,8 +33,20 @@ log:
 
 # Reachable over `kubectl port-forward` on the host. Replace with your real
 # external URL when fronting this with an Ingress.
+#
+# `serve` refuses to boot without a session signing key and the internal
+# tempogate-device-ui client (with its secret). bootstrap.sh creates the
+# `tempogate-kind` Secret both refs point at, with demo-only random values.
 oidc:
   issuer: http://127.0.0.1:8000
+  sessionSigningKeySecretRef:
+    name: tempogate-kind
+    key: session-signing-key
 
-# auth.* is intentionally left at defaults here — no upstream Google client
-# is configured, so the SSO flow is not exercised by this smoke overlay.
+# No upstream Google client is configured, so the SSO flow is not exercised
+# by this smoke overlay.
+auth:
+  clients: tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback
+  clientSecretsSecretRef:
+    name: tempogate-kind
+    key: client-secrets

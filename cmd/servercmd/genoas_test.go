@@ -73,7 +73,7 @@ func (s *GenOASCmdSuite) SetupTest() {
 }
 
 func (s *GenOASCmdSuite) run(args ...string) (string, error) {
-	cmd := newGenOASCmd(genOASParams{Servers: s.servers})
+	cmd := newGenOASCmd(supply(genOASParams{Servers: s.servers}))
 	cmd.SetArgs(args)
 	var out bytes.Buffer
 	cmd.SetOut(&out)

@@ -9,6 +9,7 @@
 package servercmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -39,79 +40,78 @@ type serveParams struct {
 	AdminListener config.Listener `name:"admin"`
 }
 
-func newServeCmd(p serveParams) *cobra.Command {
+func newServeCmd(load deps[serveParams]) *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
 		Short: "Run the tempogate HTTP server",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-
-			if err := p.Store.Ping(ctx); err != nil {
-				return fmt.Errorf("state store unreachable: %w", err)
-			}
-			if err := p.Store.IsCurrent(ctx); err != nil {
-				return err
-			}
-
-			// Load (or bootstrap) the signing keypair before either listener
-			// binds so /.well-known/jwks.json serves the active key from the
-			// first accepted request and the admin signer can mint integration
-			// JWTs.
-			if err := p.Keys.Init(ctx); err != nil {
-				return fmt.Errorf("keys init: %w", err)
-			}
-			warnUnencryptedKeys(p.Logger, p.Keys)
-
-			// Two http.Server instances, two muxes — the public listener
-			// literally has no /admin/* handler, so admin reachability is a
-			// property of binding, not of middleware. Both run under
-			// xrun.All so a failure on either tears down the process.
-			publicAddr := p.Listener.String()
-			adminAddr := p.AdminListener.String()
-			logger := p.Logger.Named("server")
-
-			publicMux := http.NewServeMux()
-			publicMux.Handle("/", p.Servers.Public.Handler)
-
-			adminMux := http.NewServeMux()
-			adminMux.Handle("/", p.Servers.Admin.Handler)
-
-			return xrun.All(
-				xrun.NoTimeout,
-				// Started only once the schema is known current, and
-				// stopped with the listeners: a sweep in flight is
-				// cancelled through ctx.
-				xrun.ComponentFunc(p.Reaper.Run),
-				httpServer(httpServerOptions{
-					server: &http.Server{
-						Addr:              publicAddr,
-						Handler:           publicMux,
-						ReadHeaderTimeout: readHeaderTimeout,
-					},
-					onListening: func() {
-						logger.Info("starting public http server", zap.String("addr", publicAddr))
-						p.Readiness.Mark()
-					},
-					onStopping: func() {
-						logger.Info("stopping public http server", zap.String("addr", publicAddr))
-					},
-				}),
-				httpServer(httpServerOptions{
-					server: &http.Server{
-						Addr:              adminAddr,
-						Handler:           adminMux,
-						ReadHeaderTimeout: readHeaderTimeout,
-					},
-					onListening: func() {
-						logger.Info("starting admin http server", zap.String("addr", adminAddr))
-					},
-					onStopping: func() {
-						logger.Info("stopping admin http server", zap.String("addr", adminAddr))
-					},
-				}),
-			).Run(ctx)
+			return load(cmd.Context(), func(p serveParams) error { return serve(cmd.Context(), p) })
 		},
 	}
+}
+
+func serve(ctx context.Context, p serveParams) error {
+	if err := storeReady(ctx, p.Store); err != nil {
+		return err
+	}
+
+	// Load (or bootstrap) the signing keypair before either listener
+	// binds so /.well-known/jwks.json serves the active key from the
+	// first accepted request and the admin signer can mint integration
+	// JWTs.
+	if err := p.Keys.Init(ctx); err != nil {
+		return fmt.Errorf("keys init: %w", err)
+	}
+	warnUnencryptedKeys(p.Logger, p.Keys)
+
+	// Two http.Server instances, two muxes - the public listener
+	// literally has no /admin/* handler, so admin reachability is a
+	// property of binding, not of middleware. Both run under
+	// xrun.All so a failure on either tears down the process.
+	publicAddr := p.Listener.String()
+	adminAddr := p.AdminListener.String()
+	logger := p.Logger.Named("server")
+
+	publicMux := http.NewServeMux()
+	publicMux.Handle("/", p.Servers.Public.Handler)
+
+	adminMux := http.NewServeMux()
+	adminMux.Handle("/", p.Servers.Admin.Handler)
+
+	return xrun.All(
+		xrun.NoTimeout,
+		// Started only once the schema is known current, and
+		// stopped with the listeners: a sweep in flight is
+		// cancelled through ctx.
+		xrun.ComponentFunc(p.Reaper.Run),
+		httpServer(httpServerOptions{
+			server: &http.Server{
+				Addr:              publicAddr,
+				Handler:           publicMux,
+				ReadHeaderTimeout: readHeaderTimeout,
+			},
+			onListening: func() {
+				logger.Info("starting public http server", zap.String("addr", publicAddr))
+				p.Readiness.Mark()
+			},
+			onStopping: func() {
+				logger.Info("stopping public http server", zap.String("addr", publicAddr))
+			},
+		}),
+		httpServer(httpServerOptions{
+			server: &http.Server{
+				Addr:              adminAddr,
+				Handler:           adminMux,
+				ReadHeaderTimeout: readHeaderTimeout,
+			},
+			onListening: func() {
+				logger.Info("starting admin http server", zap.String("addr", adminAddr))
+			},
+			onStopping: func() {
+				logger.Info("stopping admin http server", zap.String("addr", adminAddr))
+			},
+		}),
+	).Run(ctx)
 }
 
 // warnUnencryptedKeys flags keys left in clear after a KEK was configured:

@@ -16,18 +16,20 @@ type migrateParams struct {
 	SqlitePath string `name:"sqlite_path"`
 }
 
-func newMigrateCmd(p migrateParams) *cobra.Command {
+func newMigrateCmd(load deps[migrateParams]) *cobra.Command {
 	return &cobra.Command{
 		Use:   "migrate",
 		Short: "Apply pending schema migrations to the state store",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			logger := p.Logger.Named("migrate")
-			logger.Info("applying migrations", zap.String("path", p.SqlitePath))
-			if err := p.Store.Migrate(cmd.Context()); err != nil {
-				return err
-			}
-			logger.Info("migrations up to date")
-			return nil
+			return load(cmd.Context(), func(p migrateParams) error {
+				logger := p.Logger.Named("migrate")
+				logger.Info("applying migrations", zap.String("path", p.SqlitePath))
+				if err := p.Store.Migrate(cmd.Context()); err != nil {
+					return err
+				}
+				logger.Info("migrations up to date")
+				return nil
+			})
 		},
 	}
 }

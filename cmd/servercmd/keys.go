@@ -17,34 +17,36 @@ type keysParams struct {
 	Keys  *keys.Keys
 }
 
-func newKeysCmd(p keysParams) *cobra.Command {
+func newKeysCmd(load deps[keysParams]) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "keys",
 		Short: "Manage tempogate signing keys",
 	}
-	root.AddCommand(newKeysGenerateCmd(p), newKeysEncryptCmd(p))
+	root.AddCommand(newKeysGenerateCmd(load), newKeysEncryptCmd(load))
 	return root
 }
 
-func newKeysGenerateCmd(p keysParams) *cobra.Command {
+func newKeysGenerateCmd(load deps[keysParams]) *cobra.Command {
 	var force bool
 	c := &cobra.Command{
 		Use:   "generate",
 		Short: "Generate the JWT signing keypair (fails if one exists; use --force to rotate)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			if err := storeReady(ctx, p.Store); err != nil {
-				return err
-			}
+			return load(ctx, func(p keysParams) error {
+				if err := storeReady(ctx, p.Store); err != nil {
+					return err
+				}
 
-			kp, err := p.Keys.Generate(ctx, force)
-			if err != nil {
-				return err
-			}
+				kp, err := p.Keys.Generate(ctx, force)
+				if err != nil {
+					return err
+				}
 
-			cmd.Printf("generated keypair: kid=%s alg=%s created_at=%s\n",
-				kp.Kid, kp.Alg, kp.CreatedAt.UTC().Format(time.RFC3339))
-			return nil
+				cmd.Printf("generated keypair: kid=%s alg=%s created_at=%s\n",
+					kp.Kid, kp.Alg, kp.CreatedAt.UTC().Format(time.RFC3339))
+				return nil
+			})
 		},
 	}
 	c.Flags().BoolVar(&force, "force", false, "rotate by adding a new keypair even if one already exists")
@@ -56,21 +58,23 @@ func newKeysGenerateCmd(p keysParams) *cobra.Command {
 // this is the one-off step for the existing ones. A running server keeps its
 // keys in memory, so this is safe while it serves; its next start needs the
 // KEK.
-func newKeysEncryptCmd(p keysParams) *cobra.Command {
+func newKeysEncryptCmd(load deps[keysParams]) *cobra.Command {
 	return &cobra.Command{
 		Use:   "encrypt",
 		Short: "Encrypt stored signing keys with KEYS_ENCRYPTION_KEY (idempotent)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			if err := storeReady(ctx, p.Store); err != nil {
-				return err
-			}
-			n, err := p.Keys.EncryptStored(ctx, p.Store)
-			if err != nil {
-				return err
-			}
-			cmd.Printf("encrypted %d keypair(s)\n", n)
-			return nil
+			return load(ctx, func(p keysParams) error {
+				if err := storeReady(ctx, p.Store); err != nil {
+					return err
+				}
+				n, err := p.Keys.EncryptStored(ctx, p.Store)
+				if err != nil {
+					return err
+				}
+				cmd.Printf("encrypted %d keypair(s)\n", n)
+				return nil
+			})
 		},
 	}
 }

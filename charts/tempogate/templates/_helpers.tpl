@@ -81,9 +81,11 @@ when set, otherwise the chart-managed claim.
 {{- end }}
 
 {{/*
-Secret-derived env entries plus user extraEnv. Shared verbatim by the
-Deployment and the migrate Job so both see identical configuration. The
-non-secret vars come from the ConfigMap via envFrom (see each workload).
+Secret-derived env entries for the Deployment. The migrate Job does not get
+them: `tempogate migrate` needs only the state store, so it never sees secret
+material. The non-secret vars come from the ConfigMap via envFrom, and user
+extraEnv from tempogate.extraEnv; both reach the Deployment and the migrate
+Job.
 */}}
 {{- define "tempogate.secretEnv" -}}
 {{- with .Values.auth.upstream.google.clientIdSecretRef }}
@@ -131,6 +133,12 @@ non-secret vars come from the ConfigMap via envFrom (see each workload).
       key: {{ required "keys.encryptionKeySecretRef.key is required when .name is set" .key }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/*
+User extraEnv, appended verbatim to the Deployment and the migrate Job.
+*/}}
+{{- define "tempogate.extraEnv" -}}
 {{- with .Values.extraEnv }}
 {{- toYaml . | nindent 0 }}
 {{- end }}

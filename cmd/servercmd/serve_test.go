@@ -41,10 +41,10 @@ func (s *ServeCmdSuite) TearDownTest() {
 }
 
 func (s *ServeCmdSuite) TestRejectsStaleSchema() {
-	cmd := newServeCmd(serveParams{
+	cmd := newServeCmd(supply(serveParams{
 		Logger: zap.NewNop(),
 		Store:  s.store,
-	})
+	}))
 	cmd.SetOut(new(testWriter))
 	cmd.SetErr(new(testWriter))
 
@@ -65,10 +65,10 @@ func (s *ServeCmdSuite) TestRejectsSchemaWithGap() {
 	s.Require().NoError(err)
 	s.Require().NoError(db.Close())
 
-	cmd := newServeCmd(serveParams{
+	cmd := newServeCmd(supply(serveParams{
 		Logger: zap.NewNop(),
 		Store:  s.store,
-	})
+	}))
 	cmd.SetOut(new(testWriter))
 	cmd.SetErr(new(testWriter))
 
@@ -81,10 +81,10 @@ func (s *ServeCmdSuite) TestRejectsSchemaWithGap() {
 func (s *ServeCmdSuite) TestRejectsUnreachableStore() {
 	s.Require().NoError(s.store.Close())
 
-	cmd := newServeCmd(serveParams{
+	cmd := newServeCmd(supply(serveParams{
 		Logger: zap.NewNop(),
 		Store:  s.store,
-	})
+	}))
 	cmd.SetOut(new(testWriter))
 	cmd.SetErr(new(testWriter))
 

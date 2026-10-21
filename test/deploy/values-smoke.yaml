@@ -1,0 +1,31 @@
+# Helm values for test/deploy/kind-smoke.sh: the minimum `tempogate serve`
+# needs to become Ready in a throwaway kind cluster. The referenced Secret is
+# created by the script. Not a deployment template; see examples/kind for that.
+persistence:
+  enabled: true
+  size: 128Mi
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+oidc:
+  issuer: http://127.0.0.1:8000
+  sessionSigningKeySecretRef:
+    name: tempogate-smoke
+    key: session-signing-key
+
+auth:
+  clients: tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback
+  clientSecretsSecretRef:
+    name: tempogate-smoke
+    key: client-secrets
+
+# Must reach the migrate Job as well as the Deployment; the script asserts it
+# in the rendered manifests.
+extraEnv:
+  - name: STATE_SQLITE_BUSY_TIMEOUT
+    value: 7s

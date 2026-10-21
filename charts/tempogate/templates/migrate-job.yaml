@@ -41,11 +41,17 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["migrate"]
+          # Same non-secret config and extraEnv as the Deployment, so an
+          # operator override (e.g. STATE_SQLITE_BUSY_TIMEOUT) applies to
+          # both. No secrets: migrate never builds the OIDC/API stack.
+          envFrom:
+            - configMapRef:
+                name: {{ include "tempogate.configMapName" . }}
+          {{- $extraEnv := include "tempogate.extraEnv" . | trim }}
+          {{- if $extraEnv }}
           env:
-            - name: LOG_LEVEL
-              value: {{ .Values.log.level | quote }}
-            - name: STATE_SQLITE_PATH
-              value: {{ .Values.state.sqlitePath | quote }}
+            {{- $extraEnv | nindent 12 }}
+          {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
