@@ -268,3 +268,9 @@ func (s *StoreSuite) TestUpdateKeypairPrivatePEM() {
 
 	s.Require().ErrorContains(s.store.UpdateKeypairPrivatePEM(s.ctx, "kid-missing", []byte("x")), "kid-missing")
 }
+
+func (s *StoreSuite) TestUpdateKeypairPrivatePEMAfterClose() {
+	s.Require().NoError(s.store.Close())
+	s.Require().Error(s.store.UpdateKeypairPrivatePEM(s.ctx, "kid", []byte("x")))
+	s.store = nil
+}

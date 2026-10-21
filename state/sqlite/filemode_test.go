@@ -165,3 +165,29 @@ func TestNewFailsWhenStateDirCannotBeCreated(t *testing.T) {
 	_, err := New(WithPath(filepath.Join(parent, "state", "state.db")))
 	require.ErrorContains(t, err, "create state directory")
 }
+
+func TestNewFailsWhenDatabaseFileCannotBeCreated(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	dir := filepath.Join(t.TempDir(), "ro")
+	require.NoError(t, os.Mkdir(dir, 0o500))
+	_, err := New(WithPath(filepath.Join(dir, "state.db")))
+	require.ErrorContains(t, err, "create database file")
+}
+
+// A file the process cannot chmod (another user's) is reported, not fatal.
+func TestNewWarnsWhenFileCannotBeRestricted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+	// A -wal symlink through a regular file makes chmod fail with ENOTDIR,
+	// standing in for a file owned by another user without needing root.
+	notDir := filepath.Join(dir, "plain")
+	require.NoError(t, os.WriteFile(notDir, nil, 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(notDir, "x"), path+"-wal"))
+	core, logs := observer.New(zap.WarnLevel)
+	s, err := New(WithPath(path), WithLogger(zap.New(core)))
+	require.NoError(t, err)
+	_ = s.Close()
+	require.Equal(t, 1, logs.FilterMessageSnippet("could not restrict").Len())
+}

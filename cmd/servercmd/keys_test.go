@@ -8,6 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/state/sqlite"
@@ -129,4 +131,20 @@ func (s *KeysCmdSuite) TestEncryptWithoutKeyFails() {
 func (s *KeysCmdSuite) TestEncryptRejectsStaleSchema() {
 	err := s.encryptCmd(keys.New(keys.WithStore(s.store)), new(bytes.Buffer)).ExecuteContext(s.ctx)
 	s.Require().ErrorContains(err, "tempogate migrate")
+}
+
+func (s *KeysCmdSuite) TestServeWarnsAboutUnencryptedKeys() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	s.Require().NoError(keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048))).Init(s.ctx))
+
+	core, logs := observer.New(zap.WarnLevel)
+	plain := keys.New(keys.WithStore(s.store))
+	s.Require().NoError(plain.Init(s.ctx))
+	warnUnencryptedKeys(zap.New(core), plain)
+	s.Zero(logs.Len(), "no KEK configured: nothing to warn about")
+
+	withKEK := keys.New(keys.WithStore(s.store), keys.WithEncryptionKey(bytes.Repeat([]byte{1}, 32)))
+	s.Require().NoError(withKEK.Init(s.ctx))
+	warnUnencryptedKeys(zap.New(core), withKEK)
+	s.Equal(1, logs.FilterMessageSnippet("keys encrypt").Len())
 }

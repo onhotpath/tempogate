@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/fx"
 )
 
 type ConfigSuite struct {
@@ -467,4 +468,19 @@ func (s *ConfigSuite) TestKeysEncryptionKeyFromEnv() {
 	got, err := New(Params{})
 	s.Require().NoError(err)
 	s.Equal(KeysConfig{EncryptionKey: "a2V5", EncryptionKeyFile: "/run/secrets/kek"}, got.Keys)
+}
+
+func (s *ConfigSuite) TestFxProjectsKeysEncryptionKey() {
+	s.T().Setenv("KEYS_ENCRYPTION_KEY", "a2V5")
+	s.T().Setenv("KEYS_ENCRYPTION_KEY_FILE", "/run/secrets/kek")
+
+	var got struct {
+		fx.In
+		Key  string `name:"keys_encryption_key"`
+		File string `name:"keys_encryption_key_file"`
+	}
+	app := fx.New(fx.NopLogger, Fx(), fx.Populate(&got))
+	s.Require().NoError(app.Err())
+	s.Equal("a2V5", got.Key)
+	s.Equal("/run/secrets/kek", got.File)
 }
