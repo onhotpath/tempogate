@@ -8,7 +8,8 @@ BUILDINFO   := $(PKG)/buildinfo
 
 # Pin tool versions so CI and local installs agree. Bump deliberately.
 GCI_VERSION           ?= v0.14.0
-GOLANGCI_LINT_VERSION ?= v2.13.2
+GOLANGCI_LINT_VERSION ?= v2.14.0
+GOVULNCHECK_VERSION   ?= v1.9.0
 
 GIT_TAG    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -21,8 +22,8 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go ci gen-oas clean help tools \
-        gci golangci-lint
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go ci vuln go-version-check gen-oas clean help tools \
+        gci golangci-lint govulncheck
 
 start: ## Run the binary directly with build-info ldflags injected
 	go run -ldflags "$(LDFLAGS)" .
@@ -51,10 +52,30 @@ imports: gci ## gci write with std/default/local groupings
 
 GO_SRC = $(shell find . -name '*.go' -not -path './.bin/*')
 
-check: vet imports-check ## vet + assert gofmt/gci would not rewrite any .go file
+check: vet imports-check go-version-check ## vet + assert gofmt/gci would not rewrite any .go file
 	@bad=$$(gofmt -l $(GO_SRC)); \
 	if [ -n "$$bad" ]; then \
 		echo "check: these files are not gofmt-clean — run 'make fmt':"; \
+		echo "$$bad"; \
+		exit 1; \
+	fi
+
+# govulncheck exits non-zero only for vulnerabilities whose symbols our code
+# can reach (stdlib included, so this also gates the Go toolchain version).
+# Package- and module-level findings (imported or required but never called)
+# are reported but do not fail the target.
+vuln: govulncheck ## govulncheck ./... (fails on reachable vulnerabilities only)
+	$(GOVULNCHECK) ./...
+
+# go.mod's go directive is the single source of truth for the toolchain
+# (CI and release read it via setup-go's go-version-file). Dockerfiles cannot
+# read go.mod, so their ARG GO_VERSION defaults are kept in step by Renovate
+# (renovate.json groups them with the go directive); this catches drift.
+go-version-check: ## assert every Dockerfile ARG GO_VERSION matches go.mod's go directive
+	@want=$$(go list -m -f '{{.GoVersion}}'); \
+	bad=$$(grep -rnE --include='Dockerfile*' --exclude-dir=.bin '^ARG GO_VERSION=' . | awk -F= -v want="$$want" '$$2 != want'); \
+	if [ -z "$$want" ] || [ -n "$$bad" ]; then \
+		echo "check: ARG GO_VERSION must match go.mod's go directive ($$want):"; \
 		echo "$$bad"; \
 		exit 1; \
 	fi
@@ -104,14 +125,14 @@ test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
 
-ci: check lint test-run ## fmt/vet/imports + lint + tests (used by GitHub Actions)
+ci: check lint vuln test-run ## fmt/vet/imports + lint + govulncheck + tests (used by GitHub Actions)
 	@go tool cover -func=coverage.out | tail -1
 
 gen-oas: build ## emit OpenAPI specs for both the public and admin surfaces
 	$(BIN) gen-oas -f yaml > api/openapi.yaml
 	$(BIN) gen-oas --admin -f yaml > api/openapi.admin.yaml
 
-tools: gci golangci-lint ## install pinned dev tools into $(BIN_DIR)
+tools: gci golangci-lint govulncheck ## install pinned dev tools into $(BIN_DIR)
 
 clean:
 	rm -rf $(BIN_DIR) coverage.out
@@ -124,6 +145,9 @@ help: ## list targets
 # install-if-needed builds a tool into $(BIN_DIR) without polluting this
 # module's go.mod. We use a throwaway temp module so `go build` resolves
 # the requested version cleanly. Skipped if the target binary already exists.
+# The tool is built with this module's toolchain (go.mod), not whatever the
+# temp dir would default to: analyzers such as govulncheck type-check our
+# sources and the stdlib, and fail if they were built with an older Go.
 #
 # Args:
 #   $(1) — make var name to set to the resolved binary path (eval'd)
@@ -134,6 +158,7 @@ define install-if-needed
 		echo "Installing $(2)@$(3) -> $(BIN_DIR)/$(notdir $(2))" ;\
 		set -e ;\
 		mkdir -p $(BIN_DIR) ;\
+		export GOTOOLCHAIN=$$(go env GOVERSION) ;\
 		TMP_DIR=$$(mktemp -d) ;\
 		cd $$TMP_DIR ;\
 		go mod init tmp >/dev/null 2>&1 ;\
@@ -150,3 +175,6 @@ gci:
 
 golangci-lint:
 	$(call install-if-needed,GOLANGCI_LINT,github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+govulncheck:
+	$(call install-if-needed,GOVULNCHECK,golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))

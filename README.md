@@ -321,9 +321,10 @@ Route a path prefix on the shared host to tempogate at your reverse proxy
 ## Development
 
 ```bash
-make tools         # install pinned gci + golangci-lint into ./.bin
-make check         # fmt + vet + gci; fails on a dirty tree
+make tools         # install pinned gci + golangci-lint + govulncheck into ./.bin
+make check         # fmt + vet + gci + Go version sync; fails on a dirty tree
 make lint          # golangci-lint
+make vuln          # govulncheck; fails on reachable vulnerabilities
 make test          # check + race + coverage
 make ci            # what GitHub Actions runs
 make test-e2e      # container-backed acceptance proofs (needs Docker)

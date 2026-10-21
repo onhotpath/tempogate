@@ -27,11 +27,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Keyed on go.mod too: tools are built with the module's toolchain, so a
+      # Go bump must rebuild them (an older-Go govulncheck cannot load newer
+      # sources).
       - name: Cache .bin tools
         uses: actions/cache@v5
         with:
           path: .bin
-          key: ${{ runner.os }}-tempogate-tools-${{ hashFiles('Makefile') }}
+          key: ${{ runner.os }}-tempogate-tools-${{ hashFiles('Makefile', 'go.mod') }}
 
       - name: Install pinned tools
         run: make tools

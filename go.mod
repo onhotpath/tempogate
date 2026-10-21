@@ -1,6 +1,6 @@
 module github.com/onhotpath/tempogate
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20260427013145-5737772c319b
