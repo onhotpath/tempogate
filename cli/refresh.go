@@ -73,7 +73,7 @@ func EnsureFresh(ctx context.Context, path, issuer string, opts ...RefreshOption
 
 	clientID := tok.ClientID
 	if clientID == "" {
-		clientID = audience(tok.AccessToken)
+		clientID = issuedTo(tok.AccessToken)
 	}
 	if clientID == "" {
 		return Token{}, errors.New("cli: token file does not record its client_id; run `tempogate login`")
@@ -110,12 +110,13 @@ func EnsureFresh(ctx context.Context, path, issuer string, opts ...RefreshOption
 	return refreshed, nil
 }
 
-// audience recovers the client a token file was issued to when the file
-// predates the persisted client_id: tempogate stamps the requesting client as
-// the access token's aud. The JWT is the CLI's own credential and is not
-// verified here; a wrong guess only means the issuer refuses the refresh.
-// It returns "" when the token is not a JWT with exactly one audience.
-func audience(jwt string) string {
+// issuedTo recovers the client a token file was issued to when the file
+// predates the persisted client_id: tempogate names it in the access token's
+// client_id claim, and stamped it as the aud before access tokens carried the
+// Temporal audience. The JWT is the CLI's own credential and is not verified
+// here; a wrong guess only means the issuer refuses the refresh. It returns
+// "" when the token is not a JWT naming exactly one client.
+func issuedTo(jwt string) string {
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 {
 		return ""
@@ -125,10 +126,14 @@ func audience(jwt string) string {
 		return ""
 	}
 	var claims struct {
-		Aud json.RawMessage `json:"aud"`
+		ClientID string          `json:"client_id"`
+		Aud      json.RawMessage `json:"aud"`
 	}
 	if json.Unmarshal(payload, &claims) != nil {
 		return ""
+	}
+	if claims.ClientID != "" {
+		return claims.ClientID
 	}
 	var one string
 	if json.Unmarshal(claims.Aud, &one) == nil {

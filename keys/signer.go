@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/lestrrat-go/jwx/v4/jwk"
+	"github.com/lestrrat-go/jwx/v4/jws"
 	"github.com/lestrrat-go/jwx/v4/jwt"
 )
 
@@ -22,12 +23,26 @@ var ErrNoSigningKeys = errors.New("keys: signer has no keypair to sign with")
 // tokens so downstream audit can attribute actions without a second lookup.
 // nonceClaim is the OIDC Core §2 binding: when a relying party sends `nonce`
 // at /authorize the provider MUST echo it into the ID token so the RP can
-// detect token replay/injection.
+// detect token replay/injection. clientIDClaim names the OAuth client an
+// access token was issued to (RFC 9068 §2.2).
 const (
-	permissionsClaim = "permissions"
-	emailClaim       = "email"
-	nonceClaim       = "nonce"
+	permissionsClaim   = "permissions"
+	emailClaim         = "email"
+	emailVerifiedClaim = "email_verified"
+	nonceClaim         = "nonce"
+	authTimeClaim      = "auth_time"
+	clientIDClaim      = "client_id"
 )
+
+// AccessTokenType is the JWS typ header of every access token tempogate
+// mints (RFC 9068 §2.1). Explicit typing (RFC 8725 §3.11) is what lets a
+// resource server tell an access token from an ID token signed by the same
+// key: the Verifier refuses anything else.
+const AccessTokenType = "at+jwt"
+
+// idTokenType is the typ an ID token carries: the plain JWT media type OIDC
+// relying parties expect.
+const idTokenType = "JWT"
 
 // tokenConfig is the shared construction state for Signer and Verifier: both
 // agree on the issuer/audience pair and read keypairs from the same *Keys, so
@@ -60,8 +75,10 @@ func WithIssuer(url string) TokenOption {
 	return func(c *tokenConfig) { c.issuer = url }
 }
 
-// WithAudience sets the aud claim the Signer stamps and the Verifier enforces.
-// Empty audience ⇒ the claim is neither written nor checked.
+// WithAudience sets the aud claim the Signer stamps on access tokens and the
+// Verifier enforces: the Temporal audience (OIDC_ACCESS_TOKEN_AUDIENCE).
+// Empty audience ⇒ the claim is neither written nor checked. ID tokens are
+// unaffected; their aud is always the requesting client.
 func WithAudience(aud string) TokenOption {
 	return func(c *tokenConfig) { c.audience = aud }
 }
@@ -93,10 +110,11 @@ func newTokenConfig(opts ...TokenOption) tokenConfig {
 	return c
 }
 
-// Signer mints tempogate-issued JWTs. It is the shared primitive behind human
-// token exchange, the CLI loopback token, and admin integration keys; the
-// claim shape is uniform so Temporal's default ClaimMapper sees the same token
-// regardless of which flow produced it.
+// Signer mints tempogate-issued JWTs: access tokens (Mint), the shared
+// primitive behind human token exchange, the CLI tokens and admin integration
+// keys, whose claim shape is uniform so Temporal's default ClaimMapper sees
+// the same token regardless of which flow produced it; and OIDC ID tokens
+// (MintIDToken) for relying-party login.
 type Signer struct {
 	keys     *Keys
 	issuer   string
@@ -114,99 +132,159 @@ func NewSigner(opts ...TokenOption) *Signer {
 	}
 }
 
-// MintRequest is the per-token input. Permissions must already be in Temporal's
-// "<namespace>:<action>" form (the caller owns that mapping). A zero TTL mints
-// a token with no exp claim — appropriate for long-lived integration keys whose
-// lifetime is governed by revocation, not expiry.
+// MintRequest is the per-token input for an access token. Permissions must
+// already be in Temporal's "<namespace>:<action>" form (the caller owns that
+// mapping). A zero TTL mints a token with no exp claim - appropriate for
+// long-lived integration keys whose lifetime is governed by revocation, not
+// expiry.
 type MintRequest struct {
 	Subject     string
 	Permissions []string
 	TTL         time.Duration
 	Email       string
 
+	// ClientID, when non-empty, names the OAuth client the token was issued
+	// to. Tokens minted through /token carry it; integration keys have no
+	// client and omit it.
+	ClientID string
+}
+
+// IDTokenRequest is the input for an OIDC ID token (OIDC Core §2). It
+// carries identity only: an ID token is the relying party's proof of login,
+// never a credential for Temporal, so it has no permissions.
+type IDTokenRequest struct {
+	Subject string
+	Email   string
+
+	// Audience is the requesting client_id. Required: OIDC Core §2 makes
+	// the client the ID token's audience.
+	Audience string
+
 	// Nonce, when non-empty, is echoed into the `nonce` claim. OIDC Core §2
 	// requires this whenever the relying party sent a nonce at /authorize;
 	// the RP rejects an ID token whose nonce does not match.
 	Nonce string
 
-	// Audience, when non-empty, overrides the Signer's configured audience
-	// for this token. OIDC Core requires an ID token's `aud` to contain the
-	// requesting client's client_id, so the /token handler sets this
-	// per-request rather than relying on a single global audience.
-	Audience string
+	// AuthTime is when the user authenticated upstream (auth_time).
+	AuthTime time.Time
+
+	TTL time.Duration
 }
 
-// Mint builds, signs, and serializes a JWT for req. It returns the compact
-// serialization and the token's jti (a UUIDv7, so jti ordering tracks issue
-// time) for callers that persist a token registry or refresh-token mapping.
+// Mint builds, signs, and serializes an access token for req. It returns the
+// compact serialization and the token's jti (a UUIDv7, so jti ordering
+// tracks issue time) for callers that persist a token registry or
+// refresh-token mapping.
 //
 // ctx is accepted for signature stability with the future key-fetch path; the
 // current in-memory keypair cache makes signing synchronous.
 func (s *Signer) Mint(_ context.Context, req MintRequest) (string, string, error) {
-	if s.keys == nil {
-		return "", "", ErrNoSigningKeys
-	}
-	kp, err := s.keys.Latest()
+	b, jti, err := s.builder(req.Subject, req.TTL)
 	if err != nil {
 		return "", "", err
 	}
-
-	privKey, err := jwk.ParseKey(kp.PrivatePEM, jwk.WithX509(true))
+	b.Claim(permissionsClaim, req.Permissions)
+	if s.audience != "" {
+		b.Audience([]string{s.audience})
+	}
+	if req.Email != "" {
+		b.Claim(emailClaim, req.Email)
+	}
+	if req.ClientID != "" {
+		b.Claim(clientIDClaim, req.ClientID)
+	}
+	signed, err := s.sign(b, AccessTokenType)
 	if err != nil {
-		return "", "", fmt.Errorf("keys: parse private key (kid=%s): %w", kp.Kid, err)
+		return "", "", err
 	}
-	// jwx copies kid+alg from the signing key into the JWS protected header,
-	// which is what lets relying parties pick the right JWKS entry.
-	if err := privKey.Set(jwk.KeyIDKey, kp.Kid); err != nil {
-		return "", "", fmt.Errorf("keys: set kid: %w", err)
-	}
-	if err := privKey.Set(jwk.AlgorithmKey, jwa.RS256()); err != nil {
-		return "", "", fmt.Errorf("keys: set alg: %w", err)
-	}
+	return signed, jti, nil
+}
 
+// MintIDToken builds, signs, and serializes an OIDC ID token for req. Only
+// tempogate-verified identities reach this point (Google asserted
+// email_verified and the domain gate passed), so email_verified is always
+// true.
+func (s *Signer) MintIDToken(_ context.Context, req IDTokenRequest) (string, error) {
+	if req.Audience == "" {
+		return "", errors.New("keys: an ID token needs the client as its audience")
+	}
+	b, _, err := s.builder(req.Subject, req.TTL)
+	if err != nil {
+		return "", err
+	}
+	b.Audience([]string{req.Audience})
+	if req.Email != "" {
+		b.Claim(emailClaim, req.Email).Claim(emailVerifiedClaim, true)
+	}
+	if req.Nonce != "" {
+		b.Claim(nonceClaim, req.Nonce)
+	}
+	if !req.AuthTime.IsZero() {
+		b.Claim(authTimeClaim, req.AuthTime.Unix())
+	}
+	return s.sign(b, idTokenType)
+}
+
+// builder starts a token with the claims every tempogate JWT shares: sub,
+// iss, iat, nbf, jti, and exp when ttl is positive.
+func (s *Signer) builder(subject string, ttl time.Duration) (*jwt.Builder, string, error) {
+	if s.keys == nil {
+		return nil, "", ErrNoSigningKeys
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
-		return "", "", fmt.Errorf("keys: generate jti: %w", err)
+		return nil, "", fmt.Errorf("keys: generate jti: %w", err)
 	}
 	jti := id.String()
 
 	now := s.now()
 	b := jwt.NewBuilder().
-		Subject(req.Subject).
+		Subject(subject).
 		IssuedAt(now).
 		NotBefore(now).
-		JwtID(jti).
-		Claim(permissionsClaim, req.Permissions)
+		JwtID(jti)
 	if s.issuer != "" {
 		b.Issuer(s.issuer)
 	}
-	// Per-request audience wins over the Signer's global one: an OIDC ID
-	// token's aud must be the requesting client_id, which only the caller
-	// knows. Falling back to s.audience preserves the integration-key path
-	// where a single fixed audience is configured.
-	if req.Audience != "" {
-		b.Audience([]string{req.Audience})
-	} else if s.audience != "" {
-		b.Audience([]string{s.audience})
+	if ttl > 0 {
+		b.Expiration(now.Add(ttl))
 	}
-	if req.TTL > 0 {
-		b.Expiration(now.Add(req.TTL))
+	return b, jti, nil
+}
+
+// sign signs b with the latest keypair, stamping kid and typ in the JWS
+// protected header.
+func (s *Signer) sign(b *jwt.Builder, typ string) (string, error) {
+	kp, err := s.keys.Latest()
+	if err != nil {
+		return "", err
 	}
-	if req.Email != "" {
-		b.Claim(emailClaim, req.Email)
+
+	privKey, err := jwk.ParseKey(kp.PrivatePEM, jwk.WithX509(true))
+	if err != nil {
+		return "", fmt.Errorf("keys: parse private key (kid=%s): %w", kp.Kid, err)
 	}
-	if req.Nonce != "" {
-		b.Claim(nonceClaim, req.Nonce)
+	// jwx copies kid+alg from the signing key into the JWS protected header,
+	// which is what lets relying parties pick the right JWKS entry.
+	if err := privKey.Set(jwk.KeyIDKey, kp.Kid); err != nil {
+		return "", fmt.Errorf("keys: set kid: %w", err)
+	}
+	if err := privKey.Set(jwk.AlgorithmKey, jwa.RS256()); err != nil {
+		return "", fmt.Errorf("keys: set alg: %w", err)
 	}
 
 	tok, err := b.Build()
 	if err != nil {
-		return "", "", fmt.Errorf("keys: build token: %w", err)
+		return "", fmt.Errorf("keys: build token: %w", err)
 	}
 
-	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256(), privKey))
-	if err != nil {
-		return "", "", fmt.Errorf("keys: sign token: %w", err)
+	hdr := jws.NewHeaders()
+	if err := hdr.Set(jws.TypeKey, typ); err != nil {
+		return "", fmt.Errorf("keys: set typ: %w", err)
 	}
-	return string(signed), jti, nil
+	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256(), privKey, jws.WithProtectedHeaders(hdr)))
+	if err != nil {
+		return "", fmt.Errorf("keys: sign token: %w", err)
+	}
+	return string(signed), nil
 }

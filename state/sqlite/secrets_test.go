@@ -56,7 +56,7 @@ func seedEverySecret(t *testing.T, s *Store) map[string]string {
 			CreatedAt: now, ExpiresAt: now.Add(time.Minute),
 		}))
 	}
-	_, err = s.ConsumeAuthCode(ctx, secrets["consumed auth code"])
+	_, err = s.ConsumeAuthCode(ctx, secrets["consumed auth code"], "fam", now)
 	require.NoError(t, err)
 
 	for i, key := range []string{"live device code", "consumed device code"} {
@@ -82,7 +82,7 @@ func (s *StoreSuite) TestSecretsAreStoredAsSHA256() {
 	s.Require().NoError(s.store.db.QueryRowContext(s.ctx,
 		`SELECT token_hash FROM refresh_tokens WHERE consumed_at IS NULL`).Scan(&got))
 	s.Equal(sha256Hex(secrets["live refresh token"]), got)
-	s.Require().NoError(s.store.db.QueryRowContext(s.ctx, `SELECT code_hash FROM auth_codes`).Scan(&got))
+	s.Require().NoError(s.store.db.QueryRowContext(s.ctx, `SELECT code_hash FROM auth_codes WHERE consumed_at IS NULL`).Scan(&got))
 	s.Equal(sha256Hex(secrets["live auth code"]), got)
 	s.Require().NoError(s.store.db.QueryRowContext(s.ctx, `SELECT device_code_hash FROM device_codes`).Scan(&got))
 	s.Equal(sha256Hex(secrets["live device code"]), got)
@@ -110,7 +110,7 @@ func (s *StoreSuite) TestLookupsMatchRowsByHash() {
 		 VALUES (?, 'ui', 'https://x/cb', 'bob@example.com', 'openid', 'c', 'S256', ?, ?)`,
 		sha256Hex("code-by-hash"), now, now.Add(time.Minute))
 	s.Require().NoError(err)
-	ac, err := s.store.ConsumeAuthCode(s.ctx, "code-by-hash")
+	ac, err := s.store.ConsumeAuthCode(s.ctx, "code-by-hash", "fam", time.Now())
 	s.Require().NoError(err)
 	s.Equal("code-by-hash", ac.Code)
 }
@@ -127,7 +127,7 @@ func (s *StoreSuite) TestLookupByUserCodeOmitsDeviceCode() {
 
 // Errors may reach a log line; they must not carry the secret.
 func (s *StoreSuite) TestNotFoundErrorsOmitTheSecret() {
-	_, err := s.store.ConsumeAuthCode(s.ctx, "code-in-error")
+	_, err := s.store.ConsumeAuthCode(s.ctx, "code-in-error", "fam", time.Now())
 	s.Require().Error(err)
 	s.NotContains(err.Error(), "code-in-error")
 	_, err = s.store.ConsumeDeviceCode(s.ctx, "dc-in-error")

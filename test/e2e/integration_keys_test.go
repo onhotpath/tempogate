@@ -125,6 +125,8 @@ func TestAdminKeyMintAndRevoke(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []any{"temporal-system:admin"}, perms,
 		"namespace+role must concatenate into the permissions claim Temporal's default ClaimMapper consumes")
+	aud, _ := parsed.Audience()
+	require.Equal(t, []string{temporalAudience}, aud, "an integration key is an access token for the Temporal audience")
 
 	// --- the JWT authenticates a real gRPC call against temporal-frontend ---
 	client, conn := dialFrontend(t, st.frontendAddr)

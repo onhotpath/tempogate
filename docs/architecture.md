@@ -31,13 +31,15 @@ Temporal and an OAuth2 client of Google.
 2. tempogate federates the sign-in to Google (the authorization-code flow,
    server-side), then applies its email-domain gate to Google's verified
    email.
-3. tempogate mints a short-lived JWT — `aud` = the calling client, OIDC
-   `nonce` round-tripped, a `permissions` claim — and completes the OIDC
-   flow back to the UI.
-4. The browser calls the Temporal gRPC frontend with that JWT. The
+3. tempogate mints two JWTs and completes the OIDC flow back to the UI:
+   a short-lived access token (`aud` = the Temporal audience, a
+   `permissions` claim) and a separate ID token for the UI's login (`aud` =
+   the calling client, OIDC `nonce` round-tripped, no permissions).
+4. The browser calls the Temporal gRPC frontend with the access token. The
    frontend's **stock** default authorizer fetches tempogate's
    `/.well-known/jwks.json`, verifies the signature, and reads the
-   `permissions` claim. No Temporal-side custom code.
+   `permissions` claim. No Temporal-side custom code. The ID token grants
+   nothing there. See [Access tokens and ID tokens](configuration.md#access-tokens-and-id-tokens).
 
 `tempogate login` runs the same OIDC flow from a laptop over an ephemeral
 `127.0.0.1` loopback port, giving users and unattended machines the same

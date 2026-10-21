@@ -115,7 +115,7 @@ the client have a registered secret?**
   A public client sends its `client_id` (OAuth 2.1 §4.3.1); a missing or unknown one is `401 invalid_client`.
 * A refresh token is bound to the client it was issued to (RFC 9700 §4.14).
   Presented by any other client, even an authenticated one, it fails with `invalid_grant`.
-  The minted token keeps that client as its `aud`.
+  The minted tokens stay issued to that client: the access token's `client_id` and the ID token's `aud`.
   As with codes, client authentication and the binding check run before the token is consumed, so a rejected attempt does not burn the real client's refresh token.
 
 Net properties:
@@ -152,15 +152,20 @@ PKCE decision and with no security downside:
 * **`nonce` round-trip (OIDC Core §2).** If a relying party sends `nonce` at
   `/authorize`, the provider MUST return it in the ID token. tempogate now
   carries `nonce` from the authorization request through the authorization
-  code into the minted token's `nonce` claim. It is omitted on the
+  code into the ID token's `nonce` claim. It is omitted on the
   refresh-token path, where OIDC does not bind a nonce. Not echoing a
   client-supplied nonce is a spec violation that breaks *any* conformant OIDC
   client, not just one.
 * **`aud` = requesting `client_id` (OIDC Core).** An ID token's `aud` must
   contain the client it was issued to. tempogate stamps the requesting
-  `client_id` as the audience. Temporal's frontend authorizer does not
-  enforce `aud`, so this is additive for the gRPC path while making the ID
-  token valid for OIDC clients that verify it.
+  `client_id` as the ID token's audience. The ID token is a separate JWT
+  from the access token and carries no `permissions`, so it is valid for
+  OIDC clients that verify it but grants nothing at Temporal; the access
+  token carries the Temporal audience instead (see
+  [configuration.md](configuration.md#access-tokens-and-id-tokens)).
+* **`code_verifier` format (RFC 7636 §4.1).** A verifier must be 43-128
+  characters from the unreserved set; anything else is refused with
+  `invalid_request` before the code is consumed.
 
 ## Security analysis
 

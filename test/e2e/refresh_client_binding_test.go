@@ -140,8 +140,9 @@ func (r *refresher) postToken(form url.Values, basicID, basicSecret string) *htt
 	return resp
 }
 
-// refreshOK asserts a successful token response whose aud is wantAud and
-// returns the rotated refresh token.
+// refreshOK asserts a successful token response issued to client wantAud
+// (the access token's client_id, the ID token's aud) and returns the rotated
+// refresh token.
 func (r *refresher) refreshOK(resp *http.Response, wantAud string) string {
 	r.t.Helper()
 	defer func() { _ = resp.Body.Close() }()
@@ -149,12 +150,17 @@ func (r *refresher) refreshOK(resp *http.Response, wantAud string) string {
 	var body struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
 	}
 	require.NoError(r.t, json.NewDecoder(resp.Body).Decode(&body))
 	parsed, err := jwt.ParseInsecure([]byte(body.AccessToken))
 	require.NoError(r.t, err)
-	aud, _ := parsed.Audience()
-	require.Equal(r.t, []string{wantAud}, aud, "aud must stay the client the refresh token was issued to")
+	clientIDClaim, _ := parsed.Field("client_id")
+	require.Equal(r.t, wantAud, clientIDClaim, "the token must stay issued to the client the refresh token was issued to")
+	id, err := jwt.ParseInsecure([]byte(body.IDToken))
+	require.NoError(r.t, err)
+	aud, _ := id.Audience()
+	require.Equal(r.t, []string{wantAud}, aud, "the ID token's aud must stay that client")
 	require.NotEmpty(r.t, body.RefreshToken)
 	return body.RefreshToken
 }

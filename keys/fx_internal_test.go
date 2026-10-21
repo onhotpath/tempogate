@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -78,5 +79,36 @@ func TestWrongLengthKeyFailsEveryOperation(t *testing.T) {
 	_, err := k.Generate(ctx, false)
 	require.Error(t, err)
 	_, err = k.EncryptStored(ctx, &rewritableStore{})
+	require.Error(t, err)
+}
+
+// TestSignerAndVerifierShareTheAccessAudience: what the Signer stamps on
+// access tokens (OIDC_ACCESS_TOKEN_AUDIENCE) is exactly what the Verifier
+// requires, and an empty audience is a startup error rather than tokens with
+// no aud for Temporal to check.
+func TestSignerAndVerifierShareTheAccessAudience(t *testing.T) {
+	k := testKeys(&rewritableStore{}, nil)
+	require.NoError(t, k.Init(context.Background()))
+
+	signer, err := newSigner(signerParams{Keys: k, Issuer: "https://tg.test", AccessTokenAudience: "temporal-prod"})
+	require.NoError(t, err)
+	v, err := newVerifier(verifierParams{Keys: k, Issuer: "https://tg.test", AccessTokenAudience: "temporal-prod"})
+	require.NoError(t, err)
+
+	signed, _, err := signer.Mint(context.Background(), MintRequest{Subject: "alice", TTL: time.Minute})
+	require.NoError(t, err)
+	tok, err := v.Verify(context.Background(), signed)
+	require.NoError(t, err)
+	aud, _ := tok.Audience()
+	require.Equal(t, []string{"temporal-prod"}, aud)
+
+	other, err := newVerifier(verifierParams{Keys: k, Issuer: "https://tg.test", AccessTokenAudience: "elsewhere"})
+	require.NoError(t, err)
+	_, err = other.Verify(context.Background(), signed)
+	require.Error(t, err)
+
+	_, err = newSigner(signerParams{Keys: k, Issuer: "https://tg.test"})
+	require.Error(t, err)
+	_, err = newVerifier(verifierParams{Keys: k, Issuer: "https://tg.test"})
 	require.Error(t, err)
 }

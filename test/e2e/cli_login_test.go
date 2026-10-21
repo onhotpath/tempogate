@@ -253,6 +253,8 @@ func assertTempogateJWT(t *testing.T, raw string) {
 	require.Equal(t, tempogateIssuer, iss)
 	sub, _ := parsed.Subject()
 	require.Equal(t, allowedEmail, sub)
+	aud, _ := parsed.Audience()
+	require.Equal(t, []string{temporalAudience}, aud, "the CLI holds the access token, for the Temporal audience")
 	perms, ok := parsed.Field("permissions")
 	require.True(t, ok)
 	require.Equal(t, []any{"temporal-system:admin"}, perms,

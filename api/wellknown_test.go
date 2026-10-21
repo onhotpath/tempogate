@@ -127,6 +127,7 @@ func (s *WellKnownSuite) TestOpenIDConfigurationIsFullyPopulated() {
 		ScopesSupported                  []string `json:"scopes_supported"`
 		SubjectTypesSupported            []string `json:"subject_types_supported"`
 		IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
+		AuthorizationResponseISS         bool     `json:"authorization_response_iss_parameter_supported"`
 	}
 	s.Require().NoError(json.NewDecoder(resp.Body).Decode(&doc))
 
@@ -144,7 +145,10 @@ func (s *WellKnownSuite) TestOpenIDConfigurationIsFullyPopulated() {
 	// so or a conformant client never tries the device flow.
 	s.Equal([]string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"}, doc.GrantTypesSupported)
 	s.Equal([]string{"S256"}, doc.CodeChallengeMethodsSupported)
-	s.Equal([]string{"openid", "profile", "email"}, doc.ScopesSupported)
+	// No profile claims are issued, so the profile scope is not advertised.
+	s.Equal([]string{"openid", "email"}, doc.ScopesSupported)
+	// RFC 9207: authorization responses carry iss.
+	s.True(doc.AuthorizationResponseISS)
 	s.Equal([]string{"public"}, doc.SubjectTypesSupported)
 	s.Equal([]string{"RS256"}, doc.IDTokenSigningAlgValuesSupported)
 }

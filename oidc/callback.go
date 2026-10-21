@@ -67,6 +67,7 @@ type Upstream interface {
 // authorization code — then redirects the browser back to the downstream
 // client.
 type Callback struct {
+	issuer         string
 	store          CallbackStore
 	upstream       Upstream
 	allowedDomains map[string]struct{}
@@ -80,6 +81,13 @@ type CallbackOption func(*Callback)
 // request expiry check. For tests.
 func WithCallbackClock(now func() time.Time) CallbackOption {
 	return func(c *Callback) { c.now = now }
+}
+
+// WithCallbackIssuer sets the iss parameter added to every authorization
+// response (RFC 9207). It must be the issuer the discovery document
+// advertises.
+func WithCallbackIssuer(issuer string) CallbackOption {
+	return func(c *Callback) { c.issuer = strings.TrimRight(issuer, "/") }
 }
 
 // WithCodeGenerator swaps the authorization-code token generator. For tests.
@@ -131,10 +139,9 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 	}
 
 	if in.UpstreamError != "" {
-		return redirectTo(ar.RedirectURI, url.Values{
+		return c.redirect(ar, url.Values{
 			"error":             {in.UpstreamError},
 			"error_description": {in.UpstreamErrorReason},
-			"state":             {ar.ClientState},
 		})
 	}
 
@@ -172,10 +179,7 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, fmt.Errorf("oidc: persist auth code: %w", err)
 	}
 
-	return redirectTo(ar.RedirectURI, url.Values{
-		"code":  {code},
-		"state": {ar.ClientState},
-	})
+	return c.redirect(ar, url.Values{"code": {code}})
 }
 
 // emailDomainAllowed is the OIDC_ALLOWED_DOMAINS gate, shared by the
@@ -190,22 +194,14 @@ func emailDomainAllowed(allowed map[string]struct{}, email string) bool {
 	return ok
 }
 
-// redirectTo merges params into the client's redirect URI and returns a 302.
-// The URI was matched exactly against the client's registration at
-// /authorize; the Location is rebuilt from the parsed url.URL with the query
-// set through url.Values rather than by string concatenation, so a parameter
-// value can never change the scheme, host or path the browser is sent to.
-func redirectTo(redirectURI string, params url.Values) (*callbackOutput, error) {
-	u, err := url.Parse(redirectURI)
+// redirect sends the authorization response back to the client that made
+// the request.
+func (c *Callback) redirect(ar AuthRequest, params url.Values) (*callbackOutput, error) {
+	loc, err := authorizationResponse(ar.RedirectURI, c.issuer, ar.ClientState, params)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: parse redirect_uri: %w", err)
+		return nil, err
 	}
-	q := u.Query()
-	for k, vs := range params {
-		q.Set(k, vs[0])
-	}
-	u.RawQuery = q.Encode()
-	return &callbackOutput{Status: http.StatusFound, Location: u.String()}, nil
+	return &callbackOutput{Status: http.StatusFound, Location: loc}, nil
 }
 
 func forbiddenPage(email string) *callbackOutput {

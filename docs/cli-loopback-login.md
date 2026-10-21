@@ -147,7 +147,7 @@ export TEMPORAL_AUTH_TOKEN=$(tempogate token)
   refresh token at `<issuer>/token` (`grant_type=refresh_token`), rewrites
   `token.json` with the rotated pair, and prints the fresh access token.
   The exchange presents the stored `client_id`, because the issuer only honours a refresh token for the client it was issued to.
-  A `token.json` written by an older CLI has no `client_id`; the CLI then uses the access token's `aud`, which tempogate sets to the requesting client.
+  A `token.json` written by an older CLI has no `client_id`; the CLI then reads it from the access token's `client_id` claim, or from its `aud` for tokens minted before access tokens carried the Temporal audience.
 
 Failure modes are explicit, never silent:
 

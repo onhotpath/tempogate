@@ -135,6 +135,9 @@ func (s *RefreshSuite) TestLegacyTokenFileFallsBackToAccessTokenAudience() {
 	}{
 		{"aud array", `{"sub":"alice","aud":["tempogate-cli"]}`},
 		{"aud string", `{"sub":"alice","aud":"tempogate-cli"}`},
+		// Access tokens now carry the Temporal audience and name their
+		// client in client_id, which wins.
+		{"client_id claim", `{"sub":"alice","aud":["temporal"],"client_id":"tempogate-cli"}`},
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {

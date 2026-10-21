@@ -66,7 +66,9 @@ Wired and exercised end to end:
 - PKCE mandatory by default, with a narrow secret-gated carve-out for
   confidential clients such as the Temporal Web UI — see
   [docs/pkce-and-confidential-clients.md](docs/pkce-and-confidential-clients.md)
-- OIDC Core `nonce` round-trip and `aud` stamping
+- Separate access and ID tokens: the access token carries the Temporal
+  audience and `permissions`; the ID token (`aud` = client, OIDC `nonce`)
+  grants nothing at Temporal
 - Multi-arch distroless image and a Helm chart
 
 Authorization is currently flat: every admitted identity receives
@@ -299,7 +301,8 @@ separator.
 | `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri` allowlist of **exact** redirect URIs (repeat an id for several). Loopback `http://127.0.0.1/<path>` entries match any port. Register the CLI as `tempogate-cli:http://127.0.0.1/callback` and the device CLI as `tempogate-device:` |
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
 | `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in and again on every refresh |
-| `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access/id token |
+| `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access token (ID tokens live 5 minutes) |
+| `OIDC_ACCESS_TOKEN_AUDIENCE` | No | `temporal` | `aud` of every access token and integration key; set Temporal's `global.authorization.audience` (v1.29.0+) to match. See [Access tokens and ID tokens](docs/configuration.md#access-tokens-and-id-tokens) |
 | `OIDC_REFRESH_TOKEN_TTL` | No | `168h` (7 days) | Idle lifetime of each rotated refresh token |
 | `OIDC_REFRESH_MAX_LIFETIME` | No | `720h` (30 days) | Absolute session lifetime from sign-in; rotation never extends it. See [Sessions and refresh tokens](#sessions-and-refresh-tokens) |
 | `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |

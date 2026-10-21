@@ -3,8 +3,9 @@
 // Package e2e is the acceptance proof for the Temporal Web UI SSO story: a
 // real temporalio/ui container, configured only via TEMPORAL_AUTH_* env vars,
 // federates an OIDC login through a tempogate container to a mock Google IdP,
-// receives a tempogate-signed JWT, and that JWT authenticates a gRPC call to a
-// real temporal-frontend whose default authorizer is JWKS-backed by tempogate.
+// receives a tempogate-signed access token and a separate ID token, and the
+// access token authenticates calls to a real temporal-frontend whose default
+// authorizer is JWKS-backed by tempogate, while the ID token is refused.
 //
 // Everything runs as containers on one Docker network so service-to-service
 // and browser-to-service traffic share the same hostnames; the test process
@@ -59,8 +60,11 @@ const (
 	deniedEmail  = "intruder@evil.test"
 
 	tempogateIssuer = "http://tempogate:8000"
-	uiCallback      = "http://temporal-ui:8080/auth/sso/callback"
-	mockIssuer      = "http://mockgoogle:8080"
+	// temporalAudience is OIDC_ACCESS_TOKEN_AUDIENCE's default: the aud of
+	// every access token and integration key.
+	temporalAudience = "temporal"
+	uiCallback       = "http://temporal-ui:8080/auth/sso/callback"
+	mockIssuer       = "http://mockgoogle:8080"
 )
 
 func imageOr(env, def string) string {
@@ -88,6 +92,7 @@ func builtImageSource(envVar, dockerfile, root string) (string, testcontainers.F
 // else addresses peers by Docker network alias.
 type stack struct {
 	mockBaseURL  string // http://host:port to set the mock identity
+	tempogateURL string // http://host:port of tempogate's public listener
 	uiInternal   string // http://temporal-ui:8080 (browser, on the network)
 	frontendAddr string // host:port for the gRPC client
 	chromeWS     string // DevTools websocket for chromedp
@@ -100,35 +105,61 @@ func TestWebUISSO(t *testing.T) {
 	ctx := context.Background()
 	st := setupStack(ctx, t)
 
-	t.Run("happy path: SSO mints an admin JWT ready on first load, and gRPC ListNamespaces succeeds", func(t *testing.T) {
+	t.Run("happy path: the UI calls Temporal with the access token; the ID token grants nothing", func(t *testing.T) {
 		st.setIdentity(t, allowedEmail, true)
-		jwtStr := st.driveLoginAndExtractJWT(ctx, t)
+		login := st.driveLogin(ctx, t)
 
-		// (3) The JWT is ready on the first authenticated load: it was in the
-		// session cookie the moment the browser landed back, with full perms.
-		tok, err := jwt.ParseInsecure([]byte(jwtStr))
-		require.NoError(t, err, "session cookie must carry a parseable tempogate JWT")
-
-		iss, _ := tok.Issuer()
+		// (1) The SPA's bearer is the access token: Temporal UI sends
+		// `Authorization: Bearer <access_token>` and the ID token only as
+		// `Authorization-Extras` (temporalio/ui v2.32.0
+		// src/lib/utilities/request-from-api.ts withAuth), which Temporal's
+		// default ClaimMapper ignores.
+		access, err := jwt.ParseInsecure([]byte(login.accessToken))
+		require.NoError(t, err, "the SPA's bearer must be a parseable tempogate JWT")
+		iss, _ := access.Issuer()
 		require.Equal(t, tempogateIssuer, iss)
-		aud, _ := tok.Audience()
-		require.Contains(t, aud, clientID, "OIDC aud must be the UI's client_id")
-		require.True(t, tok.Has("nonce"), "nonce must round-trip so the UI accepts the token")
-		perms, ok := tok.Field("permissions")
+		aud, _ := access.Audience()
+		require.Equal(t, []string{temporalAudience}, aud, "the access token is for Temporal, not the UI")
+		perms, ok := access.Field("permissions")
 		require.True(t, ok)
 		require.Equal(t, []any{"temporal-system:admin"}, perms, "flat Hour-0 authz: System Admin (Temporal's default ClaimMapper has no namespace wildcard)")
-		sub, _ := tok.Subject()
+		clientIDClaim, _ := access.Field("client_id")
+		require.Equal(t, clientID, clientIDClaim)
+		sub, _ := access.Subject()
 		require.Equal(t, allowedEmail, sub)
 
-		// (1) The same JWT authenticates a real gRPC call to temporal-frontend,
-		// whose default authorizer is JWKS-backed by tempogate.
+		// (2) The UI's proxied calls to temporal-frontend succeeded with it.
+		require.NotEmpty(t, login.okTemporalCalls, "no UI call to temporal-frontend succeeded")
+
+		// (3) The ID token is the UI's proof of login: aud = the UI's
+		// client_id, nonce round-tripped (ui-server's go-oidc verifier
+		// checks both), and no permissions.
+		require.NotEmpty(t, login.idToken, "the SPA must hold the ID token (Authorization-Extras)")
+		require.NotEqual(t, login.accessToken, login.idToken)
+		id, err := jwt.ParseInsecure([]byte(login.idToken))
+		require.NoError(t, err)
+		aud, _ = id.Audience()
+		require.Equal(t, []string{clientID}, aud, "OIDC aud must be the UI's client_id")
+		require.True(t, id.Has("nonce"), "nonce must round-trip so the UI accepts the token")
+		require.False(t, id.Has("permissions"), "the ID token must grant nothing")
+
+		// (4) The access token authenticates a gRPC call to temporal-frontend.
 		client, conn := dialFrontend(t, st.frontendAddr)
 		defer conn.Close()
 
-		authed := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+jwtStr)
+		authed := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+login.accessToken)
 		resp, err := client.ListNamespaces(authed, &workflowservice.ListNamespacesRequest{PageSize: 10})
-		require.NoError(t, err, "tempogate JWT must pass Temporal's default ClaimMapper")
+		require.NoError(t, err, "tempogate access token must pass Temporal's default ClaimMapper")
 		require.NotEmpty(t, resp.GetNamespaces(), "admin token should see namespaces")
+
+		// (5) NEGATIVE: the ID token presented as a bearer is rejected, for
+		// a cluster-scoped and a namespace-scoped API alike. Temporal's
+		// default ClaimMapper grants roles only from `permissions`.
+		asBearer := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+login.idToken)
+		_, err = client.ListNamespaces(asBearer, &workflowservice.ListNamespacesRequest{PageSize: 10})
+		require.Equal(t, codes.PermissionDenied, status.Code(err), "ID token as bearer must be refused: %v", err)
+		_, err = client.DescribeNamespace(asBearer, &workflowservice.DescribeNamespaceRequest{Namespace: "temporal-system"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err), "ID token as bearer must be refused: %v", err)
 
 		// Authorization is genuinely enforced: no token is rejected.
 		_, err = client.ListNamespaces(ctx, &workflowservice.ListNamespacesRequest{PageSize: 10})
@@ -137,6 +168,10 @@ func TestWebUISSO(t *testing.T) {
 			[]codes.Code{codes.Unauthenticated, codes.PermissionDenied},
 			status.Code(err),
 			"unexpected status: %v", err)
+
+		// (6) /userinfo takes the access token and refuses the ID token.
+		require.Equal(t, http.StatusOK, userinfoStatus(t, st.tempogateURL, login.accessToken))
+		require.Equal(t, http.StatusUnauthorized, userinfoStatus(t, st.tempogateURL, login.idToken))
 	})
 
 	t.Run("disallowed domain bounces to 403", func(t *testing.T) {
@@ -343,6 +378,7 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 
 	return &stack{
 		mockBaseURL:  mockBase,
+		tempogateURL: mappedHTTP(ctx, t, tempogate, "8000"),
 		uiInternal:   "http://temporal-ui:8080",
 		frontendAddr: mappedAddr(ctx, t, temporal, "7233"),
 		chromeWS:     devtoolsWS(ctx, t, chrome),
@@ -351,21 +387,29 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 
 // ---------- browser flow ----------
 
-// driveLoginAndExtractJWT runs the full SSO chain in headless Chrome and
-// returns the tempogate JWT the Temporal UI's SPA carries on its
-// authenticated API calls — the same token the session was minted from.
-func (s *stack) driveLoginAndExtractJWT(ctx context.Context, t *testing.T) string {
+// uiLogin is what the Temporal UI's SPA holds after SSO, as observed on its
+// own /api/v1 traffic.
+type uiLogin struct {
+	accessToken     string   // Authorization: Bearer
+	idToken         string   // Authorization-Extras
+	okTemporalCalls []string // /api/v1 calls proxied to temporal-frontend that returned 200
+}
+
+// driveLogin runs the full SSO chain in headless Chrome and returns the
+// tokens the Temporal UI's SPA carries on its authenticated API calls once
+// one of those calls, proxied to temporal-frontend, has succeeded.
+func (s *stack) driveLogin(ctx context.Context, t *testing.T) uiLogin {
 	t.Helper()
 	browserCtx, cancel := s.browser(ctx, t)
 	defer cancel()
 
-	// The UI hands the token to its SPA via a short-lived (60s), SPA-consumed
+	// The UI hands the tokens to its SPA via a short-lived (60s), SPA-consumed
 	// user* cookie — racy to read, and cross-origin target swaps make a
-	// Set-Cookie capture flaky. After login the SPA instead attaches the
-	// token as `Authorization: Bearer <jwt>` to every /api/v1 call (ui-server
-	// requires that header), all same-origin on the settled page. Capturing
-	// that outgoing request header is deterministic and lifetime-independent.
-	bc := &bearerCatcher{done: make(chan string, 1)}
+	// Set-Cookie capture flaky. After login the SPA instead attaches them
+	// to every /api/v1 call (ui-server requires the Authorization header),
+	// all same-origin on the settled page. Capturing those outgoing request
+	// headers and the responses is deterministic and lifetime-independent.
+	bc := newAPICatcher()
 	chromedp.ListenTarget(browserCtx, bc.onEvent)
 
 	err := chromedp.Run(browserCtx,
@@ -378,11 +422,13 @@ func (s *stack) driveLoginAndExtractJWT(ctx context.Context, t *testing.T) strin
 	require.NoError(t, err, "SSO browser flow (consent)")
 
 	select {
-	case jwtStr := <-bc.done:
-		return jwtStr
+	case <-bc.ok:
+		return bc.login()
 	case <-time.After(90 * time.Second):
-		t.Fatal("e2e: SPA never sent an authenticated /api/v1 request after SSO")
-		return ""
+		l := bc.login()
+		t.Fatalf("e2e: no authenticated UI call to temporal-frontend succeeded after SSO (bearer seen: %t, statuses: %v)",
+			l.accessToken != "", bc.statusLog())
+		return uiLogin{}
 	}
 }
 
@@ -415,34 +461,70 @@ func (s *stack) browser(ctx context.Context, t *testing.T) (context.Context, con
 	return browserCtx, func() { cancelBrowser(); cancelAlloc() }
 }
 
-// bearerCatcher captures the tempogate JWT the Temporal UI's SPA attaches as
-// `Authorization: Bearer <jwt>` to its /api/v1 calls after login. ui-server's
-// ValidateAuthHeaderExists mandates that header, so a 200 from /api/v1 means
-// the SPA holds the token; intercepting the outgoing request header is
-// deterministic and immune to the handoff cookie's 60s lifetime / SPA
-// consumption. These XHRs are same-origin on the settled post-login page, so
-// the listener is not affected by the earlier cross-origin target swaps.
-type bearerCatcher struct {
-	done chan string
-	once sync.Once
+// apiCatcher records the tokens the Temporal UI's SPA attaches to its
+// /api/v1 calls after login and the outcome of those calls. ui-server's
+// ValidateAuthHeaderExists mandates the Authorization header, and every
+// /api/v1 path other than /settings is proxied to temporal-frontend, so a 200
+// there is a Temporal call authorized by the SPA's bearer. These XHRs are
+// same-origin on the settled post-login page, so the listener is not
+// affected by the earlier cross-origin target swaps.
+type apiCatcher struct {
+	mu       sync.Mutex
+	access   string
+	idToken  string
+	urls     map[network.RequestID]string
+	statuses []string
+	okCalls  []string
+	ok       chan struct{}
+	once     sync.Once
 }
 
-func (bc *bearerCatcher) onEvent(ev interface{}) {
-	e, ok := ev.(*network.EventRequestWillBeSent)
-	if !ok || e.Request == nil || !strings.Contains(e.Request.URL, "/api/v1/") {
-		return
-	}
-	const prefix = "Bearer "
-	for k, v := range e.Request.Headers {
-		if !strings.EqualFold(k, "authorization") {
-			continue
+func newAPICatcher() *apiCatcher {
+	return &apiCatcher{urls: map[network.RequestID]string{}, ok: make(chan struct{})}
+}
+
+func (c *apiCatcher) onEvent(ev interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch e := ev.(type) {
+	case *network.EventRequestWillBeSent:
+		if e.Request == nil || !strings.Contains(e.Request.URL, "/api/v1/") {
+			return
 		}
-		s, _ := v.(string)
-		if len(s) > len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
-			tok := strings.TrimSpace(s[len(prefix):])
-			bc.once.Do(func() { bc.done <- tok })
+		c.urls[e.RequestID] = e.Request.URL
+		const prefix = "Bearer "
+		for k, v := range e.Request.Headers {
+			s, _ := v.(string)
+			switch {
+			case strings.EqualFold(k, "authorization") && len(s) > len(prefix) && strings.EqualFold(s[:len(prefix)], prefix):
+				c.access = strings.TrimSpace(s[len(prefix):])
+			case strings.EqualFold(k, "authorization-extras") && s != "":
+				c.idToken = s
+			}
+		}
+	case *network.EventResponseReceived:
+		u, ok := c.urls[e.RequestID]
+		if !ok || e.Response == nil || strings.Contains(u, "/api/v1/settings") {
+			return
+		}
+		c.statuses = append(c.statuses, fmt.Sprintf("%d %s", e.Response.Status, u))
+		if e.Response.Status == http.StatusOK && c.access != "" {
+			c.okCalls = append(c.okCalls, u)
+			c.once.Do(func() { close(c.ok) })
 		}
 	}
+}
+
+func (c *apiCatcher) login() uiLogin {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return uiLogin{accessToken: c.access, idToken: c.idToken, okTemporalCalls: append([]string(nil), c.okCalls...)}
+}
+
+func (c *apiCatcher) statusLog() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.statuses...)
 }
 
 // ---------- helpers ----------

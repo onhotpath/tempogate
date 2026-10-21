@@ -131,6 +131,9 @@ func (a *Authorizer) Register(api huma.API) {
 }
 
 func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorizeOutput, error) {
+	// Size caps come first and are answered directly, even once the
+	// redirect URI is known: an oversized state would otherwise be echoed
+	// back in the redirect.
 	if err := checkParamLengths(
 		paramCap{"client_id", in.ClientID, maxClientIDLen},
 		paramCap{"redirect_uri", in.RedirectURI, maxRedirectURILen},
@@ -139,12 +142,6 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 		paramCap{"nonce", in.Nonce, maxNonceLen},
 	); err != nil {
 		return nil, err
-	}
-	if in.CodeChallenge != "" && !validCodeChallenge(in.CodeChallenge) {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge must be 43 base64url characters (S256)")
-	}
-	if in.ResponseType != "code" {
-		return nil, oauthErr(http.StatusBadRequest, "unsupported_response_type", "only response_type=code is supported")
 	}
 	if err := a.clients.Validate(in.ClientID, in.RedirectURI); err != nil {
 		if errors.Is(err, ErrUnknownClient) {
@@ -157,22 +154,18 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 		}
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "redirect_uri not registered for this client")
 	}
-	if !scopeContains(in.Scope, "openid") {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_scope", "scope must include openid")
-	}
-	// PKCE posture (see docs/pkce-and-confidential-clients.md): mandatory for
-	// every public client, exactly as OAuth 2.1 / RFC 9700 require. The sole
-	// relaxation is a registered *confidential* client (one with a secret),
-	// which may omit code_challenge because it instead authenticates that
-	// secret at /token. PKCE is still enforced for a confidential client that
-	// does send a challenge — the carve-out only widens, never weakens, when
-	// a challenge is absent.
-	if in.CodeChallenge == "" {
-		if !a.clients.IsConfidential(in.ClientID) {
-			return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge is required (PKCE)")
+	// From here on the redirect URI is the client's own, so errors go back
+	// to the client rather than dead-ending the user agent (RFC 6749
+	// §4.1.2.1).
+	if oe := a.check(in); oe != nil {
+		loc, err := authorizationResponse(in.RedirectURI, a.issuer, in.State, url.Values{
+			"error":             {oe.Code},
+			"error_description": {oe.Desc},
+		})
+		if err != nil {
+			return nil, err
 		}
-	} else if in.CodeChallengeMethod != "S256" {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge_method must be S256")
+		return &authorizeOutput{Status: http.StatusFound, Location: loc}, nil
 	}
 
 	internalState, err := a.newState()
@@ -202,6 +195,64 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 		return nil, fmt.Errorf("oidc: build upstream url: %w", err)
 	}
 	return &authorizeOutput{Status: http.StatusFound, Location: loc}, nil
+}
+
+// check validates the parts of an authorization request that are reported
+// to the client through its redirect URI.
+func (a *Authorizer) check(in *authorizeInput) *oauthError {
+	if in.ResponseType != "code" {
+		return oauthErr(http.StatusBadRequest, "unsupported_response_type", "only response_type=code is supported")
+	}
+	if !scopeContains(in.Scope, "openid") {
+		return oauthErr(http.StatusBadRequest, "invalid_scope", "scope must include openid")
+	}
+	// PKCE posture (see docs/pkce-and-confidential-clients.md): mandatory for
+	// every public client, exactly as OAuth 2.1 / RFC 9700 require. The sole
+	// relaxation is a registered *confidential* client (one with a secret),
+	// which may omit code_challenge because it instead authenticates that
+	// secret at /token. PKCE is still enforced for a confidential client that
+	// does send a challenge - the carve-out only widens, never weakens, when
+	// a challenge is absent.
+	if in.CodeChallenge == "" {
+		if !a.clients.IsConfidential(in.ClientID) {
+			return oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge is required (PKCE)")
+		}
+		return nil
+	}
+	if !validCodeChallenge(in.CodeChallenge) {
+		return oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge must be 43 base64url characters (S256)")
+	}
+	if in.CodeChallengeMethod != "S256" {
+		return oauthErr(http.StatusBadRequest, "invalid_request", "code_challenge_method must be S256")
+	}
+	return nil
+}
+
+// authorizationResponse builds the Location of an authorization response,
+// success or error, to the client's validated redirect URI: params, the
+// client's state when it sent one (RFC 6749 §4.1.2), and iss (RFC 9207) so
+// the client can tell which authorization server answered. The URI was
+// matched exactly against the client's registration at /authorize; the
+// Location is rebuilt from the parsed url.URL with the query set through
+// url.Values rather than by string concatenation, so a parameter value can
+// never change the scheme, host or path the browser is sent to.
+func authorizationResponse(redirectURI, issuer, state string, params url.Values) (string, error) {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return "", fmt.Errorf("oidc: parse redirect_uri: %w", err)
+	}
+	q := u.Query()
+	for k, vs := range params {
+		q.Set(k, vs[0])
+	}
+	if state != "" {
+		q.Set("state", state)
+	}
+	if issuer != "" {
+		q.Set("iss", issuer)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func (a *Authorizer) googleURL(internalState string) (string, error) {

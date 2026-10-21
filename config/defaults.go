@@ -35,11 +35,15 @@ func defaultConfig() *Config {
 			ReaperInterval: 5 * time.Minute,
 		},
 		OIDC: OIDCConfig{
-			Issuer:             "http://127.0.0.1:8000",
-			SessionTTL:         5 * time.Minute,
-			AccessTokenTTL:     4 * time.Hour,
-			RefreshTokenTTL:    7 * 24 * time.Hour,
-			RefreshMaxLifetime: 30 * 24 * time.Hour,
+			Issuer:         "http://127.0.0.1:8000",
+			SessionTTL:     5 * time.Minute,
+			AccessTokenTTL: 4 * time.Hour,
+			// Any value works with a Temporal frontend that checks no
+			// audience (every release before v1.29.0, and later ones unless
+			// configured), so the default changes nothing for existing setups.
+			AccessTokenAudience: "temporal",
+			RefreshTokenTTL:     7 * 24 * time.Hour,
+			RefreshMaxLifetime:  30 * 24 * time.Hour,
 			Google: GoogleConfig{
 				AuthEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
 				// #nosec G101 -- public Google token endpoint URL, not a
