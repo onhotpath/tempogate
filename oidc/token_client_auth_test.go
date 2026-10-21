@@ -96,6 +96,30 @@ func (s *TokenSuite) TestFailedClientAuthDoesNotBurnCode() {
 	s.Equal(http.StatusOK, resp.StatusCode)
 }
 
+// TestBasicInvalidClientSendsWWWAuthenticate: a client that tried HTTP Basic
+// and failed gets the challenge RFC 6749 §5.2 requires with the 401, naming
+// the scheme it used. A form-body attempt gets no challenge, since the client
+// never used an HTTP authentication scheme.
+func (s *TokenSuite) TestBasicInvalidClientSendsWWWAuthenticate() {
+	s.store.putCode(s.confPKCEAuthCode("conf-1"))
+
+	f := confCodeForm()
+	f.Del("client_id")
+	f.Set("code_verifier", pkceVerifier)
+	basic := s.postBasic(f, "webui", "not-the-secret")
+	defer basic.Body.Close()
+	s.Require().Equal(http.StatusUnauthorized, basic.StatusCode)
+	s.Equal(`Basic realm="tempogate"`, basic.Header.Get("WWW-Authenticate"))
+	s.Equal("invalid_client", s.decodeOAuthError(basic))
+
+	f.Set("client_id", "webui")
+	f.Set("client_secret", "not-the-secret")
+	form := s.post(f)
+	defer form.Body.Close()
+	s.Require().Equal(http.StatusUnauthorized, form.StatusCode)
+	s.Empty(form.Header.Get("WWW-Authenticate"))
+}
+
 // TestPublicClientUnchanged: a public client still redeems with the verifier
 // alone and sends no secret.
 func (s *TokenSuite) TestPublicClientUnchanged() {

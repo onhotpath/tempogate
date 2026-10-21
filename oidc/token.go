@@ -25,6 +25,10 @@ const (
 	TokenPath    = "/token"
 	UserInfoPath = "/userinfo"
 
+	// basicRealm names the protection space in the WWW-Authenticate
+	// challenge sent when HTTP Basic client authentication fails.
+	basicRealm = "tempogate"
+
 	grantAuthorizationCode = "authorization_code"
 	grantRefreshToken      = "refresh_token"
 	// grantDeviceCode is the RFC 8628 §3.4 grant_type the CLI presents on every
@@ -196,6 +200,11 @@ func (t *Token) Register(api huma.API) {
 }
 
 func (t *Token) handle(ctx context.Context, in *tokenInput) (*tokenOutput, error) {
+	out, err := t.grant(ctx, in)
+	return out, withBasicChallenge(err, in.Authorization)
+}
+
+func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error) {
 	form, err := url.ParseQuery(string(in.RawBody))
 	if err != nil {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "malformed form body")
@@ -240,7 +249,7 @@ type AuthCodeRedemption struct {
 // RedeemAuthorizationCode validates a presented authorization code,
 // authenticates the client, consumes the code single-use, enforces PKCE when
 // the code was minted with a challenge, and returns the code's claims. No
-// HTTP shape involved — callers have already parsed their inputs. Errors are returned
+// HTTP shape involved: callers have already parsed their inputs. Errors are returned
 // as OAuth2-shaped huma.StatusErrors via oauthErr so the public /token
 // handler can propagate them verbatim; in-process callers can inspect
 // errors.Is(..., huma.StatusError) or just surface the message.
@@ -455,6 +464,28 @@ func randomRefresh() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// withBasicChallenge adds the WWW-Authenticate challenge RFC 6749 §5.2
+// requires when a client that used HTTP Basic fails authentication with a
+// 401 invalid_client. It keys off the scheme rather than a successful parse
+// so a malformed Basic header is challenged too. Form-body credentials are
+// not an HTTP authentication scheme, so their failures carry no challenge.
+func withBasicChallenge(err error, authHeader string) error {
+	var oe *oauthError
+	if !errors.As(err, &oe) || oe.status != http.StatusUnauthorized || oe.Code != "invalid_client" || !hasBasicScheme(authHeader) {
+		return err
+	}
+	h := http.Header{}
+	h.Set("WWW-Authenticate", `Basic realm="`+basicRealm+`"`)
+	return huma.ErrorWithHeaders(err, h)
+}
+
+// hasBasicScheme reports whether an Authorization header uses the Basic
+// scheme, matched case-insensitively per RFC 7235.
+func hasBasicScheme(header string) bool {
+	const prefix = "Basic "
+	return len(header) >= len(prefix) && strings.EqualFold(header[:len(prefix)], prefix)
+}
+
 // parseBasicAuth extracts client credentials from an "Authorization: Basic
 // <base64>" header. The scheme match is case-insensitive per RFC 7235. RFC
 // 6749 §2.3.1 form-url-encodes client_id/secret before the base64, and
@@ -465,7 +496,7 @@ func randomRefresh() (string, error) {
 // here; TokenClients.Authenticate does that in constant time.
 func parseBasicAuth(header string) (id, secret string, ok bool) {
 	const prefix = "Basic "
-	if len(header) <= len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+	if len(header) <= len(prefix) || !hasBasicScheme(header) {
 		return "", "", false
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(header[len(prefix):]))
