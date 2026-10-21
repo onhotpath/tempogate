@@ -152,6 +152,7 @@ func (s *ServeCmdSuite) TestServesUntilCancelled() {
 		Readiness:     readiness,
 		Listener:      loopback,
 		AdminListener: loopback,
+		Server:        config.ServerConfig{ShutdownTimeout: 5 * time.Second},
 		KeysReload:    time.Second,
 	}))
 	cmd.SetOut(new(testWriter))
@@ -199,6 +200,7 @@ func (s *ServeCmdSuite) TestReloadsKeysWhileServing() {
 		Readiness:     readiness,
 		Listener:      loopback,
 		AdminListener: loopback,
+		Server:        config.ServerConfig{ShutdownTimeout: 5 * time.Second},
 		KeysReload:    10 * time.Millisecond,
 	}))
 	cmd.SetOut(new(testWriter))
