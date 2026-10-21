@@ -1,11 +1,13 @@
 // Command mockgoogle is a minimal but real upstream OIDC IdP used only by the
 // end-to-end test (test/e2e). It stands in for Google: OIDC discovery, a JWKS,
 // a consent screen a headless browser can click through, and a token endpoint
-// that returns a properly RS256-signed id_token. The asserted identity (email,
-// email_verified, Google Workspace `hd` and the stable `sub`) is controllable
-// at runtime via /_control/identity so one running instance can drive the
-// allowed, disallowed-domain and hosted-domain scenarios without a container
-// restart.
+// that returns a properly RS256-signed id_token. Like Google with PKCE, it
+// requires an S256 code_challenge (and, stricter than Google, a nonce) at
+// /auth, checks the code_verifier at /token, and echoes the nonce into the
+// id_token. The asserted identity (email, email_verified, Google Workspace `hd`
+// and the stable `sub`) is controllable at runtime via /_control/identity, and
+// faults (discovery outage, wrong nonce) via /_control/faults, so one running
+// instance can drive every scenario without a container restart.
 //
 // It is deliberately standalone (its own main, its own container image) so the
 // test exercises tempogate's real golang.org/x/oauth2 + coreos/go-oidc code
@@ -16,6 +18,8 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -53,13 +57,32 @@ func (id identity) subject() string {
 	return "mock-google-sub-" + id.Email
 }
 
+// grant is what an issued code is bound to: the identity consented to, and
+// the PKCE challenge and nonce of the authorization request.
+type grant struct {
+	id        identity
+	challenge string
+	nonce     string
+}
+
+// faults are failure modes a test can switch on to prove tempogate's
+// handling of a misbehaving upstream.
+type faults struct {
+	// DiscoveryDown answers the discovery document with 503.
+	DiscoveryDown bool
+	// WrongNonce signs id_tokens with a nonce other than the request's,
+	// as an id_token minted for another login would carry.
+	WrongNonce bool
+}
+
 type server struct {
 	issuer string
 	priv   *rsa.PrivateKey
 
 	mu      sync.Mutex
 	current identity
-	codes   map[string]identity
+	faults  faults
+	codes   map[string]grant
 }
 
 func main() {
@@ -80,7 +103,7 @@ func main() {
 			Verified: os.Getenv("MOCK_EMAIL_VERIFIED") != "false",
 			HD:       os.Getenv("MOCK_HD"),
 		},
-		codes: map[string]identity{},
+		codes: map[string]grant{},
 	}
 
 	mux := http.NewServeMux()
@@ -90,6 +113,7 @@ func main() {
 	mux.HandleFunc("/auth/approve", s.approve)
 	mux.HandleFunc("/token", s.token)
 	mux.HandleFunc("/_control/identity", s.setIdentity)
+	mux.HandleFunc("/_control/faults", s.setFaults)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	log.Printf("mockgoogle: issuer=%s listening on %s", issuer, addr)
@@ -98,6 +122,13 @@ func main() {
 }
 
 func (s *server) discovery(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	down := s.faults.DiscoveryDown
+	s.mu.Unlock()
+	if down {
+		http.Error(w, "discovery temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                s.issuer,
 		"authorization_endpoint":                s.issuer + "/auth",
@@ -105,6 +136,7 @@ func (s *server) discovery(w http.ResponseWriter, _ *http.Request) {
 		"jwks_uri":                              s.issuer + "/jwks",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
+		"code_challenge_methods_supported":      []string{"S256"},
 		"subject_types_supported":               []string{"public"},
 		"scopes_supported":                      []string{"openid", "email", "profile"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -130,13 +162,19 @@ var consentTmpl = template.Must(template.New("consent").Parse(`<!DOCTYPE html>
 <body>
 <h1>Mock Google</h1>
 <p id="who">Continue as <strong>{{.Email}}</strong>?</p>
-<a id="approve" href="/auth/approve?redirect_uri={{.RedirectURI}}&state={{.State}}">Approve</a>
+<a id="approve" href="/auth/approve?redirect_uri={{.RedirectURI}}&state={{.State}}&code_challenge={{.CodeChallenge}}&nonce={{.Nonce}}">Approve</a>
 </body></html>`))
 
 // auth is the consent screen. tempogate's /authorize redirects the browser
-// here; the browser clicks "Approve", which is the human consent step.
+// here; the browser clicks "Approve", which is the human consent step. A
+// request without an S256 challenge or a nonce is refused, so every e2e
+// login proves tempogate sends both.
 func (s *server) auth(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if msg := pkceAndNonceMissing(q); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
 	s.mu.Lock()
 	email := s.current.Email
 	s.mu.Unlock()
@@ -147,11 +185,30 @@ func (s *server) auth(w http.ResponseWriter, r *http.Request) {
 	// redirect_uri, fail to parse it as absolute, and the browser would 404
 	// on a relative redirect.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = consentTmpl.Execute(w, struct{ Email, RedirectURI, State string }{
-		Email:       email,
-		RedirectURI: q.Get("redirect_uri"),
-		State:       q.Get("state"),
+	_ = consentTmpl.Execute(w, struct{ Email, RedirectURI, State, CodeChallenge, Nonce string }{
+		Email:         email,
+		RedirectURI:   q.Get("redirect_uri"),
+		State:         q.Get("state"),
+		CodeChallenge: q.Get("code_challenge"),
+		Nonce:         q.Get("nonce"),
 	})
+}
+
+// pkceAndNonceMissing names what an authorization request lacks, or returns
+// "" when it carries an S256 challenge and a nonce. The consent link drops
+// code_challenge_method (S256 is the only one accepted), so /auth/approve
+// checks only the other two.
+func pkceAndNonceMissing(q url.Values) string {
+	if q.Get("code_challenge") == "" {
+		return "code_challenge is required"
+	}
+	if m := q.Get("code_challenge_method"); m != "" && m != "S256" {
+		return "code_challenge_method must be S256"
+	}
+	if q.Get("nonce") == "" {
+		return "nonce is required"
+	}
+	return ""
 }
 
 // approve mints an authorization code bound to a snapshot of the current
@@ -163,10 +220,14 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing redirect_uri", http.StatusBadRequest)
 		return
 	}
+	if msg := pkceAndNonceMissing(q); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
 	code := randToken()
 
 	s.mu.Lock()
-	s.codes[code] = s.current
+	s.codes[code] = grant{id: s.current, challenge: q.Get("code_challenge"), nonce: q.Get("nonce")}
 	s.mu.Unlock()
 
 	u, err := url.Parse(redirectURI)
@@ -186,7 +247,8 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 
 // token exchanges the code for a signed id_token. The audience is the
 // client_id tempogate sends (its upstream Google client), which coreos/go-oidc
-// inside tempogate verifies the id_token against.
+// inside tempogate verifies the id_token against. The code_verifier must
+// match the code's S256 challenge, as RFC 7636 §4.6 requires.
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
@@ -196,12 +258,22 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	clientID := r.Form.Get("client_id")
 
 	s.mu.Lock()
-	id, ok := s.codes[code]
+	g, ok := s.codes[code]
 	delete(s.codes, code)
+	wrongNonce := s.faults.WrongNonce
 	s.mu.Unlock()
 	if !ok {
-		http.Error(w, "invalid code", http.StatusBadRequest)
+		oauthError(w, "invalid_grant", "unknown or used code")
 		return
+	}
+	sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
+	if subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(sum[:])), []byte(g.challenge)) != 1 {
+		oauthError(w, "invalid_grant", "code_verifier does not match code_challenge")
+		return
+	}
+	id, nonce := g.id, g.nonce
+	if wrongNonce {
+		nonce = "nonce-of-another-login"
 	}
 
 	priv, err := jwk.Import[jwk.Key](s.priv)
@@ -221,7 +293,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		Expiration(now.Add(time.Hour)).
 		Claim("email", id.Email).
 		Claim("email_verified", id.Verified).
-		Claim("name", id.Email)
+		Claim("name", id.Email).
+		Claim("nonce", nonce)
 	if id.HD != "" {
 		b = b.Claim("hd", id.HD)
 	}
@@ -270,6 +343,34 @@ func (s *server) setIdentity(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// setFaults switches failure modes on and off. Form fields:
+// discovery_down and wrong_nonce, each "true" to enable; anything else
+// (including absent) disables it.
+func (s *server) setFaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.faults = faults{
+		DiscoveryDown: r.Form.Get("discovery_down") == "true",
+		WrongNonce:    r.Form.Get("wrong_nonce") == "true",
+	}
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// oauthError writes an RFC 6749 §5.2 token error response.
+func oauthError(w http.ResponseWriter, code, desc string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": desc})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

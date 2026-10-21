@@ -84,8 +84,9 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 		oidc.WithSessionTTL(5*time.Minute),
 	)
 
-	authorizer := oidc.New(store, reg, s.issuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, "example.com")
+	binding := newTestBinding(s.T(), s.issuer)
+	authorizer := oidc.New(store, reg, binding, s.issuer, testGoogleCID, s.mg.issuer()+"/auth")
+	callback := oidc.NewCallback(store, upstream, binding, "example.com")
 	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	deviceAuth := oidc.NewDeviceAuthorization(store, reg, s.issuer)
 
@@ -194,7 +195,10 @@ func (s *DeviceUIIntegrationSuite) TestFullDeviceFlowAgainstRealStack() {
 	internalState := toGoogle.Query().Get("state")
 	s.Require().NotEmpty(internalState)
 
-	cbResp, err := s.browser.Get(s.srv.URL + "/callback/google?code=real-google-code&state=" + internalState)
+	cbResp, err := s.browser.Get(s.srv.URL + "/callback/google?" + url.Values{
+		"code":  {s.mg.approve(s.T(), toGoogle.String())},
+		"state": {internalState},
+	}.Encode())
 	s.Require().NoError(err)
 	cbResp.Body.Close()
 	s.Require().Equal(http.StatusFound, cbResp.StatusCode)
@@ -372,7 +376,10 @@ func (s *DeviceUIIntegrationSuite) driveThroughConfirm(userCode string) {
 	s.Require().NoError(err)
 	internalState := toGoogle.Query().Get("state")
 
-	cbResp, err := s.browser.Get(s.srv.URL + "/callback/google?code=real-google-code&state=" + internalState)
+	cbResp, err := s.browser.Get(s.srv.URL + "/callback/google?" + url.Values{
+		"code":  {s.mg.approve(s.T(), toGoogle.String())},
+		"state": {internalState},
+	}.Encode())
 	s.Require().NoError(err)
 	cbResp.Body.Close()
 	toDevice, err := url.Parse(cbResp.Header.Get("Location"))

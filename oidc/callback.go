@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,11 +23,14 @@ const (
 	authCodeTTL = 1 * time.Minute
 
 	codeEntropyBytes = 32
+
+	logOpGoogleCallback = "oidc.callback"
 )
 
 type callbackInput struct {
-	Code  string `query:"code"`
-	State string `query:"state"`
+	Code   string `query:"code"`
+	State  string `query:"state"`
+	Cookie string `header:"Cookie"`
 
 	// Google may redirect back with error/error_description instead of a
 	// code (e.g. the user declined consent). We forward that to the
@@ -39,10 +43,11 @@ type callbackInput struct {
 // a 302 (Location set, no body), a 403 page (Content-Type + Body, no
 // Location), or — for protocol errors — an *oauthError returned instead.
 // Huma skips empty-string headers, so the unused fields cost nothing on the
-// wire.
+// wire. SetCookie drops the state-binding cookie once the state is used.
 type callbackOutput struct {
 	Status      int
 	Location    string `header:"Location"`
+	SetCookie   string `header:"Set-Cookie"`
 	ContentType string `header:"Content-Type"`
 	Body        []byte
 }
@@ -59,6 +64,33 @@ type UpstreamIdentity struct {
 	HostedDomain  string
 }
 
+// Reasons an UpstreamError carries. They are what the callback logs about a
+// failed Google sign-in: the error text itself is never logged, because a
+// token endpoint's error body or a verifier message could echo a code or
+// token.
+const (
+	UpstreamReasonDiscovery = "discovery_unavailable"
+	UpstreamReasonExchange  = "code_exchange_failed"
+	UpstreamReasonIDToken   = "id_token_invalid"
+	UpstreamReasonNonce     = "nonce_mismatch"
+	UpstreamReasonClaims    = "claims_incomplete"
+)
+
+// UpstreamError classifies an ExchangeAndVerify failure. OAuthError is the
+// RFC 6749 §5.2 error code the token endpoint answered with (e.g.
+// invalid_grant, invalid_client), when there is one; it is a fixed token,
+// safe to log, and the quickest way to tell a bad client secret from a
+// replayed code.
+type UpstreamError struct {
+	Reason     string
+	OAuthError string
+	Err        error
+}
+
+func (e *UpstreamError) Error() string { return e.Err.Error() }
+
+func (e *UpstreamError) Unwrap() error { return e.Err }
+
 // Upstream is the Google leg of the flow, kept behind an interface so this
 // package never imports oauth2/go-oidc: the concrete implementation lives in
 // the oidc/google provider package and is injected via fx.As, the same
@@ -67,19 +99,24 @@ type UpstreamIdentity struct {
 // implementation at a mock IdP.
 type Upstream interface {
 	// ExchangeAndVerify swaps a Google authorization code for an id_token,
-	// verifies its signature and claims against Google's JWKS, and returns
-	// the identity it asserts. The domain gates are the callback's concern.
-	ExchangeAndVerify(ctx context.Context, code string) (UpstreamIdentity, error)
+	// proving possession of the PKCE codeVerifier, verifies its signature
+	// and claims against Google's JWKS, requires its nonce claim to equal
+	// nonce, and returns the identity it asserts. Failures should be
+	// *UpstreamError so the callback can log why. The domain gates are the
+	// callback's concern.
+	ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonce string) (UpstreamIdentity, error)
 }
 
 // Callback serves GET /callback/google: it completes the upstream half of the
-// flow — code exchange, domain allowlist gate, and minting our own
-// authorization code — then redirects the browser back to the downstream
-// client.
+// flow - browser binding check, code exchange, domain allowlist gate, and
+// minting our own authorization code - then redirects the browser back to the
+// downstream client.
 type Callback struct {
 	issuer         string
 	store          CallbackStore
 	upstream       Upstream
+	binding        *UpstreamBinding
+	logger         *slog.Logger
 	allowedDomains map[string]struct{}
 	hostedDomains  map[string]struct{}
 	now            func() time.Time
@@ -117,10 +154,25 @@ func WithCodeGenerator(fn func() (string, error)) CallbackOption {
 	return func(c *Callback) { c.newCode = fn }
 }
 
-func NewCallback(store CallbackStore, upstream Upstream, allowedDomains string, opts ...CallbackOption) *Callback {
+// WithCallbackLogger sets the operator-facing log sink, so a failed Google
+// sign-in (which the user only sees as a generic 502) leaves a reason in the
+// logs. Defaults to a discarding logger.
+func WithCallbackLogger(l *slog.Logger) CallbackOption {
+	return func(c *Callback) { c.logger = l }
+}
+
+func NewCallback(
+	store CallbackStore,
+	upstream Upstream,
+	binding *UpstreamBinding,
+	allowedDomains string,
+	opts ...CallbackOption,
+) *Callback {
 	c := &Callback{
 		store:          store,
 		upstream:       upstream,
+		binding:        binding,
+		logger:         slog.New(slog.DiscardHandler),
 		allowedDomains: parseDomains(allowedDomains),
 		now:            func() time.Time { return time.Now().UTC() },
 		newCode:        randomCode,
@@ -149,6 +201,17 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "missing state")
 	}
 
+	// Checked before the state is consumed: a request from another browser
+	// (a forged callback URL carrying the attacker's own state and code) must
+	// not be able to burn the victim's pending login either.
+	if !c.binding.boundToBrowser(in.Cookie, in.State) {
+		c.logger.WarnContext(ctx, "google callback rejected: state not bound to this browser",
+			"op", logOpGoogleCallback,
+			"cause", "state_not_bound_to_browser",
+		)
+		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "sign-in was not started in this browser")
+	}
+
 	ar, err := c.store.ConsumeAuthRequest(ctx, in.State)
 	if errors.Is(err, ErrAuthRequestNotFound) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "unknown or already-used state")
@@ -160,8 +223,10 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "auth request expired")
 	}
 
+	clearBinding := c.binding.clearCookie(in.State).String()
+
 	if in.UpstreamError != "" {
-		return c.redirect(ar, url.Values{
+		return c.redirect(ar, clearBinding, url.Values{
 			"error":             {in.UpstreamError},
 			"error_description": {in.UpstreamErrorReason},
 		})
@@ -171,13 +236,19 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "missing code")
 	}
 
-	id, err := c.upstream.ExchangeAndVerify(ctx, in.Code)
-	if err != nil || id.Subject == "" {
+	id, err := c.upstream.ExchangeAndVerify(ctx, in.Code, c.binding.codeVerifier(in.State), c.binding.nonce(in.State))
+	if err == nil && id.Subject == "" {
+		err = &UpstreamError{Reason: UpstreamReasonClaims, Err: errors.New("oidc: upstream identity has no subject")}
+	}
+	if err != nil {
+		c.logUpstreamFailure(ctx, err)
 		return nil, oauthErr(http.StatusBadGateway, "upstream_error", "could not complete Google sign-in")
 	}
 
 	if !id.EmailVerified || !emailDomainAllowed(c.allowedDomains, id.Email) || !c.hostedDomainAllowed(id.HostedDomain) {
-		return forbiddenPage(id.Email), nil
+		page := forbiddenPage(id.Email)
+		page.SetCookie = clearBinding
+		return page, nil
 	}
 
 	code, err := c.newCode()
@@ -202,7 +273,24 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, fmt.Errorf("oidc: persist auth code: %w", err)
 	}
 
-	return c.redirect(ar, url.Values{"code": {code}})
+	return c.redirect(ar, clearBinding, url.Values{"code": {code}})
+}
+
+// logUpstreamFailure records why a Google sign-in failed: a warning, since
+// the usual causes (an expired or replayed code, a transient Google outage)
+// resolve on retry, but a sustained rate means misconfiguration. Only the
+// reason category and the OAuth error code are logged, never the error text.
+func (c *Callback) logUpstreamFailure(ctx context.Context, err error) {
+	cause, oauthCode := "unknown", ""
+	var ue *UpstreamError
+	if errors.As(err, &ue) {
+		cause, oauthCode = ue.Reason, ue.OAuthError
+	}
+	attrs := []any{"op", logOpGoogleCallback, "cause", cause}
+	if oauthCode != "" {
+		attrs = append(attrs, "oauth_error", oauthCode)
+	}
+	c.logger.WarnContext(ctx, "google sign-in failed", attrs...)
 }
 
 // emailDomainAllowed is the OIDC_ALLOWED_DOMAINS gate, shared by the
@@ -229,13 +317,13 @@ func (c *Callback) hostedDomainAllowed(hd string) bool {
 }
 
 // redirect sends the authorization response back to the client that made
-// the request.
-func (c *Callback) redirect(ar AuthRequest, params url.Values) (*callbackOutput, error) {
+// the request, clearing the browser-binding cookie (setCookie) on the way.
+func (c *Callback) redirect(ar AuthRequest, setCookie string, params url.Values) (*callbackOutput, error) {
 	loc, err := authorizationResponse(ar.RedirectURI, c.issuer, ar.ClientState, params)
 	if err != nil {
 		return nil, err
 	}
-	return &callbackOutput{Status: http.StatusFound, Location: loc}, nil
+	return &callbackOutput{Status: http.StatusFound, Location: loc, SetCookie: setCookie}, nil
 }
 
 func forbiddenPage(email string) *callbackOutput {

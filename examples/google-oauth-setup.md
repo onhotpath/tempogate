@@ -95,4 +95,13 @@ tempogate, and complete a Web UI or `tempogate login` sign-in. A
 `redirect_uri_mismatch` from Google means step 3's URI does not exactly equal
 `OIDC_ISSUER` + `/callback/google`.
 
+tempogate sends Google its own PKCE challenge and nonce and binds each login
+to the browser that started it with a short-lived cookie; there is nothing to
+configure for either in the Google console. A `400` from `/callback/google`
+saying the sign-in "was not started in this browser" means the callback
+arrived without that cookie: the login was started in another browser or
+profile, cookies are blocked for the tempogate host, or a proxy rewrote the
+path so the browser did not send it. See
+[Google leg](../docs/configuration.md#google-leg).
+
 The end-to-end walkthrough is [docs/getting-started.md](../docs/getting-started.md).

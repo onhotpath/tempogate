@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"testing"
@@ -168,6 +169,7 @@ type bootResult struct {
 	booted bool
 	base   string
 	logs   string
+	serve  testcontainers.Container
 }
 
 // startTempogateAllowingFailure runs migrate + serve without a readiness
@@ -230,7 +232,7 @@ func startTempogateAllowingFailure(
 			if resp, err := http.Get(base + "/readyz"); err == nil {
 				_ = resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
-					return bootResult{booted: true, base: base}
+					return bootResult{booted: true, base: base, serve: serve}
 				}
 			}
 		}
@@ -255,11 +257,16 @@ func containerLogs(ctx context.Context, t *testing.T, c testcontainers.Container
 // challenge. It returns /authorize's status and, if the flow got that far,
 // the final Location tempogate sent the browser to (which carries the code).
 // Mock Google's approve step is pointed at tempogate's mapped host port
-// because the test process cannot resolve the in-network issuer host.
+// because the test process cannot resolve the in-network issuer host. The
+// cookie jar carries /authorize's state-binding cookie to the callback, as
+// the victim's browser would.
 func driveCodeFlow(t *testing.T, tgBase, mockBase, clientID, redirectURI string) (int, string) {
 	t.Helper()
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
 	noFollow := &http.Client{
 		Timeout:       15 * time.Second,
+		Jar:           jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	sum := sha256.Sum256([]byte(attackerVerifier))
@@ -289,8 +296,10 @@ func driveCodeFlow(t *testing.T, tgBase, mockBase, clientID, redirectURI string)
 	upstream, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
 	approve := mockBase + "/auth/approve?" + url.Values{
-		"redirect_uri": {tgBase + "/callback/google"},
-		"state":        {upstream.Query().Get("state")},
+		"redirect_uri":   {tgBase + "/callback/google"},
+		"state":          {upstream.Query().Get("state")},
+		"code_challenge": {upstream.Query().Get("code_challenge")},
+		"nonce":          {upstream.Query().Get("nonce")},
 	}.Encode()
 	resp, err = noFollow.Get(approve)
 	require.NoError(t, err)
