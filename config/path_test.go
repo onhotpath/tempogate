@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,4 +35,11 @@ func TestProcessPathPrefersFlagOverEnvironment(t *testing.T) {
 	require.Equal(t, Path("/from/flag.yaml"), processPath([]string{"serve", "--config", "/from/flag.yaml"}))
 	t.Setenv(EnvPath, "")
 	require.Equal(t, Path(""), processPath([]string{"serve"}))
+}
+
+func TestProcessPathReadsOSArgs(t *testing.T) {
+	orig := os.Args
+	t.Cleanup(func() { os.Args = orig })
+	os.Args = []string{"tempogate", "serve", "--config=/etc/tg.yaml"}
+	require.Equal(t, Path("/etc/tg.yaml"), ProcessPath())
 }

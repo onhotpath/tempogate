@@ -169,3 +169,8 @@ func TestLoadRejectsInvalidDurationAndListener(t *testing.T) {
 		})
 	}
 }
+
+func TestNewFailsOnMissingExplicitFile(t *testing.T) {
+	_, err := New(Params{Path: Path(filepath.Join(t.TempDir(), "missing.yaml"))})
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
