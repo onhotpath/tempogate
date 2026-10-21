@@ -41,6 +41,7 @@ type Client struct {
 	issuerURL string
 	clientID  string
 	now       func() time.Time
+	observer  Observer
 
 	// mu guards the discovery state below and serialises discovery itself,
 	// so concurrent callbacks during an outage share one attempt instead of
@@ -52,8 +53,31 @@ type Client struct {
 	backoff  time.Duration
 }
 
+// Observer is told the latency and outcome of every call tempogate makes to
+// Google, by operation: "discovery" (on first use and on each retry after a
+// failure, never for a cached failure), "code_exchange" and
+// "verify_id_token" (which includes the JWKS fetch on a key-cache miss). The
+// metrics package satisfies it; this package never imports Prometheus.
+type Observer interface {
+	ObserveUpstream(op string, took time.Duration, err error)
+}
+
+type nopObserver struct{}
+
+func (nopObserver) ObserveUpstream(string, time.Duration, error) {}
+
 // Option configures a Client.
 type Option func(*Client)
+
+// WithObserver reports upstream call latency and errors to o. Nil keeps the
+// no-op default.
+func WithObserver(o Observer) Option {
+	return func(c *Client) {
+		if o != nil {
+			c.observer = o
+		}
+	}
+}
 
 // WithClock swaps the clock that spaces discovery retries. For tests.
 func WithClock(now func() time.Time) Option {
@@ -81,6 +105,7 @@ func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string, o
 		issuerURL: strings.TrimRight(issuerURL, "/"),
 		clientID:  clientID,
 		now:       time.Now,
+		observer:  nopObserver{},
 	}
 	for _, o := range opts {
 		o(c)
@@ -103,7 +128,9 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 		return oidc.UpstreamIdentity{}, err
 	}
 
+	start := time.Now()
 	tok, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
+	c.observer.ObserveUpstream("code_exchange", time.Since(start), err)
 	if err != nil {
 		ue := &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, Err: fmt.Errorf("google: code exchange: %w", err)}
 		var re *oauth2.RetrieveError
@@ -118,7 +145,9 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, errors.New("google: token response missing id_token"))
 	}
 
+	start = time.Now()
 	idToken, err := verifier.Verify(ctx, rawID)
+	c.observer.ObserveUpstream("verify_id_token", time.Since(start), err)
 	if err != nil {
 		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, fmt.Errorf("google: verify id_token: %w", err))
 	}
@@ -166,7 +195,9 @@ func (c *Client) idVerifier(ctx context.Context) (*coreosoidc.IDTokenVerifier, e
 		return nil, c.lastErr
 	}
 
+	start := time.Now()
 	provider, err := coreosoidc.NewProvider(ctx, c.issuerURL)
+	c.observer.ObserveUpstream("discovery", time.Since(start), err)
 	if err != nil {
 		c.backoff = min(max(2*c.backoff, discoveryInitialBackoff), discoveryMaxBackoff)
 		c.retryAt = now.Add(c.backoff)

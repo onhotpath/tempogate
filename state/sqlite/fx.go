@@ -8,6 +8,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/oidc"
 )
@@ -21,6 +22,8 @@ type Params struct {
 	Path        string        `name:"sqlite_path"`
 	MaxConns    int           `name:"sqlite_max_conns"`
 	BusyTimeout time.Duration `name:"sqlite_busy_timeout"`
+
+	Observer ErrorObserver `optional:"true"`
 }
 
 func newFx(p Params) (*Store, error) {
@@ -28,6 +31,7 @@ func newFx(p Params) (*Store, error) {
 		WithPath(p.Path),
 		WithMaxConns(p.MaxConns),
 		WithBusyTimeout(p.BusyTimeout),
+		WithErrorObserver(p.Observer),
 	}
 	if p.Logger != nil {
 		opts = append(opts, WithLogger(p.Logger.Named("sqlite")))
@@ -73,7 +77,8 @@ func newReaperFx(p reaperParams) (*Reaper, error) {
 // cmd/serve.go) plus every consumer-side interface it satisfies
 // (keys.KeyStore, keys.DenylistChecker, oidc.AuthRequestStore,
 // oidc.BrowserSessionStore, oidc.CallbackStore, oidc.TokenStore,
-// oidc.DeviceCodeStore), using a single underlying constructor.
+// oidc.DeviceCodeStore, api.StoreProbe), using a single underlying
+// constructor.
 // admin.KeyRegistry is provided as a separate adapter constructor (see
 // admin_adapter.go) because its short method names
 // (Save/ByID/List/MarkRevoked) deliberately differ from the prefixed
@@ -95,6 +100,7 @@ func Fx() fx.Option {
 				fx.As(new(oidc.CallbackStore)),
 				fx.As(new(oidc.TokenStore)),
 				fx.As(new(oidc.DeviceCodeStore)),
+				fx.As(new(api.StoreProbe)),
 				fx.As(fx.Self()),
 			),
 		),

@@ -55,7 +55,7 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 				return ErrDuplicateDeviceCode
 			}
 		}
-		return fmt.Errorf("sqlite: save device code: %w", err)
+		return s.fail("save_device_code", fmt.Errorf("sqlite: save device code: %w", err))
 	}
 	return nil
 }
@@ -103,7 +103,7 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return oidc.DeviceCode{}, fmt.Errorf("sqlite: lookup device code by %s: %w", column, err)
+		return oidc.DeviceCode{}, s.fail("lookup_device_code", fmt.Errorf("sqlite: lookup device code by %s: %w", column, err))
 	}
 	dc.Subject = subject.String
 	dc.Email = email.String
@@ -137,7 +137,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		return false, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return false, fmt.Errorf("sqlite: poll device code: %w", err)
+		return false, s.fail("poll_device_code", fmt.Errorf("sqlite: poll device code: %w", err))
 	}
 
 	if !lastPolled.Valid || now.Sub(lastPolled.Time) >= time.Duration(interval)*time.Second {
@@ -151,7 +151,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 			now, hash, prev,
 		)
 		if err != nil {
-			return false, fmt.Errorf("sqlite: poll device code: %w", err)
+			return false, s.fail("poll_device_code", fmt.Errorf("sqlite: poll device code: %w", err))
 		}
 		if n, err := res.RowsAffected(); err != nil || n == 1 {
 			return false, err
@@ -166,7 +166,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		 WHERE device_code_hash = ?`,
 		now, hash,
 	); err != nil {
-		return false, fmt.Errorf("sqlite: poll device code slow_down: %w", err)
+		return false, s.fail("poll_device_code", fmt.Errorf("sqlite: poll device code slow_down: %w", err))
 	}
 	return true, nil
 }
@@ -217,7 +217,7 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 		return ErrDeviceCodeNotPending
 	}
 	if err != nil {
-		return fmt.Errorf("sqlite: decide device code: %w", err)
+		return s.fail("decide_device_code", fmt.Errorf("sqlite: decide device code: %w", err))
 	}
 	if !now.Before(expiresAt) {
 		return fmt.Errorf("%w: expired", ErrDeviceCodeNotPending)
@@ -225,11 +225,11 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 
 	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
-		return fmt.Errorf("sqlite: decide device code: %w", err)
+		return s.fail("decide_device_code", fmt.Errorf("sqlite: decide device code: %w", err))
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("sqlite: decide device code rows: %w", err)
+		return s.fail("decide_device_code", fmt.Errorf("sqlite: decide device code rows: %w", err))
 	}
 	if n == 0 {
 		return ErrDeviceCodeNotPending
@@ -266,7 +266,7 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return oidc.DeviceCode{}, fmt.Errorf("sqlite: consume device code: %w", err)
+		return oidc.DeviceCode{}, s.fail("consume_device_code", fmt.Errorf("sqlite: consume device code: %w", err))
 	}
 	dc.Subject = subject.String
 	dc.Email = email.String

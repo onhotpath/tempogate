@@ -31,7 +31,7 @@ func (s *Store) SaveAuthRequest(ctx context.Context, ar oidc.AuthRequest) error 
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return ErrDuplicateInternalState
 		}
-		return fmt.Errorf("sqlite: save auth request: %w", err)
+		return s.fail("save_auth_request", fmt.Errorf("sqlite: save auth request: %w", err))
 	}
 	return nil
 }
@@ -56,7 +56,7 @@ func (s *Store) ConsumeAuthRequest(ctx context.Context, internalState string) (o
 		return oidc.AuthRequest{}, oidc.ErrAuthRequestNotFound
 	}
 	if err != nil {
-		return oidc.AuthRequest{}, fmt.Errorf("sqlite: consume auth request: %w", err)
+		return oidc.AuthRequest{}, s.fail("consume_auth_request", fmt.Errorf("sqlite: consume auth request: %w", err))
 	}
 	return ar, nil
 }

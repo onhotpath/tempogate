@@ -58,7 +58,9 @@ One binary with subcommands `serve`, `login`, `token`, `keys`, `sessions`,
 
 Wired and exercised end to end:
 
-- `/healthz`, `/readyz`
+- `/healthz`, `/readyz` (readiness also checks the SQLite state store)
+- Prometheus `/metrics` on the private admin listener, and one structured
+  access-log line per request (see [docs/configuration.md](docs/configuration.md#observability))
 - `/.well-known/jwks.json` and the full `/.well-known/openid-configuration`
 - OIDC SSO: `/authorize`, `/callback/google`, `/token`, `/userinfo`
 - `tempogate login` + `tempogate token` for personal tokens from a laptop
@@ -344,7 +346,7 @@ See [docs/configuration.md](docs/configuration.md).
 | `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
 | `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
 | `HTTP_LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
-| `ADMIN_LISTENER` | No | `127.0.0.1:8081` | `host:port` for the separate admin listener (`/admin/*`) |
+| `ADMIN_LISTENER` | No | `127.0.0.1:8081` | `host:port` for the separate admin listener (`/admin/*`, Prometheus `/metrics`); never expose it publicly |
 | `ADMIN_TOKEN_SHA256` | To use the admin API | _(empty)_ | Comma-separated hex SHA-256 digests of accepted admin bearer tokens. Empty locks the admin API (401) |
 | `ADMIN_ALLOWED_HOSTS` | For a non-loopback admin bind | loopback names on the `ADMIN_LISTENER` port | Comma-separated `host[:port]` accepted in `Host`; others get 421 (DNS-rebinding defence) |
 | `ADMIN_ALLOW_SYSTEM_GRANTS` | No | `false` | Allow minting cluster-wide `temporal-system` keys (403 otherwise) |
@@ -352,6 +354,7 @@ See [docs/configuration.md](docs/configuration.md).
 | `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
 | `KEYS_ENCRYPTION_KEY` / `KEYS_ENCRYPTION_KEY_FILE` | No | _(empty)_ | Base64 32-byte key (or a file holding it) that encrypts the stored signing key. See [Signing-key encryption](docs/configuration.md#signing-key-encryption) |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_REQUESTS` | No | `true` | One access-log line per HTTP request (no query strings, headers or bodies) |
 | `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
 
 ## Sub-path hosting

@@ -16,11 +16,13 @@ type params struct {
 	ClientSecret  string `name:"google_client_secret"`
 	TokenEndpoint string `name:"google_token_endpoint"`
 	IssuerURL     string `name:"google_issuer_url"`
+
+	Observer Observer `optional:"true"`
 }
 
 func newFx(p params) *Client {
 	redirectURL := strings.TrimRight(p.Issuer, "/") + oidc.CallbackPath
-	return New(p.ClientID, p.ClientSecret, p.TokenEndpoint, redirectURL, p.IssuerURL)
+	return New(p.ClientID, p.ClientSecret, p.TokenEndpoint, redirectURL, p.IssuerURL, WithObserver(p.Observer))
 }
 
 // Fx provides the Google client as oidc.Upstream. The consumer (package

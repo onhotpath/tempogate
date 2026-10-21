@@ -43,10 +43,19 @@ type apiConfig struct {
 	// and before any admin registrar, so they wrap every admin route except
 	// the liveness probe.
 	adminMiddlewares []func(huma.API)
-	basePath         string
-	docs             bool
+	// adminHandlers are plain http.Handlers mounted on the admin mux
+	// outside Huma, so the admin guard does not cover them (Prometheus
+	// /metrics). They still get the listener-wide security headers.
+	adminHandlers []adminHandler
+	basePath      string
+	docs          bool
 	// logger receives the detail of every 5xx the sanitizer hides from clients.
 	logger *zap.Logger
+}
+
+type adminHandler struct {
+	pattern string
+	handler http.Handler
 }
 
 type Option func(*apiConfig)
@@ -86,6 +95,16 @@ func WithMiddleware(fn func(huma.Context, func(huma.Context))) Option {
 // the admin registrars, so a registrar cannot opt its routes out.
 func WithAdminMiddleware(fn func(huma.API)) Option {
 	return func(c *apiConfig) { c.adminMiddlewares = append(c.adminMiddlewares, fn) }
+}
+
+// WithAdminHandler mounts h on the admin surface's mux under pattern (an
+// http.ServeMux pattern such as "GET /metrics"). It bypasses the admin
+// guard: the admin listener's bind is its only access control, so mount
+// nothing here that is not safe for anything that can reach that listener.
+func WithAdminHandler(pattern string, h http.Handler) Option {
+	return func(c *apiConfig) {
+		c.adminHandlers = append(c.adminHandlers, adminHandler{pattern: pattern, handler: h})
+	}
 }
 
 // WithBasePath mounts the OIDC surface under a URL path prefix — the path
@@ -184,6 +203,9 @@ func newAdmin(cfg *apiConfig) *Surface {
 	}
 	for _, fn := range cfg.adminRegistrars {
 		fn(a)
+	}
+	for _, h := range cfg.adminHandlers {
+		mux.Handle(h.pattern, h.handler)
 	}
 	return &Surface{API: a, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: ""}
 }

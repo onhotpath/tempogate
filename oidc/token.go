@@ -160,6 +160,7 @@ type Token struct {
 	logger         *slog.Logger
 	now            func() time.Time
 	newRefresh     func() (string, error)
+	observer       TokenObserver
 
 	accessTTL          time.Duration
 	refreshTTL         time.Duration
@@ -238,6 +239,17 @@ func WithDeviceCodeStore(s DeviceCodeStore) TokenOption {
 	return func(t *Token) { t.devices = s }
 }
 
+// WithTokenObserver reports every /token outcome (minted, or the OAuth2
+// error code) and every refresh-family revocation to o, e.g. the Prometheus
+// metrics. Nil keeps the no-op default.
+func WithTokenObserver(o TokenObserver) TokenOption {
+	return func(t *Token) {
+		if o != nil {
+			t.observer = o
+		}
+	}
+}
+
 func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts ...TokenOption) *Token {
 	t := &Token{
 		store:              store,
@@ -246,6 +258,7 @@ func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts 
 		logger:             slog.New(slog.DiscardHandler),
 		now:                func() time.Time { return time.Now().UTC() },
 		newRefresh:         randomRefresh,
+		observer:           nopObserver{},
 		accessTTL:          DefaultAccessTokenTTL,
 		refreshTTL:         DefaultRefreshTokenTTL,
 		refreshMaxLifetime: DefaultRefreshMaxLifetime,
@@ -313,8 +326,16 @@ func (t *Token) handle(ctx context.Context, in *tokenInput) (*tokenOutput, error
 func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error) {
 	form, err := url.ParseQuery(string(in.RawBody))
 	if err != nil {
+		t.observer.ObserveToken(grantLabelOther, "invalid_request")
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "malformed form body")
 	}
+
+	out, err := t.dispatch(ctx, form, in.Authorization)
+	t.observer.ObserveToken(grantLabel(form.Get("grant_type")), tokenErrorCode(err))
+	return out, err
+}
+
+func (t *Token) dispatch(ctx context.Context, form url.Values, authorization string) (*tokenOutput, error) {
 	if err := checkParamLengths(
 		paramCap{"client_id", form.Get("client_id"), maxClientIDLen},
 		paramCap{"redirect_uri", form.Get("redirect_uri"), maxRedirectURILen},
@@ -328,11 +349,11 @@ func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error)
 
 	switch form.Get("grant_type") {
 	case grantAuthorizationCode:
-		return t.authorizationCodeGrant(ctx, form, in.Authorization)
+		return t.authorizationCodeGrant(ctx, form, authorization)
 	case grantRefreshToken:
-		return t.refreshTokenGrant(ctx, form, in.Authorization)
+		return t.refreshTokenGrant(ctx, form, authorization)
 	case grantDeviceCode:
-		return t.deviceCodeGrant(ctx, form, in.Authorization)
+		return t.deviceCodeGrant(ctx, form, authorization)
 	case "":
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "grant_type is required")
 	default:
@@ -591,6 +612,7 @@ func (t *Token) revokeFamily(ctx context.Context, rt Refresh, now time.Time, eve
 	if err != nil {
 		return fmt.Errorf("oidc: revoke refresh token family: %w", err)
 	}
+	t.observer.ObserveFamilyRevoked(event)
 	t.logger.WarnContext(ctx, msg,
 		"event", event,
 		"family_id", rt.FamilyID,
@@ -702,6 +724,36 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 // replace this once the shared permissions model lands.
 func flatAdminPermissions() []string {
 	return []string{"temporal-system:admin"}
+}
+
+// grantLabel maps grant_type to a fixed metric label. The raw value is
+// client-controlled, so anything unknown collapses into "other" rather than
+// minting a new series per request.
+func grantLabel(grantType string) string {
+	switch grantType {
+	case grantAuthorizationCode:
+		return grantLabelAuthorizationCode
+	case grantRefreshToken:
+		return grantLabelRefreshToken
+	case grantDeviceCode:
+		return grantLabelDeviceCode
+	default:
+		return grantLabelOther
+	}
+}
+
+// tokenErrorCode is the OAuth2 error code a /token failure is reported
+// under: the code tempogate itself chose for an OAuth2 error response, or
+// server_error for anything that surfaced as a 500. Empty means success.
+func tokenErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var oe *oauthError
+	if errors.As(err, &oe) {
+		return oe.Code
+	}
+	return errorCodeServer
 }
 
 // verifyPKCE checks the RFC 7636 S256 binding: BASE64URL(SHA256(verifier))

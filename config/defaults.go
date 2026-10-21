@@ -7,7 +7,7 @@ import (
 
 func defaultConfig() *Config {
 	return &Config{
-		Log: LogConfig{Level: "info"},
+		Log: LogConfig{Level: "info", Requests: true},
 		HTTP: HTTPConfig{
 			Listener: Listener{
 				IP:   net.IPv4(127, 0, 0, 1),

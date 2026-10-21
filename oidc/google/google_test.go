@@ -16,7 +16,10 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/lestrrat-go/jwx/v4/jwt"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
 	"golang.org/x/oauth2"
 
 	"github.com/onhotpath/tempogate/oidc"
@@ -393,4 +396,103 @@ func reasonOf(err error) string {
 		return ue.Reason
 	}
 	return ""
+}
+
+// recordingObserver satisfies google.Observer.
+type recordingObserver struct{ calls []string }
+
+func (r *recordingObserver) ObserveUpstream(op string, took time.Duration, err error) {
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	if took <= 0 {
+		outcome += "/untimed"
+	}
+	r.calls = append(r.calls, op+"/"+outcome)
+}
+
+func (s *GoogleSuite) observedClientFor(srv *httptest.Server, opts ...google.Option) (*google.Client, *recordingObserver) {
+	obs := &recordingObserver{}
+	return google.New(testClientID, "secret", srv.URL+"/token",
+		"https://tempogate.example.com/callback/google", srv.URL, append(opts, google.WithObserver(obs))...), obs
+}
+
+// Every upstream round-trip is timed by operation, so a slow or failing
+// Google shows up per leg. Discovery runs first and is then cached.
+func (s *GoogleSuite) TestUpstreamCallsAreObserved() {
+	srv := newIDP(s.T()).server(s.T())
+	c, obs := s.observedClientFor(srv)
+
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	s.Require().NoError(err)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	s.Require().NoError(err)
+
+	s.Equal([]string{
+		"discovery/ok", "code_exchange/ok", "verify_id_token/ok",
+		"code_exchange/ok", "verify_id_token/ok",
+	}, obs.calls)
+}
+
+func (s *GoogleSuite) TestUpstreamFailureIsObserved() {
+	i := newIDP(s.T())
+	i.failExchange = true
+	c, obs := s.observedClientFor(i.server(s.T()))
+
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	s.Require().Error(err)
+
+	s.Equal([]string{"discovery/ok", "code_exchange/error"}, obs.calls)
+}
+
+// A failed discovery is observed once per attempt that reaches the IdP; a
+// failure served from inside the backoff window is not a call to Google.
+func (s *GoogleSuite) TestDiscoveryRetriesAreObserved() {
+	i := newIDP(s.T())
+	t0 := time.Unix(1700000000, 0)
+	now := t0
+	c, obs := s.observedClientFor(i.server(s.T()), google.WithClock(func() time.Time { return now }))
+
+	i.discoveryDown.Store(true)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	s.Require().Error(err)
+	now = t0.Add(500 * time.Millisecond)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	s.Require().Error(err)
+
+	i.discoveryDown.Store(false)
+	now = t0.Add(time.Second)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	s.Require().NoError(err)
+
+	s.Equal([]string{
+		"discovery/error",
+		"discovery/ok", "code_exchange/ok", "verify_id_token/ok",
+	}, obs.calls)
+}
+
+// TestFxWiresTheObserver proves google.Fx hands the graph's google.Observer
+// (the Prometheus metrics in production) to the client it provides as
+// oidc.Upstream, so upstream calls made through the real wiring are counted.
+func TestFxWiresTheObserver(t *testing.T) {
+	srv := newIDP(t).server(t)
+	obs := &recordingObserver{}
+	var up oidc.Upstream
+	fxtest.New(t,
+		google.Fx(),
+		fx.Provide(func() google.Observer { return obs }),
+		fx.Supply(
+			fx.Annotate("https://tempogate.example.com", fx.ResultTags(`name:"oidc_issuer"`)),
+			fx.Annotate(testClientID, fx.ResultTags(`name:"google_client_id"`)),
+			fx.Annotate("secret", fx.ResultTags(`name:"google_client_secret"`)),
+			fx.Annotate(srv.URL+"/token", fx.ResultTags(`name:"google_token_endpoint"`)),
+			fx.Annotate(srv.URL, fx.ResultTags(`name:"google_issuer_url"`)),
+		),
+		fx.Populate(&up),
+	).RequireStart().RequireStop()
+
+	_, err := up.ExchangeAndVerify(context.Background(), "code", testVerifier, testNonce)
+	require.NoError(t, err)
+	require.Equal(t, []string{"discovery/ok", "code_exchange/ok", "verify_id_token/ok"}, obs.calls)
 }

@@ -44,10 +44,12 @@ func (l RateLimits) Validate() error {
 
 // endpointLimit is one throttled operation's limiter. html marks the
 // browser-facing form, which gets a readable body instead of OAuth JSON.
+// label names the endpoint to the RateLimitObserver.
 type endpointLimit struct {
 	limiter    *ratelimit.Limiter
 	retryAfter string
 	html       bool
+	label      string
 }
 
 // RateLimiter is a Huma middleware that throttles the operations named in
@@ -57,6 +59,7 @@ type RateLimiter struct {
 	limits         RateLimits
 	trustedProxies []netip.Prefix
 	now            func() time.Time
+	observer       RateLimitObserver
 	endpoints      map[string]endpointLimit // by Huma operation ID
 }
 
@@ -79,8 +82,18 @@ func WithRateLimiterClock(now func() time.Time) RateLimiterOption {
 	return func(r *RateLimiter) { r.now = now }
 }
 
+// WithRateLimitObserver reports every rejected request to o, e.g. the
+// Prometheus metrics. Nil keeps the no-op default.
+func WithRateLimitObserver(o RateLimitObserver) RateLimiterOption {
+	return func(r *RateLimiter) {
+		if o != nil {
+			r.observer = o
+		}
+	}
+}
+
 func NewRateLimiter(opts ...RateLimiterOption) *RateLimiter {
-	r := &RateLimiter{now: time.Now}
+	r := &RateLimiter{now: time.Now, observer: nopObserver{}}
 	for _, o := range opts {
 		o(r)
 	}
@@ -88,11 +101,12 @@ func NewRateLimiter(opts ...RateLimiterOption) *RateLimiter {
 	for id, l := range map[string]struct {
 		perMinute int
 		html      bool
+		label     string
 	}{
-		"authorize":            {r.limits.Authorize, false},
-		"device-authorization": {r.limits.DeviceAuthorization, false},
-		"device-ui-submit":     {r.limits.DeviceVerification, true},
-		"token":                {r.limits.Token, false},
+		"authorize":            {r.limits.Authorize, false, "authorize"},
+		"device-authorization": {r.limits.DeviceAuthorization, false, "device_authorization"},
+		"device-ui-submit":     {r.limits.DeviceVerification, true, "device_verification"},
+		"token":                {r.limits.Token, false, "token"},
 	} {
 		if l.perMinute <= 0 {
 			continue
@@ -107,6 +121,7 @@ func NewRateLimiter(opts ...RateLimiterOption) *RateLimiter {
 			// just ran dry, which is the one being told to wait.
 			retryAfter: strconv.Itoa(max(1, int(math.Ceil(60/float64(l.perMinute))))),
 			html:       l.html,
+			label:      l.label,
 		}
 	}
 	return r
@@ -126,6 +141,7 @@ func (r *RateLimiter) Middleware(ctx huma.Context, next func(huma.Context)) {
 		return
 	}
 
+	r.observer.ObserveRateLimited(e.label)
 	ctx.SetHeader("Retry-After", e.retryAfter)
 	ctx.SetHeader("Cache-Control", "no-store")
 	var body []byte

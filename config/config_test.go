@@ -39,7 +39,7 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "defaults",
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -84,9 +84,10 @@ func (s *ConfigSuite) TestNew() {
 			},
 		},
 		{
-			name: "log and http overridden by env",
+			name: "log, request logging and http overridden by env",
 			env: map[string]string{
 				"LOG_LEVEL":     "debug",
+				"LOG_REQUESTS":  "false",
 				"HTTP_LISTENER": "0.0.0.0:9000",
 			},
 			want: &Config{
@@ -143,7 +144,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_REFRESH_MAX_LIFETIME":  "168h",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -225,7 +226,7 @@ func (s *ConfigSuite) TestNew() {
 				"ADMIN_LISTENER": "127.0.0.1:9091",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -277,7 +278,7 @@ func (s *ConfigSuite) TestNew() {
 				"STATE_SQLITE_BUSY_TIMEOUT": "2s",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -327,7 +328,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_ISSUER": "https://tempogate.internal.example.com",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -379,7 +380,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_GOOGLE_AUTH_ENDPOINT": "http://127.0.0.1:9999/mock/auth",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -431,7 +432,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_ALLOW_INSECURE_REDIRECT_URIS": "true",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -486,7 +487,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_GOOGLE_ISSUER_URL":      "http://127.0.0.1:9999",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -540,7 +541,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_SESSION_SIGNING_KEY": "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info"},
+				Log: LogConfig{Level: "info", Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
