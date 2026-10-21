@@ -40,7 +40,8 @@ var ErrDeviceCodeNotPending = errors.New("oidc: device code already approved or 
 // verification page (already normalised — uppercase, no dashes — so a lookup
 // is a plain UNIQUE-index probe).
 //
-// Email is empty until Approve stamps the authenticated user onto the row;
+// Subject and Email are empty until Approve stamps the authenticated user onto
+// the row;
 // ApprovedAt and DeniedAt carry the pending → approved/denied transition,
 // with both nil meaning "still awaiting user action". LastPolledAt and
 // IntervalSeconds back the server-enforced slow_down rule (§3.5): a poll
@@ -51,6 +52,7 @@ type DeviceCode struct {
 	UserCode        string
 	ClientID        string
 	Scope           string
+	Subject         string
 	Email           string
 	ApprovedAt      *time.Time
 	DeniedAt        *time.Time
@@ -100,10 +102,10 @@ type DeviceCodeStore interface {
 	// for an unknown device_code.
 	PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (slowDown bool, err error)
 
-	// ApproveDeviceCode atomically stamps the row as approved by email only
+	// ApproveDeviceCode atomically stamps the row as approved by id only
 	// when it is still pending and not expired at now; otherwise
 	// ErrDeviceCodeNotPending.
-	ApproveDeviceCode(ctx context.Context, userCode, email string, now time.Time) error
+	ApproveDeviceCode(ctx context.Context, userCode string, id Identity, now time.Time) error
 
 	// DenyDeviceCode atomically stamps the row as denied only when it is
 	// still pending and not expired at now; otherwise ErrDeviceCodeNotPending.

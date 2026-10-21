@@ -106,7 +106,7 @@ func (m *memDeviceFlowStore) PollDeviceCode(_ context.Context, deviceCode string
 	return slowDown, nil
 }
 
-func (m *memDeviceFlowStore) ApproveDeviceCode(_ context.Context, userCode, email string, now time.Time) error {
+func (m *memDeviceFlowStore) ApproveDeviceCode(_ context.Context, userCode string, id oidc.Identity, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	dcCode, ok := m.byUser[userCode]
@@ -119,7 +119,8 @@ func (m *memDeviceFlowStore) ApproveDeviceCode(_ context.Context, userCode, emai
 	}
 	t := now
 	dc.ApprovedAt = &t
-	dc.Email = email
+	dc.Subject = id.Subject
+	dc.Email = id.Email
 	m.rows[dcCode] = dc
 	return nil
 }
@@ -196,8 +197,12 @@ func (s *TokenSuite) seedPending(deviceCode, userCode string) {
 	s.deviceStore.put(pendingDeviceCode(deviceCode, userCode))
 }
 
-func (s *TokenSuite) approve(userCode, email string) {
-	s.Require().NoError(s.deviceStore.ApproveDeviceCode(context.Background(), userCode, email, signNow))
+func (s *TokenSuite) approve(userCode string, id oidc.Identity) {
+	s.Require().NoError(s.deviceStore.ApproveDeviceCode(context.Background(), userCode, id, signNow))
+}
+
+func aliceID() oidc.Identity {
+	return oidc.Identity{Subject: "google-sub-alice", Email: "alice@example.com"}
 }
 
 func (s *TokenSuite) deny(userCode string) {
@@ -359,7 +364,7 @@ func (s *TokenSuite) TestDeviceCodeDeniedSelfConsumes() {
 // the authorization_code path (same claims, same TTL, no nonce).
 func (s *TokenSuite) TestDeviceCodeApprovedMintsTokenAndConsumes() {
 	s.seedPending("dc-1", "BCDFGHJK")
-	s.approve("BCDFGHJK", "alice@example.com")
+	s.approve("BCDFGHJK", aliceID())
 
 	resp := s.post(deviceForm("dc-1", "tempogate-device"))
 	defer resp.Body.Close()
@@ -376,11 +381,18 @@ func (s *TokenSuite) TestDeviceCodeApprovedMintsTokenAndConsumes() {
 	tok, err := s.verifier.Verify(context.Background(), body.AccessToken)
 	s.Require().NoError(err)
 	sub, _ := tok.Subject()
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-alice", sub, "the device grant mints the approver's Google sub")
+	email, err := jwxjwt.Get[string](tok, "email")
+	s.Require().NoError(err)
+	s.Equal("alice@example.com", email)
+	s.Equal("google-sub-alice", s.store.lastRefresh().Subject, "the device grant's refresh row keeps the subject")
 	clientID, err := jwxjwt.Get[string](tok, "client_id")
 	s.Require().NoError(err)
 	s.Equal("tempogate-device", clientID, "the token is issued to the polling client")
-	aud, _ := s.parseIDToken(body.IDToken).Audience()
+	idTok := s.parseIDToken(body.IDToken)
+	idSub, _ := idTok.Subject()
+	s.Equal("google-sub-alice", idSub, "the ID token carries the same Google sub")
+	aud, _ := idTok.Audience()
 	s.Equal([]string{"tempogate-device"}, aud, "the ID token's aud is the polling client_id")
 	perms, ok := tok.Field("permissions")
 	s.Require().True(ok)
@@ -401,6 +413,20 @@ func (s *TokenSuite) TestDeviceCodeApprovedMintsTokenAndConsumes() {
 	defer second.Body.Close()
 	s.Equal(400, second.StatusCode)
 	s.Equal("invalid_grant", s.decodeOAuthError(second))
+}
+
+// TestDeviceCodeWithoutSubjectIsInvalidGrant covers a row approved before
+// schema 0010: it carries an email but no subject, so the poll is refused
+// and the user restarts the device flow.
+func (s *TokenSuite) TestDeviceCodeWithoutSubjectIsInvalidGrant() {
+	s.seedPending("dc-1", "BCDFGHJK")
+	s.approve("BCDFGHJK", oidc.Identity{Email: "alice@example.com"})
+
+	resp := s.post(deviceForm("dc-1", "tempogate-device"))
+	defer resp.Body.Close()
+	s.Equal(400, resp.StatusCode)
+	s.Equal("invalid_grant", s.decodeOAuthError(resp))
+	s.Zero(s.store.refreshCount())
 }
 
 // TestDeviceCodeClaimsMatchAuthorizationCode is the byte-identical-claims
@@ -434,7 +460,7 @@ func (s *TokenSuite) TestDeviceCodeClaimsMatchAuthorizationCode() {
 	dc := pendingDeviceCode("dc-1", "BCDFGHJK")
 	dc.ClientID = dual
 	s.deviceStore.put(dc)
-	s.approve("BCDFGHJK", "alice@example.com")
+	s.approve("BCDFGHJK", aliceID())
 	dcResp := s.post(deviceForm("dc-1", dual))
 	defer dcResp.Body.Close()
 	s.Require().Equal(200, dcResp.StatusCode)

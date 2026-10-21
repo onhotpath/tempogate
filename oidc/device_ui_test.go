@@ -33,12 +33,15 @@ const (
 	deviceUITestUserDisplay   = "BCDF-GHJK"
 	deviceUITestSID           = "fixed-device-ui-sid"
 	deviceUITestEmail         = "alice@example.com"
+	deviceUITestSubject       = "google-sub-alice"
 	deviceUITestStateNonce    = "fixed-state-nonce"
 	deviceUIInternalSecret    = "device-ui-secret"
 	deviceUIClientsRaw        = "tempogate-device:,tempogate-device-ui:https://tempogate.example.com/device/sso-callback"
 )
 
 var deviceUINow = time.Unix(1700000000, 0).UTC()
+
+var deviceUITestIdentity = oidc.Identity{Subject: deviceUITestSubject, Email: deviceUITestEmail}
 
 // statefulDeviceCodeStore is a richer in-memory store than memDeviceCodeStore:
 // the device-ui tests need a live LookupDeviceCodeByUserCode and a flipping
@@ -56,7 +59,7 @@ type statefulDeviceCodeStore struct {
 
 type deviceDecision struct {
 	UserCode string
-	Email    string
+	Identity oidc.Identity
 	At       time.Time
 }
 
@@ -96,7 +99,7 @@ func (s *statefulDeviceCodeStore) PollDeviceCode(_ context.Context, _ string, _ 
 	return false, nil
 }
 
-func (s *statefulDeviceCodeStore) ApproveDeviceCode(_ context.Context, userCode, email string, now time.Time) error {
+func (s *statefulDeviceCodeStore) ApproveDeviceCode(_ context.Context, userCode string, id oidc.Identity, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.approveErr != nil {
@@ -110,9 +113,10 @@ func (s *statefulDeviceCodeStore) ApproveDeviceCode(_ context.Context, userCode,
 		return oidc.ErrDeviceCodeNotPending
 	}
 	dc.ApprovedAt = &now
-	dc.Email = email
+	dc.Subject = id.Subject
+	dc.Email = id.Email
 	s.byUser[userCode] = dc
-	s.approved = append(s.approved, deviceDecision{UserCode: userCode, Email: email, At: now})
+	s.approved = append(s.approved, deviceDecision{UserCode: userCode, Identity: id, At: now})
 	return nil
 }
 
@@ -157,14 +161,14 @@ func (s *statefulDeviceCodeStore) countDenied() int {
 // the device-flow surface built before handing it to the redeemer.
 type fakeAuthCodeRedeemer struct {
 	mu      sync.Mutex
-	email   string
+	id      oidc.Identity
 	err     error
 	calls   int
 	lastReq oidc.AuthCodeRedemptionRequest
 }
 
-func newFakeAuthCodeRedeemer(email string) *fakeAuthCodeRedeemer {
-	return &fakeAuthCodeRedeemer{email: email}
+func newFakeAuthCodeRedeemer(id oidc.Identity) *fakeAuthCodeRedeemer {
+	return &fakeAuthCodeRedeemer{id: id}
 }
 
 func (f *fakeAuthCodeRedeemer) RedeemAuthorizationCode(_ context.Context, in oidc.AuthCodeRedemptionRequest) (*oidc.AuthCodeRedemption, error) {
@@ -175,7 +179,7 @@ func (f *fakeAuthCodeRedeemer) RedeemAuthorizationCode(_ context.Context, in oid
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &oidc.AuthCodeRedemption{Email: f.email, ClientID: in.ClientID}, nil
+	return &oidc.AuthCodeRedemption{Identity: f.id, ClientID: in.ClientID}, nil
 }
 
 func (f *fakeAuthCodeRedeemer) setErr(err error) {
@@ -240,7 +244,7 @@ func (s *DeviceUISuite) SetupTest() {
 	s.Require().NoError(reg.WithSecrets("tempogate-device-ui:" + deviceUIInternalSecret))
 	s.clients = reg
 
-	s.redeemer = newFakeAuthCodeRedeemer(deviceUITestEmail)
+	s.redeemer = newFakeAuthCodeRedeemer(deviceUITestIdentity)
 
 	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
@@ -271,12 +275,13 @@ func (s *DeviceUISuite) TearDownTest() {
 func (s *DeviceUISuite) seedSession() string {
 	s.Require().NoError(s.bsStore.SaveBrowserSession(context.Background(), oidc.BrowserSession{
 		SID:       deviceUITestSID,
+		Subject:   deviceUITestSubject,
 		Email:     deviceUITestEmail,
 		CreatedAt: deviceUINow,
 		ExpiresAt: deviceUINow.Add(5 * time.Minute),
 	}))
 	rec := httptest.NewRecorder()
-	_, cookie, err := s.sessions.IssueCookie(context.Background(), deviceUITestEmail)
+	_, cookie, err := s.sessions.IssueCookie(context.Background(), deviceUITestIdentity)
 	s.Require().NoError(err)
 	rec.Header().Set("Set-Cookie", cookie.String())
 	return cookie.String()
@@ -456,6 +461,7 @@ func (s *DeviceUISuite) TestSSOCallbackHappyPath() {
 
 	s.Equal(1, s.bsStore.count())
 	s.Equal(deviceUITestEmail, s.bsStore.only().Email)
+	s.Equal(deviceUITestSubject, s.bsStore.only().Subject, "the session carries the Google sub from the redeemed code")
 	s.Equal(1, s.redeemer.callCount())
 	req := s.redeemer.snapshotLastReq()
 	s.Equal("auth-code", req.Code)
@@ -582,7 +588,7 @@ func (s *DeviceUISuite) TestSSOCallbackLogsMissingCodeOrState() {
 // redemption result — pass nil for tests whose failure is upstream of
 // redeemAuthCode, any error to trigger the redeem failure path.
 func (s *DeviceUISuite) deviceUIWithLogger(buf *bytes.Buffer, redeemerErr error) (*oidc.DeviceUI, *httptest.Server) {
-	redeemer := newFakeAuthCodeRedeemer(deviceUITestEmail)
+	redeemer := newFakeAuthCodeRedeemer(deviceUITestIdentity)
 	if redeemerErr != nil {
 		redeemer.setErr(redeemerErr)
 	}
@@ -692,6 +698,7 @@ func (s *DeviceUISuite) TestApproveHappyPathFlipsRow() {
 
 	s.Equal(1, s.store.countApproved())
 	s.Zero(s.store.countDenied())
+	s.Equal(deviceUITestIdentity, s.store.approved[0].Identity, "approval stamps the session's subject and email")
 }
 
 func (s *DeviceUISuite) TestDenyHappyPathFlipsRow() {
@@ -1198,7 +1205,7 @@ func TestNewDeviceUIRejectsMissingInternalClient(t *testing.T) {
 		t.Fatalf("parse clients: %v", err)
 	}
 	sm := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(""), []byte("0123456789abcdef0123456789abcdef"), testIssuer)
+	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer)
 	if !errors.Is(err, oidc.ErrInternalDeviceUIClientMissing) {
 		t.Fatalf("expected ErrInternalDeviceUIClientMissing, got %v", err)
 	}
@@ -1212,7 +1219,7 @@ func TestNewDeviceUIRejectsPublicInternalClient(t *testing.T) {
 	// Skip WithSecrets — the device-ui client stays public, which is the
 	// misconfiguration this asserts is caught.
 	sm := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(""), []byte("0123456789abcdef0123456789abcdef"), testIssuer)
+	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer)
 	if !errors.Is(err, oidc.ErrInternalDeviceUIClientNotConfidential) {
 		t.Fatalf("expected ErrInternalDeviceUIClientNotConfidential, got %v", err)
 	}
@@ -1349,7 +1356,7 @@ func TestNewDeviceUIRejectsInvalidUpstreamOrigin(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(""), key, testIssuer,
+			_, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), key, testIssuer,
 				oidc.WithUpstreamIDPOrigin(tc.raw))
 			if !errors.Is(err, oidc.ErrInvalidUpstreamIDPOrigin) {
 				t.Fatalf("expected ErrInvalidUpstreamIDPOrigin for %q, got %v", tc.raw, err)
@@ -1386,7 +1393,7 @@ func TestNewDeviceUIUpstreamOriginVariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ui, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(""), key, testIssuer,
+			ui, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), key, testIssuer,
 				oidc.WithUpstreamIDPOrigin(tc.raw))
 			if err != nil {
 				t.Fatalf("construct: %v", err)
@@ -1438,7 +1445,7 @@ func TestNewDeviceUIAcceptsCustomInternalClientID(t *testing.T) {
 		t.Fatalf("with secrets: %v", err)
 	}
 	sm := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(""), []byte("0123456789abcdef0123456789abcdef"), testIssuer,
+	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer,
 		oidc.WithInternalClientID("my-custom-ui"))
 	if err != nil {
 		t.Fatalf("custom client id should be honoured: %v", err)
@@ -1526,6 +1533,7 @@ func TestSSOCallbackCompletesWhenIssuerHostIsUnreachable(t *testing.T) {
 		Code:        authCode,
 		ClientID:    "tempogate-device-ui",
 		RedirectURI: unreachableIssuer + callbackPath,
+		Subject:     "google-sub-unreachable",
 		Email:       email,
 		Scope:       "openid email",
 		CreatedAt:   now,
@@ -1605,5 +1613,8 @@ func TestSSOCallbackCompletesWhenIssuerHostIsUnreachable(t *testing.T) {
 	}
 	if got := bsStore.only().Email; got != email {
 		t.Fatalf("expected session email=%q; got %q", email, got)
+	}
+	if got := bsStore.only().Subject; got != "google-sub-unreachable" {
+		t.Fatalf("expected session subject from the redeemed code; got %q", got)
 	}
 }

@@ -33,6 +33,10 @@ services:
       # The identity the one-click consent screen asserts. Its domain must be
       # in TEMPOGATE_ALLOWED_DOMAINS or tempogate's callback returns 403.
       MOCK_EMAIL: "${DEMO_EMAIL:-alice@example.com}"
+      # The Google Workspace hosted domain (`hd` claim) the mock asserts. It
+      # must be in TEMPOGATE_ALLOWED_HOSTED_DOMAINS; set it empty to see a
+      # consumer Google account for the same address get a 403.
+      MOCK_HD: "${DEMO_HD-example.com}"
     ports:
       - "8081:8081"
 
@@ -96,6 +100,9 @@ services:
       # needs it to start. See docs/configuration.md#signing-key-encryption.
       KEYS_ENCRYPTION_KEY: "${TEMPOGATE_KEYS_ENCRYPTION_KEY:-}"
       OIDC_ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
+      # Workspace mode: Google's `hd` claim must also match. Recommended for
+      # any Google Workspace organization.
+      OIDC_ALLOWED_HOSTED_DOMAINS: "${TEMPOGATE_ALLOWED_HOSTED_DOMAINS:-example.com}"
       # Point tempogate's upstream Google client at the bundled mock.
       OIDC_GOOGLE_CLIENT_ID: "tempogate-upstream"
       OIDC_GOOGLE_CLIENT_SECRET: "tempogate-upstream-secret"

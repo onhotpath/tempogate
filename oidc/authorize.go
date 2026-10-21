@@ -80,6 +80,7 @@ type Authorizer struct {
 	issuer       string
 	googleClient string
 	googleAuth   string
+	hdHint       string
 	now          func() time.Time
 	newState     func() (string, error)
 }
@@ -89,6 +90,27 @@ type Option func(*Authorizer)
 // WithClock swaps the clock used to stamp AuthRequest timestamps. For tests.
 func WithClock(now func() time.Time) Option {
 	return func(a *Authorizer) { a.now = now }
+}
+
+// WithHostedDomainHint sends Google the `hd` parameter for the configured
+// hosted domains (OIDC_ALLOWED_HOSTED_DOMAINS): the domain itself when there
+// is exactly one, `*` (any Workspace account) when there are several, and
+// nothing when there are none. It only steers Google's account chooser; it
+// is not a security control, since the user can edit the request. The
+// callback's check of the `hd` claim is what enforces the restriction.
+func WithHostedDomainHint(hostedDomains string) Option {
+	return func(a *Authorizer) {
+		switch set := parseDomains(hostedDomains); len(set) {
+		case 0:
+			a.hdHint = ""
+		case 1:
+			for d := range set {
+				a.hdHint = d
+			}
+		default:
+			a.hdHint = "*"
+		}
+	}
 }
 
 // WithStateGenerator swaps the internal-state token generator. For tests.
@@ -266,6 +288,9 @@ func (a *Authorizer) googleURL(internalState string) (string, error) {
 	q.Set("response_type", "code")
 	q.Set("scope", googleScope)
 	q.Set("state", internalState)
+	if a.hdHint != "" {
+		q.Set("hd", a.hdHint)
+	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

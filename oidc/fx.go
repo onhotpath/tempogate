@@ -50,12 +50,14 @@ type authorizeParams struct {
 	Issuer         string `name:"oidc_issuer"`
 	GoogleClientID string `name:"google_client_id"`
 	GoogleAuth     string `name:"google_auth_endpoint"`
+	HostedDomains  string `name:"oidc_allowed_hosted_domains"`
 }
 
 // newAuthorizeRegistrar builds the /authorize endpoint over the shared
 // registry, so its PKCE/confidential decisions cannot drift from /token's.
 func newAuthorizeRegistrar(p authorizeParams) func(huma.API) {
-	a := New(p.Store, p.Clients, p.Issuer, p.GoogleClientID, p.GoogleAuth)
+	a := New(p.Store, p.Clients, p.Issuer, p.GoogleClientID, p.GoogleAuth,
+		WithHostedDomainHint(p.HostedDomains))
 	return a.Register
 }
 
@@ -64,16 +66,29 @@ type callbackParams struct {
 
 	Store    CallbackStore
 	Upstream Upstream
+	Logger   *slog.Logger
 
 	Issuer         string `name:"oidc_issuer"`
 	AllowedDomains string `name:"oidc_allowed_domains"`
+	HostedDomains  string `name:"oidc_allowed_hosted_domains"`
 }
 
 // newCallbackRegistrar builds the /callback/google endpoint. The Google
 // upstream is injected as oidc.Upstream (bound by the oidc/google provider
-// via fx.As), so this package never imports oauth2/go-oidc.
+// via fx.As), so this package never imports oauth2/go-oidc. Without
+// OIDC_ALLOWED_HOSTED_DOMAINS the gate is the email domain alone, which a
+// consumer Google account for an allowed address passes; that is a supported
+// setup (e.g. mail not hosted on Google Workspace) but it is warned about at
+// startup so it is a visible choice rather than a silent default.
 func newCallbackRegistrar(p callbackParams) func(huma.API) {
-	c := NewCallback(p.Store, p.Upstream, p.AllowedDomains, WithCallbackIssuer(p.Issuer))
+	if len(parseDomains(p.HostedDomains)) == 0 {
+		p.Logger.Warn("OIDC_ALLOWED_HOSTED_DOMAINS is not set: the Google sign-in gate relies on the email domain only, "+
+			"which consumer Google accounts created for an allowed address also pass; "+
+			"set OIDC_ALLOWED_HOSTED_DOMAINS to your Google Workspace domain(s) to require the hd claim",
+			"op", "oidc.callback",
+		)
+	}
+	c := NewCallback(p.Store, p.Upstream, p.AllowedDomains, WithCallbackIssuer(p.Issuer), WithAllowedHostedDomains(p.HostedDomains))
 	return c.Register
 }
 

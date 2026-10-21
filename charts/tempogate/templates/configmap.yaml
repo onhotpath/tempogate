@@ -35,6 +35,9 @@ data:
   {{- with .Values.auth.allowedDomains }}
   OIDC_ALLOWED_DOMAINS: {{ join "," . | quote }}
   {{- end }}
+  {{- with .Values.auth.allowedHostedDomains }}
+  OIDC_ALLOWED_HOSTED_DOMAINS: {{ join "," . | quote }}
+  {{- end }}
   {{- with .Values.auth.upstream.google.authEndpoint }}
   OIDC_GOOGLE_AUTH_ENDPOINT: {{ . | quote }}
   {{- end }}

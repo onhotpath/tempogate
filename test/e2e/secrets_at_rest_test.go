@@ -57,7 +57,7 @@ func TestSecretsAtRest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := setupCLIStack(ctx, t, withImageUser(), withTempogateEnv(map[string]string{"KEYS_ENCRYPTION_KEY": e2eKEK}))
-	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedEmail, true)
+	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedIdentity())
 
 	secrets := map[string]string{}
 	r := &refresher{t: t, base: st.tempogateBaseURL, httpc: &http.Client{Timeout: 15 * time.Second}}

@@ -16,6 +16,7 @@ func (s *StoreSuite) browserSession(sid string) oidc.BrowserSession {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return oidc.BrowserSession{
 		SID:       sid,
+		Subject:   "google-sub-alice",
 		Email:     "alice@example.com",
 		CreatedAt: now,
 		ExpiresAt: now.Add(5 * time.Minute),
@@ -29,6 +30,7 @@ func (s *StoreSuite) TestSaveBrowserSessionRoundTrip() {
 	got, err := s.store.LookupBrowserSession(s.ctx, bs.SID)
 	s.Require().NoError(err)
 	s.Equal(bs.SID, got.SID)
+	s.Equal(bs.Subject, got.Subject)
 	s.Equal(bs.Email, got.Email)
 	s.True(bs.CreatedAt.Equal(got.CreatedAt))
 	s.True(bs.ExpiresAt.Equal(got.ExpiresAt))

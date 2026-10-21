@@ -47,6 +47,18 @@ type callbackOutput struct {
 	Body        []byte
 }
 
+// UpstreamIdentity is what the Google id_token asserts once its signature
+// and standard claims verify. Subject is Google's `sub`. HostedDomain is the
+// `hd` claim: Google sets it only for accounts managed by a Google Workspace
+// or Cloud organization, so it is empty for consumer accounts, including one
+// created for an address at an allowed domain.
+type UpstreamIdentity struct {
+	Subject       string
+	Email         string
+	EmailVerified bool
+	HostedDomain  string
+}
+
 // Upstream is the Google leg of the flow, kept behind an interface so this
 // package never imports oauth2/go-oidc: the concrete implementation lives in
 // the oidc/google provider package and is injected via fx.As, the same
@@ -56,10 +68,8 @@ type callbackOutput struct {
 type Upstream interface {
 	// ExchangeAndVerify swaps a Google authorization code for an id_token,
 	// verifies its signature and claims against Google's JWKS, and returns
-	// the email it asserts. emailVerified reflects the token's
-	// `email_verified` claim — an unverified email must not be trusted by
-	// the domain gate even if the domain matches.
-	ExchangeAndVerify(ctx context.Context, code string) (email string, emailVerified bool, err error)
+	// the identity it asserts. The domain gates are the callback's concern.
+	ExchangeAndVerify(ctx context.Context, code string) (UpstreamIdentity, error)
 }
 
 // Callback serves GET /callback/google: it completes the upstream half of the
@@ -71,6 +81,7 @@ type Callback struct {
 	store          CallbackStore
 	upstream       Upstream
 	allowedDomains map[string]struct{}
+	hostedDomains  map[string]struct{}
 	now            func() time.Time
 	newCode        func() (string, error)
 }
@@ -88,6 +99,17 @@ func WithCallbackClock(now func() time.Time) CallbackOption {
 // advertises.
 func WithCallbackIssuer(issuer string) CallbackOption {
 	return func(c *Callback) { c.issuer = strings.TrimRight(issuer, "/") }
+}
+
+// WithAllowedHostedDomains turns on Workspace mode: the comma-separated
+// hosted domains the id_token's `hd` claim must match (case-insensitively),
+// on top of email_verified and the email-domain allowlist. An email domain
+// alone proves nothing about who controls the Google account (anyone can
+// create a consumer account for an address they receive mail at), so `hd` is
+// the claim Google documents for restricting access to an organization.
+// Empty leaves Workspace mode off.
+func WithAllowedHostedDomains(raw string) CallbackOption {
+	return func(c *Callback) { c.hostedDomains = parseDomains(raw) }
 }
 
 // WithCodeGenerator swaps the authorization-code token generator. For tests.
@@ -149,13 +171,13 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "missing code")
 	}
 
-	email, verified, err := c.upstream.ExchangeAndVerify(ctx, in.Code)
-	if err != nil {
+	id, err := c.upstream.ExchangeAndVerify(ctx, in.Code)
+	if err != nil || id.Subject == "" {
 		return nil, oauthErr(http.StatusBadGateway, "upstream_error", "could not complete Google sign-in")
 	}
 
-	if !verified || !emailDomainAllowed(c.allowedDomains, email) {
-		return forbiddenPage(email), nil
+	if !id.EmailVerified || !emailDomainAllowed(c.allowedDomains, id.Email) || !c.hostedDomainAllowed(id.HostedDomain) {
+		return forbiddenPage(id.Email), nil
 	}
 
 	code, err := c.newCode()
@@ -168,7 +190,8 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		Code:                code,
 		ClientID:            ar.ClientID,
 		RedirectURI:         ar.RedirectURI,
-		Email:               email,
+		Subject:             id.Subject,
+		Email:               id.Email,
 		Scope:               ar.Scope,
 		CodeChallenge:       ar.CodeChallenge,
 		CodeChallengeMethod: ar.CodeChallengeMethod,
@@ -191,6 +214,17 @@ func emailDomainAllowed(allowed map[string]struct{}, email string) bool {
 		return false
 	}
 	_, ok := allowed[strings.ToLower(email[at+1:])]
+	return ok
+}
+
+// hostedDomainAllowed is the Workspace-mode gate. With no hosted domains
+// configured it admits everyone (the email allowlist alone decides);
+// otherwise the `hd` claim must be present and listed.
+func (c *Callback) hostedDomainAllowed(hd string) bool {
+	if len(c.hostedDomains) == 0 {
+		return true
+	}
+	_, ok := c.hostedDomains[strings.ToLower(hd)]
 	return ok
 }
 

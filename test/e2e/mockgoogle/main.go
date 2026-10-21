@@ -1,10 +1,11 @@
 // Command mockgoogle is a minimal but real upstream OIDC IdP used only by the
 // end-to-end test (test/e2e). It stands in for Google: OIDC discovery, a JWKS,
 // a consent screen a headless browser can click through, and a token endpoint
-// that returns a properly RS256-signed id_token. The asserted identity is
-// controllable at runtime via /_control/identity so one running instance can
-// drive both the allowed-domain and disallowed-domain scenarios without a
-// container restart.
+// that returns a properly RS256-signed id_token. The asserted identity (email,
+// email_verified, Google Workspace `hd` and the stable `sub`) is controllable
+// at runtime via /_control/identity so one running instance can drive the
+// allowed, disallowed-domain and hosted-domain scenarios without a container
+// restart.
 //
 // It is deliberately standalone (its own main, its own container image) so the
 // test exercises tempogate's real golang.org/x/oauth2 + coreos/go-oidc code
@@ -33,9 +34,23 @@ import (
 
 const kid = "mock-google-key-1"
 
+// identity is what the next id_token asserts. Sub mirrors Google's opaque,
+// never-reused account id; HD is the Workspace hosted domain, empty for a
+// consumer account (Google omits the claim then, and so does the mock).
 type identity struct {
+	Sub      string
 	Email    string
 	Verified bool
+	HD       string
+}
+
+// subject returns the configured sub, or a stable per-email default so tests
+// that do not care about sub still get a non-email subject.
+func (id identity) subject() string {
+	if id.Sub != "" {
+		return id.Sub
+	}
+	return "mock-google-sub-" + id.Email
 }
 
 type server struct {
@@ -60,8 +75,10 @@ func main() {
 		issuer: issuer,
 		priv:   priv,
 		current: identity{
+			Sub:      os.Getenv("MOCK_SUB"),
 			Email:    envOr("MOCK_EMAIL", "alice@example.com"),
 			Verified: os.Getenv("MOCK_EMAIL_VERIFIED") != "false",
+			HD:       os.Getenv("MOCK_HD"),
 		},
 		codes: map[string]identity{},
 	}
@@ -196,16 +213,19 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	_ = priv.Set(jwk.AlgorithmKey, jwa.RS256())
 
 	now := time.Now()
-	tok, err := jwt.NewBuilder().
+	b := jwt.NewBuilder().
 		Issuer(s.issuer).
 		Audience([]string{clientID}).
-		Subject("mock-google-sub-"+id.Email).
+		Subject(id.subject()).
 		IssuedAt(now).
 		Expiration(now.Add(time.Hour)).
 		Claim("email", id.Email).
 		Claim("email_verified", id.Verified).
-		Claim("name", id.Email).
-		Build()
+		Claim("name", id.Email)
+	if id.HD != "" {
+		b = b.Claim("hd", id.HD)
+	}
+	tok, err := b.Build()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -225,6 +245,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 // setIdentity lets the test choose the asserted identity before driving the
 // browser, so the allowed- and disallowed-domain scenarios share one instance.
+// Form fields: email (required), verified ("false" to clear), sub and hd
+// (both optional; an empty hd models a consumer account).
 func (s *server) setIdentity(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -240,7 +262,12 @@ func (s *server) setIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	s.current = identity{Email: email, Verified: r.Form.Get("verified") != "false"}
+	s.current = identity{
+		Sub:      r.Form.Get("sub"),
+		Email:    email,
+		Verified: r.Form.Get("verified") != "false",
+		HD:       r.Form.Get("hd"),
+	}
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }

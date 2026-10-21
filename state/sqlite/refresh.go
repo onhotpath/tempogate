@@ -22,7 +22,7 @@ var ErrDuplicateRefreshToken = errors.New("sqlite: refresh token with this value
 // hash: the token itself is never stored (migration 0012), so the caller
 // passes it in and gets it back on the returned Refresh.
 const (
-	refreshFields  = `jti, client_id, email, family_id, auth_time, created_at, expires_at`
+	refreshFields  = `jti, client_id, subject, email, family_id, auth_time, created_at, expires_at`
 	refreshColumns = `token_hash, ` + refreshFields
 )
 
@@ -32,11 +32,11 @@ const (
 func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO refresh_tokens (`+refreshColumns+`)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (
 		     SELECT 1 FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NOT NULL
 		 )`,
-		secretHash(r.Token), r.JTI, r.ClientID, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
+		secretHash(r.Token), r.JTI, r.ClientID, r.Subject, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
 		r.FamilyID,
 	)
 	if err != nil {
@@ -182,6 +182,6 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 
 func scanRefresh(token string, row *sql.Row) (oidc.Refresh, error) {
 	r := oidc.Refresh{Token: token}
-	err := row.Scan(&r.JTI, &r.ClientID, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
+	err := row.Scan(&r.JTI, &r.ClientID, &r.Subject, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
 	return r, err
 }

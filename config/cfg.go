@@ -174,6 +174,14 @@ type OIDCConfig struct {
 	// these exactly. Empty means no one is allowed.
 	AllowedDomains string `ferry:"allowed_domains"`
 
+	// AllowedHostedDomains turns on Workspace mode: a comma-separated list of
+	// Google Workspace hosted domains. When set, the Google id_token must
+	// carry an `hd` claim in this list, in addition to email_verified and the
+	// AllowedDomains email check, so a consumer Google account created for an
+	// allowed address is refused. Empty keeps the email-suffix-only gate
+	// (logged as a warning at startup).
+	AllowedHostedDomains string `ferry:"allowed_hosted_domains"`
+
 	// SessionTTL bounds how long the first-party verification-page session
 	// (the signed cookie that authenticates the human on the device-flow
 	// approval UI) may live. Defaults to 5 minutes; operators may shorten

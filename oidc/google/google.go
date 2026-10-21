@@ -16,11 +16,13 @@ import (
 	coreosoidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 	xgoogle "golang.org/x/oauth2/google"
+
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 const scopes = "openid email"
 
-// Client exchanges a Google authorization code for a verified email. The
+// Client exchanges a Google authorization code for a verified identity. The
 // OIDC provider is resolved lazily on first use: discovery is a network call
 // we must not make at fx graph-construction time.
 type Client struct {
@@ -57,41 +59,50 @@ func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string) *
 
 // ExchangeAndVerify swaps a Google authorization code for an id_token,
 // verifies its signature and claims against Google's JWKS, and returns the
-// email it asserts. emailVerified reflects the token's `email_verified`
-// claim — an unverified email must not be trusted by the domain gate even if
-// the domain matches.
-func (c *Client) ExchangeAndVerify(ctx context.Context, code string) (string, bool, error) {
+// identity it asserts: the stable `sub`, the email with its `email_verified`
+// flag, and the Workspace hosted domain (`hd`, empty for consumer accounts).
+// The gates on those claims are the callback's job, not this client's.
+func (c *Client) ExchangeAndVerify(ctx context.Context, code string) (oidc.UpstreamIdentity, error) {
 	tok, err := c.oauth.Exchange(ctx, code)
 	if err != nil {
-		return "", false, fmt.Errorf("google: code exchange: %w", err)
+		return oidc.UpstreamIdentity{}, fmt.Errorf("google: code exchange: %w", err)
 	}
 
 	rawID, ok := tok.Extra("id_token").(string)
 	if !ok || rawID == "" {
-		return "", false, errors.New("google: token response missing id_token")
+		return oidc.UpstreamIdentity{}, errors.New("google: token response missing id_token")
 	}
 
 	verifier, err := c.idVerifier(ctx)
 	if err != nil {
-		return "", false, err
+		return oidc.UpstreamIdentity{}, err
 	}
 
 	idToken, err := verifier.Verify(ctx, rawID)
 	if err != nil {
-		return "", false, fmt.Errorf("google: verify id_token: %w", err)
+		return oidc.UpstreamIdentity{}, fmt.Errorf("google: verify id_token: %w", err)
 	}
 
 	var claims struct {
 		Email         string `json:"email"`
 		EmailVerified bool   `json:"email_verified"`
+		HostedDomain  string `json:"hd"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		return "", false, fmt.Errorf("google: decode id_token claims: %w", err)
+		return oidc.UpstreamIdentity{}, fmt.Errorf("google: decode id_token claims: %w", err)
+	}
+	if idToken.Subject == "" {
+		return oidc.UpstreamIdentity{}, errors.New("google: id_token has no sub claim")
 	}
 	if claims.Email == "" {
-		return "", false, errors.New("google: id_token has no email claim")
+		return oidc.UpstreamIdentity{}, errors.New("google: id_token has no email claim")
 	}
-	return claims.Email, claims.EmailVerified, nil
+	return oidc.UpstreamIdentity{
+		Subject:       idToken.Subject,
+		Email:         claims.Email,
+		EmailVerified: claims.EmailVerified,
+		HostedDomain:  claims.HostedDomain,
+	}, nil
 }
 
 // idVerifier lazily performs OIDC discovery against issuerURL and caches the

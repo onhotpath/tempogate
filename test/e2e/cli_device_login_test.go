@@ -83,7 +83,7 @@ func TestCLIDeviceLogin(t *testing.T) {
 	ctx := context.Background()
 	st := setupCLIStack(ctx, t)
 
-	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedEmail, true)
+	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedIdentity())
 
 	// The documented device-only registration (`tempogate-device:`) carries
 	// grant types, not just "no redirect URI": the device client cannot be

@@ -26,15 +26,29 @@ var ErrAuthCodeNotFound = errors.New("oidc: auth code not found")
 // the /token handler can revoke the tokens issued from it (RFC 6749 §4.1.2).
 var ErrAuthCodeReused = errors.New("oidc: auth code already redeemed")
 
+// Identity is the authenticated end user as tempogate persists and mints it.
+// Subject is Google's `sub`: opaque, stable and never reused across Google
+// accounts, so it (not the email, which can be re-issued to someone else)
+// becomes the token's sub. Email is carried alongside as a claim.
+//
+// Every row that carries an Identity (auth code, refresh token, device code,
+// browser session) gained its subject in schema 0010. A row with an empty
+// Subject predates that migration, and the hosted-domain check, so it is
+// rejected and the user signs in again.
+type Identity struct {
+	Subject string
+	Email   string
+}
+
 // AuthCode is the authorization code tempogate mints after Google has
-// authenticated the user and the email passed the domain allowlist. It is
+// authenticated the user and the identity passed the domain gates. It is
 // single-use and short-lived: the downstream /token call exchanges it —
 // together with the PKCE verifier matching CodeChallenge — for a signed JWT.
-// Email is the verified upstream identity flat authz keys off in v1.
 type AuthCode struct {
 	Code                string
 	ClientID            string
 	RedirectURI         string
+	Subject             string
 	Email               string
 	Scope               string
 	CodeChallenge       string

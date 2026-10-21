@@ -39,11 +39,11 @@ var ErrDeviceCodeNotPending = fmt.Errorf("%w: sqlite", oidc.ErrDeviceCodeNotPend
 func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO device_codes
-		   (device_code_hash, user_code, client_id, scope, email,
+		   (device_code_hash, user_code, client_id, scope, subject, email,
 		    approved_at, denied_at, last_polled_at, interval_seconds,
 		    created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		secretHash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Email),
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		secretHash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Subject), nullString(dc.Email),
 		nullTime(dc.ApprovedAt), nullTime(dc.DeniedAt), nullTime(dc.LastPolledAt),
 		dc.IntervalSeconds, dc.CreatedAt, dc.ExpiresAt,
 	)
@@ -81,20 +81,21 @@ func (s *Store) LookupDeviceCodeByUserCode(ctx context.Context, userCode string)
 func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oidc.DeviceCode, error) {
 	var (
 		dc           oidc.DeviceCode
+		subject      sql.NullString
 		email        sql.NullString
 		approvedAt   sql.NullTime
 		deniedAt     sql.NullTime
 		lastPolledAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT user_code, client_id, scope, email,
+		`SELECT user_code, client_id, scope, subject, email,
 		        approved_at, denied_at, last_polled_at, interval_seconds,
 		        created_at, expires_at
 		 FROM device_codes
 		 WHERE `+column+` = ?`,
 		value,
 	).Scan(
-		&dc.UserCode, &dc.ClientID, &dc.Scope, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &subject, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	)
@@ -104,9 +105,8 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 	if err != nil {
 		return oidc.DeviceCode{}, fmt.Errorf("sqlite: lookup device code by %s: %w", column, err)
 	}
-	if email.Valid {
-		dc.Email = email.String
-	}
+	dc.Subject = subject.String
+	dc.Email = email.String
 	dc.ApprovedAt = nullableTime(approvedAt)
 	dc.DeniedAt = nullableTime(deniedAt)
 	dc.LastPolledAt = nullableTime(lastPolledAt)
@@ -171,20 +171,20 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 	return true, nil
 }
 
-// ApproveDeviceCode atomically stamps the row as approved by `email` only
+// ApproveDeviceCode atomically stamps the row as approved by `id` only
 // when it is still pending (both approved_at and denied_at NULL) and not
 // expired at now. Otherwise it returns ErrDeviceCodeNotPending: a second
 // click on Approve, an Approve after Deny, an expired code, or a completely
 // unknown user_code all collapse to the same outward error so the UI cannot
 // be coaxed into revealing whether a user_code is in use.
-func (s *Store) ApproveDeviceCode(ctx context.Context, userCode, email string, now time.Time) error {
+func (s *Store) ApproveDeviceCode(ctx context.Context, userCode string, id oidc.Identity, now time.Time) error {
 	return s.decideDeviceCode(ctx, now,
 		`UPDATE device_codes
-		 SET approved_at = ?, email = ?
+		 SET approved_at = ?, subject = ?, email = ?
 		 WHERE user_code = ?
 		   AND approved_at IS NULL
 		   AND denied_at IS NULL`,
-		[]any{now, email, userCode},
+		[]any{now, id.Subject, id.Email, userCode},
 		userCode,
 	)
 }
@@ -245,6 +245,7 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
 	var (
 		dc           = oidc.DeviceCode{Code: deviceCode}
+		subject      sql.NullString
 		email        sql.NullString
 		approvedAt   sql.NullTime
 		deniedAt     sql.NullTime
@@ -252,12 +253,12 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 	)
 	err := s.db.QueryRowContext(ctx,
 		`DELETE FROM device_codes WHERE device_code_hash = ?
-		 RETURNING user_code, client_id, scope, email,
+		 RETURNING user_code, client_id, scope, subject, email,
 		           approved_at, denied_at, last_polled_at, interval_seconds,
 		           created_at, expires_at`,
 		secretHash(deviceCode),
 	).Scan(
-		&dc.UserCode, &dc.ClientID, &dc.Scope, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &subject, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	)
@@ -267,9 +268,8 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 	if err != nil {
 		return oidc.DeviceCode{}, fmt.Errorf("sqlite: consume device code: %w", err)
 	}
-	if email.Valid {
-		dc.Email = email.String
-	}
+	dc.Subject = subject.String
+	dc.Email = email.String
 	dc.ApprovedAt = nullableTime(approvedAt)
 	dc.DeniedAt = nullableTime(deniedAt)
 	dc.LastPolledAt = nullableTime(lastPolledAt)

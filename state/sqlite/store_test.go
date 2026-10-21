@@ -286,6 +286,7 @@ func (s *StoreSuite) authCode(code string) oidc.AuthCode {
 		Code:                code,
 		ClientID:            "ui",
 		RedirectURI:         "https://app.example.com/cb",
+		Subject:             "google-sub-alice",
 		Email:               "alice@example.com",
 		Scope:               "openid email",
 		CodeChallenge:       "challenge",
@@ -302,17 +303,18 @@ func (s *StoreSuite) TestSaveAuthCodeRoundTrip() {
 
 	var got oidc.AuthCode
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT code_hash, client_id, redirect_uri, email, scope,
+		`SELECT code_hash, client_id, redirect_uri, subject, email, scope,
 		        code_challenge, code_challenge_method, nonce, created_at, expires_at
 		 FROM auth_codes WHERE code_hash = ?`, sha256Hex(ac.Code))
 	s.Require().NoError(row.Scan(
-		&got.Code, &got.ClientID, &got.RedirectURI, &got.Email, &got.Scope,
+		&got.Code, &got.ClientID, &got.RedirectURI, &got.Subject, &got.Email, &got.Scope,
 		&got.CodeChallenge, &got.CodeChallengeMethod, &got.Nonce, &got.CreatedAt, &got.ExpiresAt,
 	))
 
 	s.Equal(sha256Hex(ac.Code), got.Code, "only the code's hash is stored")
 	s.Equal(ac.ClientID, got.ClientID)
 	s.Equal(ac.RedirectURI, got.RedirectURI)
+	s.Equal(ac.Subject, got.Subject)
 	s.Equal(ac.Email, got.Email)
 	s.Equal(ac.Scope, got.Scope)
 	s.Equal(ac.CodeChallenge, got.CodeChallenge)
@@ -342,6 +344,7 @@ func (s *StoreSuite) TestConsumeAuthCodeRoundTripAndSingleUse() {
 	s.Equal(ac.Code, got.Code)
 	s.Equal(ac.ClientID, got.ClientID)
 	s.Equal(ac.RedirectURI, got.RedirectURI)
+	s.Equal(ac.Subject, got.Subject)
 	s.Equal(ac.Email, got.Email)
 	s.Equal(ac.Scope, got.Scope)
 	s.Equal(ac.CodeChallenge, got.CodeChallenge)
@@ -383,6 +386,7 @@ func (s *StoreSuite) refresh(token string) oidc.Refresh {
 		Token:     token,
 		JTI:       "jti-" + token,
 		ClientID:  "ui",
+		Subject:   "google-sub-alice",
 		Email:     "alice@example.com",
 		FamilyID:  "family-" + token,
 		AuthTime:  now.Add(-time.Hour),
@@ -397,10 +401,10 @@ func (s *StoreSuite) TestSaveRefreshRoundTrip() {
 
 	var got oidc.Refresh
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT token_hash, jti, client_id, email, family_id, auth_time, created_at, expires_at
+		`SELECT token_hash, jti, client_id, subject, email, family_id, auth_time, created_at, expires_at
 		 FROM refresh_tokens WHERE token_hash = ?`, sha256Hex(r.Token))
 	s.Require().NoError(row.Scan(
-		&got.Token, &got.JTI, &got.ClientID, &got.Email, &got.FamilyID, &got.AuthTime, &got.CreatedAt, &got.ExpiresAt,
+		&got.Token, &got.JTI, &got.ClientID, &got.Subject, &got.Email, &got.FamilyID, &got.AuthTime, &got.CreatedAt, &got.ExpiresAt,
 	))
 	s.Equal(r.FamilyID, got.FamilyID)
 	s.True(r.AuthTime.Equal(got.AuthTime), "authTime: want %v got %v", r.AuthTime, got.AuthTime)
@@ -408,6 +412,7 @@ func (s *StoreSuite) TestSaveRefreshRoundTrip() {
 	s.Equal(sha256Hex(r.Token), got.Token, "only the token's hash is stored")
 	s.Equal(r.JTI, got.JTI)
 	s.Equal(r.ClientID, got.ClientID)
+	s.Equal(r.Subject, got.Subject)
 	s.Equal(r.Email, got.Email)
 	s.True(r.CreatedAt.Equal(got.CreatedAt), "createdAt: want %v got %v", r.CreatedAt, got.CreatedAt)
 	s.True(r.ExpiresAt.Equal(got.ExpiresAt), "expiresAt: want %v got %v", r.ExpiresAt, got.ExpiresAt)
@@ -432,6 +437,7 @@ func (s *StoreSuite) TestConsumeRefreshRoundTripAndRotation() {
 	s.Equal(r.Token, got.Token)
 	s.Equal(r.JTI, got.JTI)
 	s.Equal(r.ClientID, got.ClientID)
+	s.Equal(r.Subject, got.Subject)
 	s.Equal(r.Email, got.Email)
 	s.Equal(r.FamilyID, got.FamilyID)
 	s.True(r.AuthTime.Equal(got.AuthTime))
@@ -555,7 +561,7 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			return err
 		}},
 		{"ApproveDeviceCode", func() error {
-			return s.store.ApproveDeviceCode(s.ctx, "CLOSEDUC", "alice@example.com", time.Now().UTC())
+			return s.store.ApproveDeviceCode(s.ctx, "CLOSEDUC", oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}, time.Now().UTC())
 		}},
 		{"DenyDeviceCode", func() error {
 			return s.store.DenyDeviceCode(s.ctx, "CLOSEDUC", time.Now().UTC())

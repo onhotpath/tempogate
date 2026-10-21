@@ -293,6 +293,7 @@ func (s *TokenSuite) authCode(code string) oidc.AuthCode {
 		Code:                code,
 		ClientID:            "ui",
 		RedirectURI:         testRedirectURI,
+		Subject:             "google-sub-alice",
 		Email:               "alice@example.com",
 		Scope:               "openid email",
 		CodeChallenge:       pkceChallenge,
@@ -328,6 +329,7 @@ func (s *TokenSuite) confAuthCode(code string) oidc.AuthCode {
 		Code:        code,
 		ClientID:    "webui",
 		RedirectURI: testRedirectURI,
+		Subject:     "google-sub-alice",
 		Email:       "alice@example.com",
 		Scope:       "openid email",
 		Nonce:       "rp-nonce-xyz",
@@ -374,7 +376,7 @@ func (s *TokenSuite) TestConfidentialClientSecretViaFormBodyMintsJWT() {
 	s.Require().NoError(err)
 	s.Equal("webui", clientID)
 	sub, _ := tok.Subject()
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-alice", sub)
 
 	id := s.parseIDToken(body.IDToken)
 	aud, _ := id.Audience()
@@ -382,6 +384,8 @@ func (s *TokenSuite) TestConfidentialClientSecretViaFormBodyMintsJWT() {
 	nonce, err := jwxjwt.Get[string](id, "nonce")
 	s.Require().NoError(err)
 	s.Equal("rp-nonce-xyz", nonce, "nonce from /authorize must round-trip into the ID token")
+	idSub, _ := id.Subject()
+	s.Equal("google-sub-alice", idSub, "the ID token carries the same Google sub")
 }
 
 func (s *TokenSuite) TestConfidentialClientSecretViaHTTPBasicMintsJWT() {
@@ -515,7 +519,7 @@ func (s *TokenSuite) TestAuthorizationCodeGrantMintsVerifiableJWT() {
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-alice", sub, "sub is Google's stable, never-reused account id, not the email")
 
 	email, err := jwxjwt.Get[string](tok, "email")
 	s.Require().NoError(err)
@@ -533,6 +537,7 @@ func (s *TokenSuite) TestAuthorizationCodeGrantMintsVerifiableJWT() {
 	saved := s.store.lastRefresh()
 	s.Equal(fixedRefresh, saved.Token)
 	s.Equal("alice@example.com", saved.Email)
+	s.Equal("google-sub-alice", saved.Subject, "the refresh row must carry the subject so a refresh keeps it")
 	s.Equal("ui", saved.ClientID)
 	s.NotEmpty(saved.JTI)
 	gotJTI, ok := tok.JwtID()
@@ -541,6 +546,19 @@ func (s *TokenSuite) TestAuthorizationCodeGrantMintsVerifiableJWT() {
 	s.Equal(oidc.DefaultRefreshTokenTTL, saved.ExpiresAt.Sub(saved.CreatedAt), "a new session gets the idle lifetime")
 	s.True(saved.AuthTime.Equal(signNow), "auth_time is the sign-in time")
 	s.NotEmpty(saved.FamilyID)
+}
+
+func (s *TokenSuite) TestCodeWithoutSubjectIsInvalidGrant() {
+	ac := s.authCode("code-1")
+	ac.Subject = ""
+	s.store.putCode(ac)
+
+	resp := s.post(authCodeForm())
+	defer resp.Body.Close()
+
+	s.Equal(http.StatusBadRequest, resp.StatusCode)
+	s.Equal("invalid_grant", s.decodeOAuthError(resp))
+	s.Zero(s.store.refreshCount())
 }
 
 func (s *TokenSuite) TestReusedCodeIsInvalidGrant() {
@@ -659,6 +677,7 @@ func (s *TokenSuite) TestRefreshTokenGrantRotatesAndMintsSamePermissions() {
 		Token:     "old-refresh",
 		JTI:       "old-jti",
 		ClientID:  "ui",
+		Subject:   "google-sub-alice",
 		Email:     "alice@example.com",
 		FamilyID:  "old-family",
 		AuthTime:  signNow,
@@ -684,7 +703,11 @@ func (s *TokenSuite) TestRefreshTokenGrantRotatesAndMintsSamePermissions() {
 	s.Require().True(ok)
 	s.Equal([]string{"temporal-system:admin"}, toStringSlice(s.T(), perms))
 	sub, _ := tok.Subject()
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-alice", sub, "a refreshed token keeps the original subject")
+	email, err := jwxjwt.Get[string](tok, "email")
+	s.Require().NoError(err)
+	s.Equal("alice@example.com", email)
+	s.Equal("google-sub-alice", s.store.lastRefresh().Subject, "the rotated refresh row keeps the subject")
 
 	// Old token was consumed; presenting it again fails.
 	again := s.post(f)
@@ -703,8 +726,14 @@ func (s *TokenSuite) TestRefreshTokenGrantErrors() {
 		{"missing refresh_token", "", nil, "invalid_request"},
 		{"unknown refresh_token", "nope", nil, "invalid_grant"},
 		{"expired refresh_token", "stale", &oidc.Refresh{
-			Token: "stale", Email: "alice@example.com", ClientID: "ui",
+			Token: "stale", Subject: "google-sub-alice", Email: "alice@example.com", ClientID: "ui",
 			CreatedAt: signNow.Add(-48 * time.Hour), ExpiresAt: signNow.Add(-time.Second),
+		}, "invalid_grant"},
+		// Minted before migration 0010 (no subject, and without the hd
+		// check): rejected so the holder re-authenticates once.
+		{"pre-upgrade refresh_token without subject", "legacy", &oidc.Refresh{
+			Token: "legacy", Email: "alice@example.com", ClientID: "ui",
+			CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
 		}, "invalid_grant"},
 	}
 	for _, tc := range cases {

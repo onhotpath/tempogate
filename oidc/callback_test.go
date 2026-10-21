@@ -84,18 +84,21 @@ func (m *memCallbackStore) codeCount() int {
 }
 
 type fakeUpstream struct {
-	email    string
-	verified bool
-	err      error
-	gotCode  string
+	id      oidc.UpstreamIdentity
+	err     error
+	gotCode string
 }
 
-func (f *fakeUpstream) ExchangeAndVerify(_ context.Context, code string) (string, bool, error) {
+func (f *fakeUpstream) ExchangeAndVerify(_ context.Context, code string) (oidc.UpstreamIdentity, error) {
 	f.gotCode = code
 	if f.err != nil {
-		return "", false, f.err
+		return oidc.UpstreamIdentity{}, f.err
 	}
-	return f.email, f.verified, nil
+	return f.id, nil
+}
+
+func aliceIdentity() oidc.UpstreamIdentity {
+	return oidc.UpstreamIdentity{Subject: "google-sub-alice", Email: "alice@example.com", EmailVerified: true}
 }
 
 type CallbackSuite struct {
@@ -113,7 +116,7 @@ func TestCallbackSuite(t *testing.T) {
 
 func (s *CallbackSuite) SetupTest() {
 	s.store = newMemCallbackStore()
-	s.up = &fakeUpstream{email: "alice@example.com", verified: true}
+	s.up = &fakeUpstream{id: aliceIdentity()}
 	s.srv = s.serverFor(s.store, s.up)
 	s.client = &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -198,6 +201,7 @@ func (s *CallbackSuite) TestHappyPathRedirectsWithMintedCode() {
 	s.Equal("ui", ac.ClientID)
 	s.Equal(testRedirectURI, ac.RedirectURI)
 	s.Equal("alice@example.com", ac.Email)
+	s.Equal("google-sub-alice", ac.Subject, "the code carries Google's stable sub, not the email")
 	s.Equal("openid email", ac.Scope)
 	s.Equal("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", ac.CodeChallenge)
 	s.Equal("S256", ac.CodeChallengeMethod)
@@ -206,7 +210,7 @@ func (s *CallbackSuite) TestHappyPathRedirectsWithMintedCode() {
 }
 
 func (s *CallbackSuite) TestSubdomainCaseInsensitiveDomainMatch() {
-	s.up.email = "BOB@corp.example.ORG"
+	s.up.id.Email = "BOB@corp.example.ORG"
 	s.store.put(s.pendingRequest(fixedState))
 
 	resp := s.get(callbackQuery("c", fixedState))
@@ -217,7 +221,7 @@ func (s *CallbackSuite) TestSubdomainCaseInsensitiveDomainMatch() {
 }
 
 func (s *CallbackSuite) TestEmailOutsideAllowedDomainsIsForbiddenPage() {
-	s.up.email = "mallory@evil.example.net"
+	s.up.id.Email = "mallory@evil.example.net"
 	s.store.put(s.pendingRequest(fixedState))
 
 	resp := s.get(callbackQuery("c", fixedState))
@@ -235,9 +239,76 @@ func (s *CallbackSuite) TestEmailOutsideAllowedDomainsIsForbiddenPage() {
 	s.Zero(s.store.codeCount())
 }
 
+// TestHostedDomainGate is the M5 acceptance: in Workspace mode
+// (OIDC_ALLOWED_HOSTED_DOMAINS set) the upstream id_token's `hd` claim must
+// be in that list, on top of email_verified and the email-suffix allowlist.
+// A consumer Google account for an allowed address carries no `hd` and must
+// not be admitted.
+func (s *CallbackSuite) TestHostedDomainGate() {
+	cases := []struct {
+		name   string
+		hosted string
+		email  string
+		hd     string
+		admit  bool
+	}{
+		{name: "workspace off: no hd admitted (unchanged)", hosted: "", email: "alice@example.com", hd: "", admit: true},
+		{name: "workspace off: foreign hd admitted (unchanged)", hosted: "", email: "alice@example.com", hd: "evil.test", admit: true},
+		{name: "workspace on: missing hd rejected", hosted: "example.com", email: "alice@example.com", hd: "", admit: false},
+		{name: "workspace on: foreign hd rejected", hosted: "example.com", email: "alice@example.com", hd: "evil.test", admit: false},
+		{name: "workspace on: parent of hd is not a match", hosted: "example.com", email: "alice@example.com", hd: "sub.example.com", admit: false},
+		{name: "workspace on: matching hd admitted", hosted: "example.com", email: "alice@example.com", hd: "example.com", admit: true},
+		{name: "workspace on: hd match is case-insensitive", hosted: " Example.COM ", email: "alice@example.com", hd: "EXAMPLE.com", admit: true},
+		{name: "workspace on: any listed hd admitted", hosted: "other.test, corp.example.org", email: "bob@corp.example.org", hd: "corp.example.org", admit: true},
+		{name: "workspace on: matching hd does not bypass the email allowlist", hosted: "evil.test", email: "mallory@evil.test", hd: "evil.test", admit: false},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			store := newMemCallbackStore()
+			store.put(s.pendingRequest(fixedState))
+			up := &fakeUpstream{id: oidc.UpstreamIdentity{
+				Subject: "google-sub-x", Email: tc.email, EmailVerified: true, HostedDomain: tc.hd,
+			}}
+			c := oidc.NewCallback(store, up, allowedDomains,
+				oidc.WithAllowedHostedDomains(tc.hosted),
+				oidc.WithCallbackClock(func() time.Time { return fixedNow }),
+				oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
+			)
+			mux := http.NewServeMux()
+			c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			resp, err := s.client.Get(srv.URL + "/callback/google?" + callbackQuery("c", fixedState).Encode())
+			s.Require().NoError(err)
+			defer resp.Body.Close()
+
+			if tc.admit {
+				s.Equal(http.StatusFound, resp.StatusCode)
+				s.Equal(1, store.codeCount())
+				return
+			}
+			s.Equal(http.StatusForbidden, resp.StatusCode)
+			s.Empty(resp.Header.Get("Location"), "a rejected identity must not be redirected back with a code")
+			s.Zero(store.codeCount(), "no authorization code may be minted for a rejected identity")
+		})
+	}
+}
+
+func (s *CallbackSuite) TestMissingSubjectIsBadGateway() {
+	s.up.id.Subject = ""
+	s.store.put(s.pendingRequest(fixedState))
+
+	resp := s.get(callbackQuery("c", fixedState))
+	defer resp.Body.Close()
+
+	s.Equal(http.StatusBadGateway, resp.StatusCode)
+	s.Zero(s.store.codeCount())
+}
+
 func (s *CallbackSuite) TestUnverifiedEmailIsForbiddenEvenIfDomainAllowed() {
-	s.up.email = "alice@example.com"
-	s.up.verified = false
+	s.up.id.Email = "alice@example.com"
+	s.up.id.EmailVerified = false
 	s.store.put(s.pendingRequest(fixedState))
 
 	resp := s.get(callbackQuery("c", fixedState))
@@ -248,7 +319,7 @@ func (s *CallbackSuite) TestUnverifiedEmailIsForbiddenEvenIfDomainAllowed() {
 }
 
 func (s *CallbackSuite) TestForbiddenPageEscapesEmail() {
-	s.up.email = `x"<script>@evil.net`
+	s.up.id.Email = `x"<script>@evil.net`
 	s.store.put(s.pendingRequest(fixedState))
 
 	resp := s.get(callbackQuery("c", fixedState))
@@ -378,7 +449,7 @@ func (s *CallbackSuite) TestMalformedRedirectURIIsServerError() {
 func (s *CallbackSuite) TestDefaultCodeGeneratorIsOpaque() {
 	store := newMemCallbackStore()
 	store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(store, &fakeUpstream{email: "alice@example.com", verified: true}, allowedDomains,
+	c := oidc.NewCallback(store, &fakeUpstream{id: aliceIdentity()}, allowedDomains,
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 	) // no WithCodeGenerator: exercises crypto/rand path
 	mux := http.NewServeMux()

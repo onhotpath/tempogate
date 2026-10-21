@@ -39,6 +39,7 @@ func (s *StoreSuite) TestSaveDeviceCodeRoundTripByDeviceCode() {
 	s.Equal(dc.UserCode, got.UserCode)
 	s.Equal(dc.ClientID, got.ClientID)
 	s.Equal(dc.Scope, got.Scope)
+	s.Equal("", got.Subject)
 	s.Equal("", got.Email)
 	s.Equal(5, got.IntervalSeconds)
 	s.Nil(got.ApprovedAt)
@@ -125,10 +126,11 @@ func (s *StoreSuite) TestApproveDeviceCodeTransitionsRow() {
 	s.Require().NoError(s.store.SaveDeviceCode(s.ctx, dc))
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, "alice@example.com", now))
+	s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}, now))
 
 	got, err := s.store.LookupDeviceCodeByUserCode(s.ctx, dc.UserCode)
 	s.Require().NoError(err)
+	s.Equal("sub-alice", got.Subject)
 	s.Equal("alice@example.com", got.Email)
 	s.Require().NotNil(got.ApprovedAt)
 	s.True(now.Equal(*got.ApprovedAt))
@@ -143,7 +145,7 @@ func (s *StoreSuite) TestApproveDeviceCodeAlreadyDecided() {
 		{
 			name: "already approved",
 			seed: func(dc oidc.DeviceCode, now time.Time) {
-				s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, "first@example.com", now))
+				s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, oidc.Identity{Subject: "sub-first", Email: "first@example.com"}, now))
 			},
 		},
 		{
@@ -164,7 +166,7 @@ func (s *StoreSuite) TestApproveDeviceCodeAlreadyDecided() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			tc.seed(dc, now)
 
-			err := s.store.ApproveDeviceCode(s.ctx, dc.UserCode, "second@example.com", now.Add(time.Second))
+			err := s.store.ApproveDeviceCode(s.ctx, dc.UserCode, oidc.Identity{Subject: "sub-second", Email: "second@example.com"}, now.Add(time.Second))
 			s.Require().Error(err)
 			s.Truef(errors.Is(err, ErrDeviceCodeNotPending),
 				"expected ErrDeviceCodeNotPending, got %v", err)
@@ -174,7 +176,7 @@ func (s *StoreSuite) TestApproveDeviceCodeAlreadyDecided() {
 
 func (s *StoreSuite) TestApproveDeviceCodeUnknownUserCode() {
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	err := s.store.ApproveDeviceCode(s.ctx, "NEVERSAVED", "alice@example.com", now)
+	err := s.store.ApproveDeviceCode(s.ctx, "NEVERSAVED", oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}, now)
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, ErrDeviceCodeNotPending),
 		"expected ErrDeviceCodeNotPending, got %v", err)
@@ -203,7 +205,7 @@ func (s *StoreSuite) TestDenyDeviceCodeAlreadyDecided() {
 		{
 			name: "already approved",
 			seed: func(dc oidc.DeviceCode, now time.Time) {
-				s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, "alice@example.com", now))
+				s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}, now))
 			},
 		},
 		{
@@ -237,12 +239,13 @@ func (s *StoreSuite) TestConsumeDeviceCodeRoundTripAndSingleUse() {
 	s.Require().NoError(s.store.SaveDeviceCode(s.ctx, dc))
 
 	approvedAt := time.Now().UTC().Truncate(time.Microsecond)
-	s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, "alice@example.com", approvedAt))
+	s.Require().NoError(s.store.ApproveDeviceCode(s.ctx, dc.UserCode, oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}, approvedAt))
 
 	got, err := s.store.ConsumeDeviceCode(s.ctx, dc.Code)
 	s.Require().NoError(err)
 	s.Equal(dc.Code, got.Code)
 	s.Equal(dc.UserCode, got.UserCode)
+	s.Equal("sub-alice", got.Subject)
 	s.Equal("alice@example.com", got.Email)
 	s.Require().NotNil(got.ApprovedAt)
 	s.True(approvedAt.Equal(*got.ApprovedAt))
@@ -318,7 +321,7 @@ func (s *StoreSuite) TestPollDeviceCodeConcurrentPollsGetOneAnswer() {
 func (s *StoreSuite) TestDecideDeviceCodeRejectsExpiredRow() {
 	decide := map[string]func(userCode string, now time.Time) error{
 		"approve": func(userCode string, now time.Time) error {
-			return s.store.ApproveDeviceCode(s.ctx, userCode, "alice@example.com", now)
+			return s.store.ApproveDeviceCode(s.ctx, userCode, oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}, now)
 		},
 		"deny": func(userCode string, now time.Time) error {
 			return s.store.DenyDeviceCode(s.ctx, userCode, now)

@@ -36,7 +36,7 @@ func TestCLITransport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := setupCLIStack(ctx, t)
-	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedEmail, true)
+	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedIdentity())
 
 	t.Run("plain-http issuer is refused without --insecure", func(t *testing.T) {
 		st.exec(ctx, t, "rm", "-f", cliAuthURLFile)

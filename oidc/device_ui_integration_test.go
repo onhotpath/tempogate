@@ -240,6 +240,7 @@ func (s *DeviceUIIntegrationSuite) TestFullDeviceFlowAgainstRealStack() {
 	s.Require().NoError(err)
 	s.Require().NotNil(row.ApprovedAt, "ApproveDeviceCode must have stamped the row")
 	s.Equal("alice@example.com", row.Email)
+	s.Equal("google-sub-123", row.Subject)
 
 	f := url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -271,7 +272,7 @@ func (s *DeviceUIIntegrationSuite) TestFullDeviceFlowAgainstRealStack() {
 	s.Require().NoError(err)
 	sub, ok := parsed.Subject()
 	s.Require().True(ok)
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-123", sub, "the device grant mints the approver's Google sub")
 }
 
 // TestDenyFlipsRowAndDeviceCodePollSeesAccessDenied exercises the deny

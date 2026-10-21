@@ -92,6 +92,7 @@ type Refresh struct {
 	Token     string
 	JTI       string
 	ClientID  string
+	Subject   string
 	Email     string
 	FamilyID  string
 	AuthTime  time.Time
@@ -356,7 +357,7 @@ type AuthCodeRedemptionRequest struct {
 // id-token minting (the public /token handler) or in-process session
 // issuance (the device-flow verification UI).
 type AuthCodeRedemption struct {
-	Email    string
+	Identity Identity
 	ClientID string
 	Nonce    string
 
@@ -427,6 +428,9 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 	if now.After(ac.ExpiresAt) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "authorization code expired")
 	}
+	if ac.Subject == "" {
+		return nil, errLegacyGrant("authorization code")
+	}
 	if in.ClientID != ac.ClientID {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "client_id does not match the authorization request")
 	}
@@ -451,7 +455,12 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "authorization code is not bound to a PKCE challenge")
 	}
 
-	return &AuthCodeRedemption{Email: ac.Email, ClientID: ac.ClientID, Nonce: ac.Nonce, FamilyID: familyID}, nil
+	return &AuthCodeRedemption{
+		Identity: Identity{Subject: ac.Subject, Email: ac.Email},
+		ClientID: ac.ClientID,
+		Nonce:    ac.Nonce,
+		FamilyID: familyID,
+	}, nil
 }
 
 // authenticateClient resolves the client a /token request speaks for,
@@ -494,7 +503,7 @@ func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, aut
 	if err != nil {
 		return nil, err
 	}
-	return t.issue(ctx, r.Email, r.ClientID, r.Nonce, lineage{familyID: r.FamilyID, authTime: t.now()})
+	return t.issue(ctx, r.Identity, r.ClientID, r.Nonce, lineage{familyID: r.FamilyID, authTime: t.now()})
 }
 
 func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
@@ -545,6 +554,9 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 	if !now.Before(rt.AuthTime.Add(t.refreshMaxLifetime)) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "session reached its maximum lifetime; sign in again")
 	}
+	if rt.Subject == "" {
+		return nil, errLegacyGrant("refresh token")
+	}
 	// The allowlist is re-applied on every refresh, so removing a domain
 	// ends its sessions at their next refresh rather than at their absolute
 	// expiry. The family is revoked so no sibling token outlives the
@@ -560,7 +572,15 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 	// No nonce on refresh: OIDC Core binds nonce to the original
 	// authentication request, not to silently-renewed tokens, and the
 	// relying party does not re-check it on the refresh path.
-	return t.issue(ctx, rt.Email, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
+	return t.issue(ctx, Identity{Subject: rt.Subject, Email: rt.Email}, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
+}
+
+// errLegacyGrant rejects a grant persisted before schema 0010 recorded the
+// Google subject. Such a grant was admitted without the hosted-domain check
+// and cannot be minted with the correct sub, so the holder must sign in
+// again; doing so once is the whole upgrade cost.
+func errLegacyGrant(kind string) *oauthError {
+	return oauthErr(http.StatusBadRequest, "invalid_grant", kind+" predates this tempogate version; sign in again")
 }
 
 // revokeFamily revokes rt's family and records the security event. The
@@ -592,7 +612,7 @@ type lineage struct {
 // issue mints the access token, the ID token and a rotated refresh token,
 // persisting the latter before responding. It is the single place token
 // shape and lifetimes are decided, so the grants cannot drift apart.
-func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l lineage) (*tokenOutput, error) {
+func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, l lineage) (*tokenOutput, error) {
 	now := t.now()
 	if l.familyID == "" {
 		familyID, err := randomFamilyID()
@@ -605,8 +625,8 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l line
 	// The access token is Temporal's credential: permissions, and the
 	// Signer's Temporal audience (OIDC_ACCESS_TOKEN_AUDIENCE).
 	signed, jti, err := t.signer.Mint(ctx, keys.MintRequest{
-		Subject:     email,
-		Email:       email,
+		Subject:     id.Subject,
+		Email:       id.Email,
 		TTL:         t.accessTTL,
 		Permissions: flatAdminPermissions(),
 		ClientID:    clientID,
@@ -615,8 +635,8 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l line
 		return nil, fmt.Errorf("oidc: mint access token: %w", err)
 	}
 	idToken, err := t.signer.MintIDToken(ctx, keys.IDTokenRequest{
-		Subject: email,
-		Email:   email,
+		Subject: id.Subject,
+		Email:   id.Email,
 		// OIDC Core §2: the ID token's aud is the requesting client.
 		Audience: clientID,
 		// Echoed only when the client sent one at /authorize (empty on the
@@ -644,7 +664,8 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l line
 		Token:     refreshTok,
 		JTI:       jti,
 		ClientID:  clientID,
-		Email:     email,
+		Subject:   id.Subject,
+		Email:     id.Email,
 		FamilyID:  l.familyID,
 		AuthTime:  l.authTime,
 		CreatedAt: now,

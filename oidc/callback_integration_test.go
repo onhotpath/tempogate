@@ -198,6 +198,7 @@ func (s *CallbackIntegrationSuite) TestRealGoogleFlowMintsCode() {
 
 	s.Require().Equal(1, store.codeCount())
 	s.Equal("alice@example.com", store.only().Email)
+	s.Equal("google-sub-123", store.only().Subject)
 }
 
 func (s *CallbackIntegrationSuite) TestRealGoogleFlowRejectsDisallowedDomain() {

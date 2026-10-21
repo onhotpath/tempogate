@@ -225,6 +225,11 @@ auth:
   allowInsecureRedirectUris: false
   # Email domains permitted to complete SSO. Empty ⇒ nobody is admitted.
   allowedDomains: []
+  # OIDC_ALLOWED_HOSTED_DOMAINS ("Workspace mode"). Google Workspace domains
+  # whose `hd` claim Google's id_token must carry, on top of allowedDomains.
+  # Recommended for Workspace organizations; empty keeps the email-domain
+  # gate only (tempogate logs a warning).
+  allowedHostedDomains: []
   # Optional confidential-client carve-out (OIDC_CLIENT_SECRETS) — secret
   # material. Supply it via an existing Secret, never as plaintext here.
   clientSecretsSecretRef:
