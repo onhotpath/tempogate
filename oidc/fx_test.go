@@ -51,6 +51,12 @@ func (s *FxSuite) supplyConfigWithSessionKey(clients, signingKeyB64 string) fx.O
 // list (or the insecure-redirect flag) without forcing every other test to
 // plumb the extra arguments.
 func (s *FxSuite) supplyConfigFull(clients, secrets, signingKeyB64 string, allowInsecureRedirectURIs bool) fx.Option {
+	return s.supplyConfigAt(testIssuer, "", clients, secrets, signingKeyB64, allowInsecureRedirectURIs)
+}
+
+// supplyConfigAt additionally varies the issuer and the base path config
+// projects from it, for the wiring that derives behaviour from the issuer.
+func (s *FxSuite) supplyConfigAt(issuer, basePath, clients, secrets, signingKeyB64 string, allowInsecureRedirectURIs bool) fx.Option {
 	return fx.Options(
 		fx.Provide(func() oidc.AuthRequestStore { return &memAuthStore{} }),
 		fx.Provide(func() oidc.BrowserSessionStore { return newMemBrowserSessionStore() }),
@@ -66,7 +72,8 @@ func (s *FxSuite) supplyConfigFull(clients, secrets, signingKeyB64 string, allow
 		// output — those assertions live in device_ui_test.go.
 		fx.Provide(func() *slog.Logger { return slog.New(slog.DiscardHandler) }),
 		fx.Supply(
-			fx.Annotated{Name: "oidc_issuer", Target: testIssuer},
+			fx.Annotated{Name: "oidc_issuer", Target: issuer},
+			fx.Annotated{Name: "oidc_base_path", Target: basePath},
 			fx.Annotated{Name: "oidc_clients", Target: clients},
 			fx.Annotated{Name: "oidc_client_secrets", Target: secrets},
 			fx.Annotated{Name: "oidc_allow_insecure_redirect_uris", Target: allowInsecureRedirectURIs},
@@ -237,6 +244,47 @@ func (s *FxSuite) TestProvidesSessionManager() {
 	defer app.RequireStop()
 
 	s.Require().NotNil(sm)
+}
+
+// TestSessionCookieFollowsIssuer is the regression guard for the device-flow
+// SSO loop: the session cookie must be scoped to the device UI under the
+// issuer's base path (where the routes are actually mounted), and Secure
+// only when the issuer is https, because a browser never returns a Secure
+// cookie over plain http.
+func (s *FxSuite) TestSessionCookieFollowsIssuer() {
+	cases := []struct {
+		name       string
+		issuer     string
+		basePath   string
+		wantPath   string
+		wantSecure bool
+	}{
+		{"https root issuer", "https://tempogate.example.com", "", "/device", true},
+		{"https sub-path issuer", "https://shared.example.com/idp", "/idp", "/idp/device", true},
+		{"http root issuer", "http://tempogate:8000", "", "/device", false},
+		{"http sub-path issuer", "http://tempogate:8000/auth/idp", "/auth/idp", "/auth/idp/device", false},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			var sm *oidc.SessionManager
+			app := fxtest.New(s.T(),
+				s.supplyConfigAt(tc.issuer, tc.basePath, "ui:https://app.example.com/auth",
+					"", testSigningKeyB64, false),
+				oidc.Fx(),
+				fx.Populate(&sm),
+			)
+			app.RequireStart()
+			defer app.RequireStop()
+
+			rec := httptest.NewRecorder()
+			_, err := sm.Issue(s.T().Context(), rec, "alice@example.com")
+			s.Require().NoError(err)
+			cookies := rec.Result().Cookies()
+			s.Require().Len(cookies, 1)
+			s.Equal(tc.wantPath, cookies[0].Path)
+			s.Equal(tc.wantSecure, cookies[0].Secure)
+		})
+	}
 }
 
 // TestDeviceUIIsWiredIntoPublicAPI is the registration regression guard for

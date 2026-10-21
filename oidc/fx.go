@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -116,6 +118,8 @@ type sessionManagerParams struct {
 
 	TTL           time.Duration `name:"oidc_session_ttl"`
 	SigningKeyB64 string        `name:"oidc_session_signing_key"`
+	Issuer        string        `name:"oidc_issuer"`
+	BasePath      string        `name:"oidc_base_path"`
 }
 
 // newSessionManager builds the device-flow verification-page session manager
@@ -137,11 +141,25 @@ func newSessionManager(p sessionManagerParams) (*SessionManager, error) {
 		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
 	}
 
-	opts := []SessionOption{}
+	opts := []SessionOption{
+		// The device UI is mounted under the issuer's base path, so the
+		// cookie must be too, or the browser never sends it to
+		// /device/confirm.
+		WithCookiePath(p.BasePath + DevicePath),
+		WithCookieSecure(!issuerIsPlainHTTP(p.Issuer)),
+	}
 	if p.TTL > 0 {
 		opts = append(opts, WithSessionTTL(p.TTL))
 	}
 	return NewSessionManager(p.Store, key, opts...), nil
+}
+
+// issuerIsPlainHTTP reports whether the issuer is served over plain http
+// (local and docker-compose setups). Anything else, including an unparseable
+// issuer, keeps the cookie Secure.
+func issuerIsPlainHTTP(issuer string) bool {
+	u, err := url.Parse(strings.TrimSpace(issuer))
+	return err == nil && strings.EqualFold(u.Scheme, "http")
 }
 
 type userInfoParams struct {

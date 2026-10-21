@@ -188,9 +188,13 @@ in this release.
   itself (which lives only on the CLI host) the polling endpoint cannot be
   redeemed for a token. Do not paste the JSON response from
   `/device_authorization` into chat.
-* **The verification cookie is tightly scoped.** It is HttpOnly, Secure,
+* **The verification cookie is tightly scoped.** It is HttpOnly,
   `SameSite=Lax`, signed (not encrypted), path-scoped to the device-flow
-  verification UI, and has the TTL set by `OIDC_SESSION_TTL` (default 5m).
+  verification UI (`<issuer-path>/device`, so `/device` at a root issuer),
+  and has the TTL set by `OIDC_SESSION_TTL` (default 5m).
+  It is `Secure` whenever `OIDC_ISSUER` is https; a plain-http issuer (local
+  or docker-compose only) gets a non-`Secure` cookie, since a browser would
+  never send a `Secure` one back over http.
   It is *not* a general-purpose tempogate login session — the only thing it
   authorizes is approving or denying a pending device flow.
 * **The minted token is identical to a loopback token.** Same lifetime,
