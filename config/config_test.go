@@ -19,6 +19,17 @@ func TestConfigSuite(t *testing.T) {
 	suite.Run(t, new(ConfigSuite))
 }
 
+// wantDefaultServer pins the HTTP server hardening defaults shared by the
+// public and admin listeners.
+var wantDefaultServer = ServerConfig{
+	ReadHeaderTimeout: 10 * time.Second,
+	ReadTimeout:       15 * time.Second,
+	WriteTimeout:      30 * time.Second,
+	IdleTimeout:       60 * time.Second,
+	MaxHeaderBytes:    16 << 10,
+	ShutdownTimeout:   15 * time.Second,
+}
+
 func (s *ConfigSuite) TestNew() {
 	cases := []struct {
 		name string
@@ -48,6 +59,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -98,6 +110,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -150,6 +163,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -231,6 +245,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -282,6 +297,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/tmp/tempogate.db",
@@ -331,6 +347,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -382,6 +399,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -433,6 +451,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -487,6 +506,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -540,6 +560,7 @@ func (s *ConfigSuite) TestNew() {
 					ReloadInterval:  30 * time.Second,
 					PublishDelay:    5 * time.Minute,
 				},
+				Server: wantDefaultServer,
 				State: StateConfig{
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
@@ -583,6 +604,29 @@ func (s *ConfigSuite) TestNew() {
 				c := defaultConfig()
 				c.OIDC.Issuer = "http://tempogate:8000"
 				c.OIDC.AllowInsecureIssuer = true
+				return c
+			}(),
+		},
+		{
+			name: "server timeouts and limits overridden by env",
+			env: map[string]string{
+				"SERVER_READ_HEADER_TIMEOUT": "1s",
+				"SERVER_READ_TIMEOUT":        "2s",
+				"SERVER_WRITE_TIMEOUT":       "3s",
+				"SERVER_IDLE_TIMEOUT":        "4s",
+				"SERVER_MAX_HEADER_BYTES":    "8192",
+				"SERVER_SHUTDOWN_TIMEOUT":    "5s",
+			},
+			want: func() *Config {
+				c := defaultConfig()
+				c.Server = ServerConfig{
+					ReadHeaderTimeout: 1 * time.Second,
+					ReadTimeout:       2 * time.Second,
+					WriteTimeout:      3 * time.Second,
+					IdleTimeout:       4 * time.Second,
+					MaxHeaderBytes:    8192,
+					ShutdownTimeout:   5 * time.Second,
+				}
 				return c
 			}(),
 		},

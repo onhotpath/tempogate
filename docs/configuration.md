@@ -43,6 +43,20 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 | `HTTP_RATE_LIMIT_DEVICE_VERIFICATION` | `20` | Requests per minute per client address to `POST /device` (the user_code form). `0` disables. |
 | `HTTP_RATE_LIMIT_TOKEN` | `60` | Requests per minute per client address to `POST /token`. `0` disables. |
 
+### HTTP server hardening
+
+Applied identically to the public and the admin listener.
+Durations are Go durations; `0` disables that timeout (not recommended).
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SERVER_READ_HEADER_TIMEOUT` | `10s` | Time allowed to read the request headers. Bounds slow-header (slowloris) clients. |
+| `SERVER_READ_TIMEOUT` | `15s` | Time allowed to read the whole request, headers and body. Bounds slow-body clients; request bodies are small form posts, capped at 1 MiB. |
+| `SERVER_WRITE_TIMEOUT` | `30s` | Time from the end of the request headers until the response is written. Covers the handler itself, so it must outlast the slowest legitimate request: the Google callback's code exchange and JWKS fetch. No endpoint streams or long-polls (device-flow polling returns immediately). |
+| `SERVER_IDLE_TIMEOUT` | `60s` | How long an idle keep-alive connection stays open between requests. |
+| `SERVER_MAX_HEADER_BYTES` | `16384` | Upper bound on the request header block (net/http adds 4 KiB of slack). Larger requests get `431 Request Header Fields Too Large`. `0` falls back to the net/http default of 1 MiB. |
+| `SERVER_SHUTDOWN_TIMEOUT` | `15s` | Grace in-flight requests get after `SIGTERM`; connections still active afterwards are force-closed (logged as `graceful shutdown: context deadline exceeded`); `0` force-closes immediately. Keep it below the pod's `terminationGracePeriodSeconds` (Kubernetes default `30s`) and under the process's 1-minute stop ceiling. |
+
 ### Abuse controls
 
 The public endpoints accept anonymous requests, and `/authorize` and `/device_authorization` write a row per request, so tempogate bounds both the size and the rate of what an unauthenticated caller can send.

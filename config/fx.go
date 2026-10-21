@@ -17,6 +17,7 @@ type Result struct {
 	LogLevel              log.Level
 	HTTPListener          Listener      `name:"http"`
 	AdminListener         Listener      `name:"admin"`
+	HTTPServer            ServerConfig  `name:"http_server"`
 	APIDocsEnabled        bool          `name:"api_docs_enabled"`
 	HTTPTrustedProxies    string        `name:"http_trusted_proxies"`
 	RateLimitAuthorize    int           `name:"http_rate_limit_authorize"`
@@ -82,6 +83,7 @@ func project(cfg *Config) Result {
 		LogLevel:              log.Level(cfg.Log.Level),
 		HTTPListener:          cfg.HTTP.Listener,
 		AdminListener:         cfg.Admin.Listener,
+		HTTPServer:            cfg.Server,
 		APIDocsEnabled:        cfg.API.DocsEnabled,
 		HTTPTrustedProxies:    cfg.HTTP.TrustedProxies,
 		RateLimitAuthorize:    cfg.HTTP.RateLimit.Authorize,

@@ -5,13 +5,14 @@ import (
 )
 
 type Config struct {
-	Log   LogConfig   `ferry:"log"`
-	HTTP  HTTPConfig  `ferry:"http"`
-	Admin AdminConfig `ferry:"admin"`
-	API   APIConfig   `ferry:"api"`
-	State StateConfig `ferry:"state"`
-	OIDC  OIDCConfig  `ferry:"oidc"`
-	Keys  KeysConfig  `ferry:"keys"`
+	Log    LogConfig    `ferry:"log"`
+	HTTP   HTTPConfig   `ferry:"http"`
+	Admin  AdminConfig  `ferry:"admin"`
+	Server ServerConfig `ferry:"server"`
+	API    APIConfig    `ferry:"api"`
+	State  StateConfig  `ferry:"state"`
+	OIDC   OIDCConfig   `ferry:"oidc"`
+	Keys   KeysConfig   `ferry:"keys"`
 }
 
 type LogConfig struct {
@@ -122,6 +123,23 @@ type APIConfig struct {
 	// a looser CSP to load its renderer from a CDN, so serve refuses it
 	// unless OIDC_ISSUER is plain http. Off by default.
 	DocsEnabled bool `ferry:"docs_enabled"`
+}
+
+// ServerConfig hardens every HTTP listener (public and admin alike). Without
+// these bounds a slow body, an idle keep-alive or an oversized header block
+// pins a goroutine and a file descriptor indefinitely, and graceful shutdown
+// waits on such clients forever. Zero durations disable the corresponding
+// net/http timeout; zero MaxHeaderBytes falls back to the net/http 1 MiB.
+type ServerConfig struct {
+	ReadHeaderTimeout time.Duration `ferry:"read_header_timeout"`
+	ReadTimeout       time.Duration `ferry:"read_timeout"`
+	WriteTimeout      time.Duration `ferry:"write_timeout"`
+	IdleTimeout       time.Duration `ferry:"idle_timeout"`
+	MaxHeaderBytes    int           `ferry:"max_header_bytes"`
+
+	// ShutdownTimeout is the grace in-flight requests get after SIGTERM
+	// before their connections are force-closed; zero force-closes at once.
+	ShutdownTimeout time.Duration `ferry:"shutdown_timeout"`
 }
 
 type StateConfig struct {

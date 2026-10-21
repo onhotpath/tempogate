@@ -174,3 +174,20 @@ func TestNewFailsOnMissingExplicitFile(t *testing.T) {
 	_, err := New(Params{Path: Path(filepath.Join(t.TempDir(), "missing.yaml"))})
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
+
+func TestLoadServerHardeningFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "application.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`server:
+  read_timeout: 7s
+  max_header_bytes: 4096
+`), 0o600))
+	t.Setenv("SERVER_SHUTDOWN_TIMEOUT", "3s")
+
+	c := defaultConfig()
+	_, err := Load(c, path)
+	require.NoError(t, err)
+	require.Equal(t, 7*time.Second, c.Server.ReadTimeout)
+	require.Equal(t, 4096, c.Server.MaxHeaderBytes)
+	require.Equal(t, 3*time.Second, c.Server.ShutdownTimeout)
+	require.Equal(t, 30*time.Second, c.Server.WriteTimeout, "unset keys keep their defaults")
+}

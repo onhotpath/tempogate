@@ -34,6 +34,17 @@ func defaultConfig() *Config {
 			// Covers Temporal's default 1m JWKS refresh with margin.
 			PublishDelay: 5 * time.Minute,
 		},
+		// WriteTimeout covers the whole handler, so it must outlast the
+		// slowest legitimate one: the Google callback's outbound code
+		// exchange + JWKS fetch. No handler streams or long-polls.
+		Server: ServerConfig{
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    16 << 10,
+			ShutdownTimeout:   15 * time.Second,
+		},
 		State: StateConfig{
 			Sqlite: SqliteConfig{
 				Path:        "/var/lib/tempogate/state.db",

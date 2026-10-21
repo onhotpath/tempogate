@@ -3,8 +3,10 @@ package servercmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/gojekfarm/xrun"
 )
@@ -12,9 +14,13 @@ import (
 type httpServerOptions struct {
 	server *http.Server
 
+	// shutdownTimeout bounds graceful shutdown; connections still active
+	// when it expires are force-closed.
+	shutdownTimeout time.Duration
+
 	// onListening fires after net.Listen succeeds and before Serve starts
 	// accepting. Use this to flip /readyz, expose the bound port, etc.
-	onListening func()
+	onListening func(addr net.Addr)
 
 	// onStopping fires when ctx is cancelled, before srv.Shutdown is called.
 	onStopping func()
@@ -23,7 +29,7 @@ type httpServerOptions struct {
 // httpServer returns an xrun.ComponentFunc that binds the listener up-front
 // (so onListening fires only once the OS confirms we're holding the port,
 // preserving accurate /readyz semantics), serves until ctx cancels, then
-// gracefully Shuts down.
+// gracefully Shuts down within shutdownTimeout.
 //
 // Compared to xrun/component.HTTPServer this trades the convenience of
 // ListenAndServe for the ability to observe a successful bind separately
@@ -35,7 +41,7 @@ func httpServer(opts httpServerOptions) xrun.ComponentFunc {
 			return err
 		}
 		if opts.onListening != nil {
-			opts.onListening()
+			opts.onListening(lis.Addr())
 		}
 
 		errCh := make(chan error, 1)
@@ -54,6 +60,16 @@ func httpServer(opts httpServerOptions) xrun.ComponentFunc {
 		if opts.onStopping != nil {
 			opts.onStopping()
 		}
-		return opts.server.Shutdown(context.Background())
+		// Not derived from ctx: it is already cancelled, and Shutdown needs a
+		// live deadline to drain in-flight requests.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), opts.shutdownTimeout)
+		defer cancel()
+		if err := opts.server.Shutdown(shutdownCtx); err != nil {
+			// Shutdown leaves active connections open on timeout; drop them so
+			// a stuck client cannot hold the process past its grace.
+			_ = opts.server.Close()
+			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		return nil
 	}
 }
