@@ -24,11 +24,12 @@ import (
 )
 
 type signingKeyResp struct {
-	Kid       string  `json:"kid"`
-	Alg       string  `json:"alg"`
-	CreatedAt string  `json:"created_at"`
-	RetiredAt *string `json:"retired_at,omitempty"`
-	Active    bool    `json:"active"`
+	Kid         string  `json:"kid"`
+	Alg         string  `json:"alg"`
+	CreatedAt   string  `json:"created_at"`
+	RetiredAt   *string `json:"retired_at,omitempty"`
+	Active      bool    `json:"active"`
+	ActivatesAt *string `json:"activates_at,omitempty"`
 }
 
 type signingKeyList struct {
@@ -78,6 +79,16 @@ func (s *SigningKeysSuite) SetupTest() {
 	s.T().Cleanup(s.srv.Close)
 }
 
+// signingKeysPublishDelay is KEYS_PUBLISH_DELAY for the suite.
+const signingKeysPublishDelay = 5 * time.Minute
+
+// advance steps the suite clock forward, e.g. past the publish delay.
+func (s *SigningKeysSuite) advance(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.now = s.now.Add(d)
+}
+
 func (s *SigningKeysSuite) clock() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,6 +103,7 @@ func (s *SigningKeysSuite) newKeys() *keys.Keys {
 		keys.WithStore(s.store),
 		keys.WithClock(s.clock),
 		keys.WithRetirementGrace(time.Hour),
+		keys.WithPublishDelay(signingKeysPublishDelay),
 		keys.WithGenerateOptions(keys.WithRSABits(2048)),
 	)
 }
@@ -175,11 +187,28 @@ func (s *SigningKeysSuite) TestRotateThenRetireWithoutRestart() {
 	items := s.list()
 	s.Require().Len(items, 2, "the list reads through to the store, so a key generated elsewhere shows up")
 	s.Equal(old, items[0].Kid)
-	s.False(items[0].Active)
+	s.True(items[0].Active, "the old key keeps signing while the new one is pending")
+	s.Nil(items[0].ActivatesAt)
 	s.Equal(rotated.Kid, items[1].Kid)
-	s.True(items[1].Active)
+	s.False(items[1].Active)
+	s.Require().NotNil(items[1].ActivatesAt, "a pending key shows when it starts signing")
+	activates, err := time.Parse(time.RFC3339, *items[1].ActivatesAt)
+	s.Require().NoError(err)
+	s.True(activates.Equal(rotated.CreatedAt.Add(signingKeysPublishDelay)))
 
 	status, b := s.retire(old)
+	s.Require().Equal(http.StatusConflict, status, "retiring the signer before its replacement is published: %s", b)
+	s.Contains(string(b), rotated.Kid)
+	s.Contains(string(b), "force=true")
+	s.Equal(old, s.latestKid())
+
+	s.advance(signingKeysPublishDelay)
+	items = s.list()
+	s.False(items[0].Active)
+	s.True(items[1].Active, "the new key signs once its publish delay has passed")
+	s.Nil(items[1].ActivatesAt)
+
+	status, b = s.retire(old)
 	s.Require().Equal(http.StatusOK, status, string(b))
 	var got signingKeyResp
 	s.Require().NoError(json.Unmarshal(b, &got))
@@ -201,11 +230,27 @@ func (s *SigningKeysSuite) TestRotateThenRetireWithoutRestart() {
 	s.Equal(http.StatusConflict, status, "the remaining key is now the only active one: %s", b)
 
 	entries := s.audit()
-	s.Require().Len(entries, 3)
+	s.Require().Len(entries, 4)
+	s.Equal("replacement_pending", entries[0]["outcome"])
+	s.Equal("success", entries[1]["outcome"])
+	s.Equal(old, entries[1]["kid"])
+	s.Equal(digestHex(guardToken)[:8], entries[1]["caller"])
+	s.NotEmpty(entries[1]["remote_addr"])
+}
+
+func (s *SigningKeysSuite) TestForceRetiresTheSignerDuringThePublishDelay() {
+	old := s.latestKid()
+	rotated, err := s.newKeys().Generate(s.ctx, true)
+	s.Require().NoError(err)
+
+	status, b := s.do(http.MethodPost, strings.Replace(admin.SigningKeyRetirePath, "{kid}", old, 1)+"?force=true")
+	s.Require().Equal(http.StatusOK, status, string(b))
+	s.Equal(rotated.Kid, s.latestKid(), "a forced retire hands signing to the pending key at once")
+
+	entries := s.audit()
+	s.Require().Len(entries, 1)
 	s.Equal("success", entries[0]["outcome"])
-	s.Equal(old, entries[0]["kid"])
-	s.Equal(digestHex(guardToken)[:8], entries[0]["caller"])
-	s.NotEmpty(entries[0]["remote_addr"])
+	s.Equal(true, entries[0]["force"])
 }
 
 func (s *SigningKeysSuite) TestRoutesRequireTheAdminToken() {
@@ -227,9 +272,9 @@ func (s *SigningKeysSuite) TestRoutesRequireTheAdminToken() {
 // mapping is covered.
 type failingKeyring struct{ err error }
 
-func (f failingKeyring) Keypairs(context.Context) ([]keys.Keypair, error) { return nil, f.err }
+func (f failingKeyring) Statuses(context.Context) ([]keys.KeypairStatus, error) { return nil, f.err }
 
-func (f failingKeyring) Retire(context.Context, string) (keys.Keypair, error) {
+func (f failingKeyring) Retire(context.Context, string, ...keys.RetireOption) (keys.Keypair, error) {
 	return keys.Keypair{}, f.err
 }
 

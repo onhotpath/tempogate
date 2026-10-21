@@ -148,7 +148,12 @@ func (s *ServeCmdSuite) TestReloadsKeysWhileServing() {
 	s.Require().NoError(s.store.Migrate(s.ctx))
 
 	readiness := api.NewReadiness()
-	serving := keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048)))
+	// No publish delay: this test is about the reload, not the delay.
+	serving := keys.New(
+		keys.WithStore(s.store),
+		keys.WithPublishDelay(0),
+		keys.WithGenerateOptions(keys.WithRSABits(2048)),
+	)
 	loopback := config.Listener{IP: net.IPv4(127, 0, 0, 1)}
 	cmd := newServeCmd(supply(serveParams{
 		Logger:        zap.NewNop(),

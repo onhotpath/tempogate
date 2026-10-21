@@ -57,6 +57,8 @@ func (s *RetireSuite) newKeys() *Keys {
 		WithStore(s.store),
 		WithClock(s.clock.Now),
 		WithRetirementGrace(s.grace),
+		// Rotations here sign at once; PublishSuite covers the delay.
+		WithPublishDelay(0),
 		withFastRSA(),
 	)
 }

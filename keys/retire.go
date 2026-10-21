@@ -35,17 +35,6 @@ func WithRetirementGrace(d time.Duration) Option {
 // never signs; it still verifies until its grace elapses.
 func (kp Keypair) Retired() bool { return kp.RetiredAt != nil }
 
-// Active returns the keypair that signs new tokens: the newest non-retired
-// one in kps, which must be sorted by CreatedAt ASC.
-func Active(kps []Keypair) (Keypair, bool) {
-	for i := len(kps) - 1; i >= 0; i-- {
-		if !kps[i].Retired() {
-			return kps[i], true
-		}
-	}
-	return Keypair{}, false
-}
-
 // Published returns the keypairs relying parties may verify against: every
 // non-retired keypair plus retired ones still inside their grace. JWKS and
 // tempogate's own Verifier both use this set, so a kid past grace stops
@@ -87,12 +76,38 @@ func (k *Keys) Keypairs(ctx context.Context) ([]Keypair, error) {
 	return k.All(), nil
 }
 
+// RetireOption configures Keys.Retire.
+type RetireOption func(*retireConfig)
+
+type retireConfig struct {
+	force bool
+}
+
+// RetireForce retires the signing keypair even when the key that would take
+// over is still inside its publish delay. Use it when the signing key is
+// compromised: relying parties may reject new tokens until they next refresh
+// JWKS. It never bypasses the "only key that can sign" refusal.
+func RetireForce() RetireOption {
+	return func(c *retireConfig) { c.force = true }
+}
+
 // Retire marks kid retired, then reloads so this process stops signing with
 // it immediately. The store enforces the "never retire the only active key"
 // rule atomically, so two concurrent retirements cannot both succeed.
-// Retiring an already-retired kid returns it unchanged, keeping the original
-// grace window.
-func (k *Keys) Retire(ctx context.Context, kid string) (Keypair, error) {
+// Retiring the current signer while its replacement is still inside the
+// publish delay is refused with ErrReplacementPending unless RetireForce is
+// passed. Retiring an already-retired kid returns it unchanged, keeping the
+// original grace window.
+func (k *Keys) Retire(ctx context.Context, kid string, opts ...RetireOption) (Keypair, error) {
+	var cfg retireConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if !cfg.force {
+		if err := k.checkReplacementPublished(ctx, kid); err != nil {
+			return Keypair{}, err
+		}
+	}
 	kp, err := k.store.RetireKeypair(ctx, kid, k.now())
 	if err != nil {
 		return Keypair{}, err
@@ -108,6 +123,35 @@ func (k *Keys) Retire(ctx context.Context, kid string) (Keypair, error) {
 		}
 	}
 	return Keypair{}, fmt.Errorf("%w (kid=%s)", ErrKeypairNotFound, kp.Kid)
+}
+
+// checkReplacementPublished refuses retiring the current signer when the
+// keypair that would sign next has not passed its publish delay. Anything
+// else (not the signer, no replacement at all) is left to the store, which
+// owns the atomic last-active guard.
+func (k *Keys) checkReplacementPublished(ctx context.Context, kid string) error {
+	if err := k.Reload(ctx); err != nil {
+		return err
+	}
+	kps := k.All()
+	signing, ok := k.Signing(kps)
+	if !ok || signing.Kid != kid {
+		return nil
+	}
+	rest := make([]Keypair, 0, len(kps))
+	for _, kp := range kps {
+		if kp.Kid != kid {
+			rest = append(rest, kp)
+		}
+	}
+	next, ok := k.Signing(rest)
+	if !ok {
+		return nil
+	}
+	if at := next.CreatedAt.Add(k.publishDelay); k.now().Before(at) {
+		return &ReplacementPendingError{Kid: next.Kid, ActivatesAt: at}
+	}
+	return nil
 }
 
 // Watch reloads the keypair set every interval until ctx is done. A failed

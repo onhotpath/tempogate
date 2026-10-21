@@ -8,10 +8,9 @@ import (
 // Init is the boot-flow helper: load all keypairs from the store; if none is
 // active (empty store, or every key retired by hand), generate one and
 // persist it so serve never starts without a key to sign with. The in-memory
-// cache is populated in CreatedAt-ascending order so Latest returns the
-// newest non-retired keypair. Encrypted private keys are decrypted with the
-// KEK (WithEncryptionKey); one that cannot be is an error, so serve refuses
-// to start without it.
+// cache is populated in CreatedAt-ascending order, which Signing relies on.
+// Encrypted private keys are decrypted with the KEK (WithEncryptionKey); one
+// that cannot be is an error, so serve refuses to start without it.
 //
 // Init is intentionally separate from the fx graph: long-running commands
 // (e.g. serve) opt in by calling Init in their RunE, while one-shot CLIs
@@ -27,7 +26,7 @@ func (k *Keys) Init(ctx context.Context) error {
 	}
 
 	sortByCreatedAt(existing)
-	if _, ok := Active(existing); !ok {
+	if _, ok := k.Signing(existing); !ok {
 		kp, err := GenerateKeypair(k.generateOptions()...)
 		if err != nil {
 			return err

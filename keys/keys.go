@@ -48,6 +48,8 @@ type Keys struct {
 	genOpts []GenerateOption
 	kek     []byte
 
+	publishDelay time.Duration
+
 	mu          sync.RWMutex
 	keypairs    []Keypair
 	unencrypted []string
@@ -58,6 +60,8 @@ func New(opts ...Option) *Keys {
 		alg:   AlgRS256,
 		now:   func() time.Time { return time.Now().UTC() },
 		grace: DefaultRetirementGrace,
+
+		publishDelay: DefaultPublishDelay,
 	}
 	for _, o := range opts {
 		o(k)
@@ -76,13 +80,13 @@ func (k *Keys) generateOptions() []GenerateOption {
 	return append(opts, k.genOpts...)
 }
 
-// Latest returns the active keypair (the newest non-retired one) from the
+// Latest returns the keypair that signs new tokens now (see Signing) from the
 // in-memory cache. Init or Generate must be called first; otherwise, or when
 // every keypair is retired, ErrNoKeypair is returned.
 func (k *Keys) Latest() (Keypair, error) {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
-	kp, ok := Active(k.keypairs)
+	kp, ok := k.Signing(k.keypairs)
 	if !ok {
 		return Keypair{}, ErrNoKeypair
 	}
@@ -101,8 +105,9 @@ func (k *Keys) All() []Keypair {
 // Generate creates a new keypair and persists it through the store.
 // If a keypair already exists and force is false, Generate returns
 // ErrKeypairExists (wrapped with the latest kid).
-// With force=true, a brand-new keypair is appended and becomes the active
-// one; old keypairs keep verifying until they are retired (see Retire).
+// With force=true, a brand-new keypair is appended: it is published at once
+// and signs once the publish delay has passed (see WithPublishDelay); old
+// keypairs keep verifying until they are retired (see Retire).
 func (k *Keys) Generate(ctx context.Context, force bool) (Keypair, error) {
 	stored, err := k.store.LoadKeypairs(ctx)
 	if err != nil {

@@ -55,6 +55,7 @@ func TestProjectsKeyLifetimes(t *testing.T) {
 	cfg.Admin.Keys.MaxTTL = 24 * time.Hour
 	cfg.Keys.RetirementGrace = time.Minute
 	cfg.Keys.ReloadInterval = time.Second
+	cfg.Keys.PublishDelay = 3 * time.Minute
 
 	type projected struct {
 		fx.In
@@ -62,6 +63,7 @@ func TestProjectsKeyLifetimes(t *testing.T) {
 		MaxTTL          time.Duration `name:"admin_keys_max_ttl"`
 		RetirementGrace time.Duration `name:"keys_retirement_grace"`
 		ReloadInterval  time.Duration `name:"keys_reload_interval"`
+		PublishDelay    time.Duration `name:"keys_publish_delay"`
 	}
 	var got projected
 	fxtest.New(t,
@@ -72,4 +74,5 @@ func TestProjectsKeyLifetimes(t *testing.T) {
 	require.Equal(t, 24*time.Hour, got.MaxTTL)
 	require.Equal(t, time.Minute, got.RetirementGrace)
 	require.Equal(t, time.Second, got.ReloadInterval)
+	require.Equal(t, 3*time.Minute, got.PublishDelay)
 }

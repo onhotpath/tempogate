@@ -46,6 +46,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -95,6 +96,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -146,6 +148,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -191,12 +194,14 @@ func (s *ConfigSuite) TestNew() {
 				"ADMIN_KEYS_MAX_TTL":    "720h",
 				"KEYS_RETIREMENT_GRACE": "1h",
 				"KEYS_RELOAD_INTERVAL":  "5s",
+				"KEYS_PUBLISH_DELAY":    "2m",
 			},
 			want: func() *Config {
 				c := defaultConfig()
 				c.Admin.Keys.MaxTTL = 720 * time.Hour
 				c.Keys.RetirementGrace = time.Hour
 				c.Keys.ReloadInterval = 5 * time.Second
+				c.Keys.PublishDelay = 2 * time.Minute
 				return c
 			}(),
 		},
@@ -224,6 +229,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -274,6 +280,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -322,6 +329,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -372,6 +380,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -422,6 +431,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -474,6 +484,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{
@@ -525,6 +536,7 @@ func (s *ConfigSuite) TestNew() {
 				Keys: KeysConfig{
 					RetirementGrace: 4 * time.Hour,
 					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
 				},
 				State: StateConfig{
 					Sqlite: SqliteConfig{

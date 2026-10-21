@@ -241,16 +241,16 @@ func TestReloadAndRetireOpenEncryptedRows(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, serving.Reload(ctx))
 
-	latest, err := serving.Latest()
-	require.NoError(t, err)
-	require.Equal(t, rotated.Kid, latest.Kid)
+	require.Len(t, serving.All(), 2)
+	require.Equal(t, rotated.Kid, serving.All()[1].Kid)
 	for _, kp := range serving.All() {
 		require.Contains(t, string(kp.PrivatePEM), "BEGIN RSA PRIVATE KEY")
 	}
 	requireSigns(t, serving)
 
 	old := serving.All()[0]
-	retired, err := serving.Retire(ctx, old.Kid)
+	// Forced: the rotated key is still inside its publish delay.
+	retired, err := serving.Retire(ctx, old.Kid, RetireForce())
 	require.NoError(t, err)
 	require.True(t, retired.Retired())
 	require.Contains(t, string(retired.PrivatePEM), "BEGIN RSA PRIVATE KEY")

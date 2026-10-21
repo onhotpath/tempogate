@@ -30,6 +30,7 @@ type Result struct {
 	AdminKeysMaxTTL       time.Duration `name:"admin_keys_max_ttl"`
 	KeysRetirementGrace   time.Duration `name:"keys_retirement_grace"`
 	KeysReloadInterval    time.Duration `name:"keys_reload_interval"`
+	KeysPublishDelay      time.Duration `name:"keys_publish_delay"`
 	SqlitePath            string        `name:"sqlite_path"`
 	SqliteMaxConns        int           `name:"sqlite_max_conns"`
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
@@ -89,6 +90,7 @@ func project(cfg *Config) Result {
 		AdminKeysMaxTTL:       cfg.Admin.Keys.MaxTTL,
 		KeysRetirementGrace:   cfg.Keys.RetirementGrace,
 		KeysReloadInterval:    cfg.Keys.ReloadInterval,
+		KeysPublishDelay:      cfg.Keys.PublishDelay,
 		SqlitePath:            cfg.State.Sqlite.Path,
 		SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
 		SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,

@@ -115,12 +115,14 @@ The practical consequence:
 | Temporal frontend gRPC              | only at the **token's `exp`**        |
 
 That is why every integration key must carry an `exp`. The hard kill switch
-is retiring the signing key: `tempogate keys retire <kid>` (or
+is retiring the signing key: `tempogate keys retire -- <kid>` (or
 `POST /admin/signing-keys/<kid>/retire`) stops it signing at once, and after
 `KEYS_RETIREMENT_GRACE` (default 4 h) it leaves JWKS, so every token it signed
 stops verifying at tempogate and, after its next JWKS refresh, at Temporal.
-Rotate first with `tempogate keys generate --force`; a running server picks up
-both changes within `KEYS_RELOAD_INTERVAL` (default 30 s), no restart needed.
+Rotate first with `tempogate keys generate --force`: a running server
+publishes the new key within `KEYS_RELOAD_INTERVAL` (default 30 s) and signs
+with it once `KEYS_PUBLISH_DELAY` (default 5 m, longer than Temporal's JWKS
+refresh) has passed, no restart needed.
 See the [rotation runbook](docs/configuration.md#rotation-runbook).
 A future move to short-lived tokens exchanged from an opaque key would make
 revocation effective at Temporal without retiring a key.

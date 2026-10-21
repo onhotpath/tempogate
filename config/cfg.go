@@ -106,6 +106,12 @@ type KeysConfig struct {
 	// store, so `tempogate keys generate|retire` run elsewhere take effect
 	// without a restart.
 	ReloadInterval time.Duration `ferry:"reload_interval"`
+
+	// PublishDelay is how long a new signing key sits in JWKS before it
+	// signs. Temporal looks a kid up only in the JWKS it last fetched and
+	// never refetches on an unknown kid, so this must exceed Temporal's
+	// jwtKeyProvider.refreshInterval plus ReloadInterval.
+	PublishDelay time.Duration `ferry:"publish_delay"`
 }
 
 // APIConfig controls what the Huma APIs expose beyond their operations.

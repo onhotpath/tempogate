@@ -31,6 +31,8 @@ func defaultConfig() *Config {
 			// Matches the human access-token TTL.
 			RetirementGrace: 4 * time.Hour,
 			ReloadInterval:  30 * time.Second,
+			// Covers Temporal's default 1m JWKS refresh with margin.
+			PublishDelay: 5 * time.Minute,
 		},
 		State: StateConfig{
 			Sqlite: SqliteConfig{

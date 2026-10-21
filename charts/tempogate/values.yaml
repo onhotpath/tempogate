@@ -268,8 +268,10 @@ admin:
   # keys. Leave false except while minting such a key.
   allowSystemGrants: false
   # ADMIN_KEYS_MAX_TTL (cap on a key's expires_at, default 2160h),
-  # KEYS_RETIREMENT_GRACE (4h) and KEYS_RELOAD_INTERVAL (30s) keep their
-  # binary defaults; override them through extraEnv.
+  # KEYS_RETIREMENT_GRACE (4h), KEYS_RELOAD_INTERVAL (30s) and
+  # KEYS_PUBLISH_DELAY (5m; must exceed Temporal's JWKS refreshInterval plus
+  # KEYS_RELOAD_INTERVAL) keep their binary defaults; override them through
+  # extraEnv.
 
 # Extra environment variables appended verbatim to the Deployment container
 # and the migrate Job, e.g. [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].

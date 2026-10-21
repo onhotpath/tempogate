@@ -138,7 +138,9 @@ endpoints. Integration keys therefore must expire (`ADMIN_KEYS_MAX_TTL`,
 90 days by default), and the hard kill switch is retiring a signing key:
 after `KEYS_RETIREMENT_GRACE` its `kid` leaves the JWKS and every token it
 signed stops verifying everywhere. `serve` re-reads keys every
-`KEYS_RELOAD_INTERVAL`, so rotation and retirement need no restart. See
+`KEYS_RELOAD_INTERVAL`, so rotation and retirement need no restart. A new
+key is published at once but signs only after `KEYS_PUBLISH_DELAY`, because
+Temporal never refetches JWKS on an unknown `kid`. See
 [docs/configuration.md](configuration.md#revocation-and-signing-key-retirement).
 
 **Co-hostable.** `OIDC_ISSUER` may carry a path, so the whole OIDC surface

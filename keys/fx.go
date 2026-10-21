@@ -13,23 +13,31 @@ type fxParams struct {
 
 	Store           KeyStore
 	RetirementGrace time.Duration `name:"keys_retirement_grace"`
+	PublishDelay    time.Duration `name:"keys_publish_delay"`
 
 	EncryptionKey     string `name:"keys_encryption_key" optional:"true"`
 	EncryptionKeyFile string `name:"keys_encryption_key_file" optional:"true"`
 }
 
-// newFx fails graph construction on a malformed KEK or a negative grace
-// (rather than letting WithRetirementGrace panic), so a typo is caught at
-// startup and the operator sees which setting is wrong.
+// newFx fails graph construction on a malformed KEK, or a negative grace or
+// publish delay (rather than letting the options panic), so a typo is caught
+// at startup and the operator sees which setting is wrong.
 func newFx(p fxParams) (*Keys, error) {
 	if p.RetirementGrace < 0 {
 		return nil, fmt.Errorf("keys: KEYS_RETIREMENT_GRACE must not be negative, got %s", p.RetirementGrace)
+	}
+	if p.PublishDelay < 0 {
+		return nil, fmt.Errorf("keys: KEYS_PUBLISH_DELAY must not be negative, got %s", p.PublishDelay)
 	}
 	kek, err := LoadEncryptionKey(p.EncryptionKey, p.EncryptionKeyFile)
 	if err != nil {
 		return nil, err
 	}
-	opts := []Option{WithStore(p.Store), WithRetirementGrace(p.RetirementGrace)}
+	opts := []Option{
+		WithStore(p.Store),
+		WithRetirementGrace(p.RetirementGrace),
+		WithPublishDelay(p.PublishDelay),
+	}
 	if kek != nil {
 		opts = append(opts, WithEncryptionKey(kek))
 	}

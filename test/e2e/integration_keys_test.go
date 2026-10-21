@@ -395,17 +395,25 @@ func copyFromContainerTo(ctx context.Context, c testcontainers.Container, remote
 // e2eRetirementGrace is KEYS_RETIREMENT_GRACE for the integration-keys stack.
 const e2eRetirementGrace = 20 * time.Second
 
+// e2ePublishDelay is KEYS_PUBLISH_DELAY for the integration-keys stack. It
+// must exceed temporal-frontend's JWKS refresh (TEMPORAL_JWT_KEY_REFRESH=10s)
+// plus KEYS_RELOAD_INTERVAL (1s), exactly as in production.
+const e2ePublishDelay = 20 * time.Second
+
 type signingKeyView struct {
-	Kid       string     `json:"kid"`
-	CreatedAt time.Time  `json:"created_at"`
-	RetiredAt *time.Time `json:"retired_at,omitempty"`
-	Active    bool       `json:"active"`
+	Kid         string     `json:"kid"`
+	CreatedAt   time.Time  `json:"created_at"`
+	RetiredAt   *time.Time `json:"retired_at,omitempty"`
+	Active      bool       `json:"active"`
+	ActivatesAt *time.Time `json:"activates_at,omitempty"`
 }
 
 // TestSigningKeyRotationAndRetirement is the acceptance proof for signing-key
 // retirement: integration keys must carry a capped expiry, and an operator
 // can rotate and retire the signing key of a running tempogate without
-// restarting it. After KEYS_RETIREMENT_GRACE the retired kid leaves
+// restarting it. A rotated key is published at once but signs only after
+// KEYS_PUBLISH_DELAY, so temporal-frontend already holds it when its first
+// token arrives. After KEYS_RETIREMENT_GRACE the retired kid leaves
 // /.well-known/jwks.json, and once temporal-frontend refreshes its JWKS
 // (TEMPORAL_JWT_KEY_REFRESH=10s here) every token signed by that kid stops
 // authorizing gRPC calls, exp notwithstanding. That is the hard kill switch the
@@ -462,21 +470,44 @@ func TestSigningKeyRotationAndRetirement(t *testing.T) {
 	out := execTempogate(ctx, t, st.tempogate, "keys", "generate", "--force")
 	kidB := regexp.MustCompile(`kid=(\S+)`).FindStringSubmatch(out)
 	require.Lenf(t, kidB, 2, "keys generate output: %s", out)
+	require.Contains(t, out, "signs from", "the CLI says when the new key starts signing")
 
-	// The serving process picks up the new key on its next reload; it then
-	// signs every new token with it.
+	// The serving process publishes the new key on its next reload, but
+	// keeps signing with the old one for KEYS_PUBLISH_DELAY: temporal-frontend
+	// only knows the kids it fetched on its last JWKS refresh and never
+	// refetches on an unknown kid.
+	require.Eventually(t, func() bool { return slices.Contains(jwksKids(t, st.publicURL), kidB[1]) },
+		15*time.Second, 200*time.Millisecond, "serve must publish the rotated key without a restart")
+	pending := mintIntegrationKey(t, st.adminURL, adminCreateBody{
+		Namespace: "temporal-system", Role: "admin", Owner: "e2e-pending-signer",
+	})
+	require.Equal(t, kidA, tokenKid(t, pending.JWT), "the old key signs while the new one is inside KEYS_PUBLISH_DELAY")
+	require.NoError(t, listNamespaces(pending.JWT), "a token minted right after the rotation must work at Temporal")
+
+	during := listSigningKeys(t, st.adminURL)
+	require.Len(t, during, 2)
+	require.True(t, during[0].Active)
+	require.False(t, during[1].Active)
+	require.NotNil(t, during[1].ActivatesAt, "the pending key shows when it starts signing")
+
+	status, body = retireSigningKey(t, st.adminURL, kidA)
+	require.Equalf(t, http.StatusConflict, status,
+		"retiring the signer before its replacement is published must be refused: %s", body)
+	require.Contains(t, string(body), kidB[1])
+
+	// After the delay the new key signs, and Temporal already has it.
 	var keyB adminCreateResp
 	require.Eventually(t, func() bool {
 		keyB = mintIntegrationKey(t, st.adminURL, adminCreateBody{
 			Namespace: "temporal-system", Role: "admin", Owner: "e2e-new-signer",
 		})
 		return tokenKid(t, keyB.JWT) == kidB[1]
-	}, 15*time.Second, 500*time.Millisecond, "serve must sign with the rotated key without a restart")
-	require.Eventually(t, func() bool { return listNamespaces(keyB.JWT) == nil },
-		30*time.Second, time.Second, "a token from the new key must authenticate at Temporal")
+	}, e2ePublishDelay+15*time.Second, 500*time.Millisecond, "the new key must sign once KEYS_PUBLISH_DELAY has passed")
+	require.NoError(t, listNamespaces(keyB.JWT),
+		"the first token from the new key must authenticate at Temporal at once, with no retry")
 
 	// --- retire the old key from another process (the CLI) ---
-	out = execTempogate(ctx, t, st.tempogate, "keys", "retire", kidA)
+	out = execTempogate(ctx, t, st.tempogate, "keys", "retire", "--", kidA)
 	require.Contains(t, out, "retired keypair: kid="+kidA)
 
 	// During grace the retired kid is still published, so in-flight tokens
@@ -668,6 +699,7 @@ func startIntegrationKeysTempogate(ctx context.Context, t *testing.T, netName st
 		// retired kid leave JWKS, long enough to observe it during grace.
 		"KEYS_RETIREMENT_GRACE": e2eRetirementGrace.String(),
 		"KEYS_RELOAD_INTERVAL":  "1s",
+		"KEYS_PUBLISH_DELAY":    e2ePublishDelay.String(),
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	addAdminAuthEnv(ctx, t, tgEnv, allowSystemGrants)

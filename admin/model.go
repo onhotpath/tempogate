@@ -1,16 +1,18 @@
 // Package admin exposes tempogate's backend-callable integration-key API: a
 // service can POST to /admin/keys to mint an expiring JWT scoped to a single
 // namespace+role, retrieve metadata, and revoke. It also lists and retires
-// the signing keys those JWTs are signed with (/admin/signing-keys). The package owns the
-// IntegrationKey domain type, the four Huma operations, and the consumer-side
-// store interface; the JWT itself is minted via keys.Signer so the claim
-// shape stays uniform with human and CLI tokens.
+// the signing keys those JWTs are signed with (/admin/signing-keys). The
+// package owns the IntegrationKey domain type, the Huma operations, and the
+// consumer-side store interface; the JWT itself is minted via keys.Signer so
+// the claim shape stays uniform with human and CLI tokens.
 //
-// The routes mount on the main HTTP listener for now; a follow-up will split
-// them onto a private listener so they are unreachable from the public
-// internet. A separate follow-up will wire the jti returned by
-// MarkIntegrationKeyRevoked into a verifier-side denylist so revocation
-// takes effect on the hot path.
+// The routes mount only on the private admin listener (ADMIN_LISTENER), never
+// on the public OIDC listener, and every request passes the Guard (admin
+// token digest plus Host allowlist). Revoking a key records its jti in the
+// denylist that keys.Verifier consults, so tempogate's own endpoints reject
+// it within the denylist cache TTL. Temporal never sees that denylist: at
+// Temporal a key works until its exp, or until its signing key is retired
+// and its kid has left JWKS.
 package admin
 
 import (
