@@ -19,9 +19,10 @@ work out of the box** without anyone touching a Google Cloud Console.
 * The CLI talks **only to tempogate**, never directly to Google. Google only
   ever sees tempogate's single, fixed upstream callback.
 * The `http://127.0.0.1:<port>/callback` redirect is therefore validated by
-  **tempogate's own client registry prefix**, not by Google's redirect-URI
-  allowlist. A random ephemeral port each run is the default and needs no
-  per-user registration anywhere.
+  **tempogate's own client registry**, not by Google's redirect-URI
+  allowlist. The registration `http://127.0.0.1/callback` matches that exact
+  path on any port (RFC 8252 §7.3), so a random ephemeral port each run is
+  the default and needs no per-user registration anywhere.
 * PKCE (RFC 7636, S256) is mandatory, the `state` echo is checked, and the
   listener is bound to `127.0.0.1` only.
 
@@ -62,7 +63,8 @@ Google's `redirect_uri` is **always** tempogate's own
 `https://<issuer>/callback/google` — one fixed URL the operator registers once
 with their Google OAuth client. The `127.0.0.1` loopback URI never reaches
 Google. tempogate validates it the same way it validates any downstream
-client's redirect: by prefix, against the registry described below.
+client's redirect: against the registry described below, with the RFC 8252
+loopback rule that only the port may vary.
 
 So the loopback-port-registration question reduces to a one-line operator
 config, and the CLI is free to pick a fresh ephemeral port every run.
@@ -73,18 +75,28 @@ Register the CLI as a public client (no secret ⇒ PKCE mandatory) in
 `OIDC_CLIENTS`, alongside any other clients:
 
 ```
-OIDC_CLIENTS=tempogate-cli:http://127.0.0.1:,ui:https://temporal-ui.example.com/auth/sso/callback
+OIDC_CLIENTS=tempogate-cli:http://127.0.0.1/callback,ui:https://temporal-ui.example.com/auth/sso/callback
 ```
 
-The redirect prefix is `http://127.0.0.1:` — note the **trailing colon**. The
-client registry matches `redirect_uri` by prefix, so:
+The CLI's redirect URI is registered **without a port**. A loopback entry
+(`http` with host exactly `127.0.0.1` or `[::1]`) matches the registered
+scheme, host and path exactly and lets only the port vary, so:
 
 * `http://127.0.0.1:54321/callback` ✅ matches (any ephemeral port).
-* `http://127.0.0.1.attacker.example/callback` ❌ does **not** match — the
-  next character after `127.0.0.1` must be `:`, not `.`.
+* `http://127.0.0.1:@attacker.example/callback` ❌ the userinfo trick that
+  sends the browser to `attacker.example`.
+* `http://127.0.0.1.attacker.example:1234/callback` ❌ a different host.
+* `http://localhost:54321/callback` ❌ `localhost` is not in the loopback
+  class.
+* `http://127.0.0.1:54321/callback/x` or `...?next=...` ❌ the path and
+  (empty) query must match exactly.
 
-If you prefer a fixed port, register `tempogate-cli:http://127.0.0.1:39473/`
-and have users run `tempogate login --port 39473`.
+Registering a port (`tempogate-cli:http://127.0.0.1:39473/callback`) is a
+startup error, because it would look pinned while any port is accepted.
+`tempogate login --port 39473` still works with the portless registration.
+Upgrading from a release that used the prefix form `tempogate-cli:http://127.0.0.1:`
+means replacing it with `tempogate-cli:http://127.0.0.1/callback`; the old
+form is rejected at startup.
 
 The signed-in email must also pass `OIDC_ALLOWED_DOMAINS`, the same gate the
 Web UI flow uses.

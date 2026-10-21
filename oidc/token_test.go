@@ -195,7 +195,7 @@ func (s *TokenSuite) SetupTest() {
 		keys.WithTokenClock(func() time.Time { return signNow.Add(time.Minute) }),
 	)
 
-	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",webui:" + testRedirectURI + ",tempogate-device:" + testRedirectURI)
+	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",webui:" + testRedirectURI + ",tempogate-device:")
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:" + confidentialSecret))
 	s.clients = reg

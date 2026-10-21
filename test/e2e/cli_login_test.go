@@ -14,9 +14,10 @@
 // because the CLI never talks to Google directly: the only redirect Google
 // (here, mockgoogle) ever sees is tempogate's own fixed /callback/google. The
 // http://127.0.0.1:<ephemeral>/callback loopback URI is validated solely
-// against tempogate's client-registry prefix (OIDC_CLIENTS contains
-// `tempogate-cli:http://127.0.0.1:`), so a fresh ephemeral port each run needs
-// no registration anywhere. See docs/cli-loopback-login.md.
+// against tempogate's client registry (OIDC_CLIENTS contains
+// `tempogate-cli:http://127.0.0.1/callback`; RFC 8252 §7.3 loopback matching
+// accepts the exact path on any port), so a fresh ephemeral port each run
+// needs no registration anywhere. See docs/cli-loopback-login.md.
 //
 // Topology note: `tempogate login` and the browser that drives the consent
 // redirect run in ONE container (cliclient) on the shared Docker network. The
@@ -91,6 +92,10 @@ func addDeviceUIServerEnv(env map[string]string, callbackIssuer string) {
 	}
 	env["OIDC_SESSION_SIGNING_KEY"] = e2eSessionSigningKeyB64
 	env["OIDC_SESSION_TTL"] = "5m"
+	// The Docker-network hosts (tempogate:8000, temporal-ui:8080) are plain
+	// http, which non-loopback redirect URI registrations only accept with
+	// this dev-only opt-in.
+	env["OIDC_ALLOW_INSECURE_REDIRECT_URIS"] = "true"
 }
 
 // jwtPattern matches a compact JWS (three base64url segments) so the token a
@@ -330,16 +335,17 @@ func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[s
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	// --- tempogate: migrate then serve. The CLI is registered as a *public*
-	// client (no secret ⇒ PKCE mandatory) with a 127.0.0.1: redirect prefix,
-	// so any ephemeral loopback port is accepted. The device-flow CLI
-	// (tempogate-device) goes in too so TestCLIDeviceLogin can reuse this
-	// stack; addDeviceUIServerEnv adds the verification-UI's internal
-	// client + session signing key the server fx graph requires.
+	// client (no secret ⇒ PKCE mandatory) with the loopback redirect URI
+	// http://127.0.0.1/callback, so any ephemeral port is accepted on that
+	// exact path. The device-flow CLI goes in too, in the documented
+	// device-only form (`tempogate-device:`), so TestCLIDeviceLogin can
+	// reuse this stack; addDeviceUIServerEnv adds the verification-UI's
+	// internal client + session signing key the server fx graph requires.
 	tgEnv := map[string]string{
 		"HTTP_LISTENER":              "0.0.0.0:8000",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                tempogateIssuer,
-		"OIDC_CLIENTS":               cliClientID + ":http://127.0.0.1:," + deviceClientID + ":cli",
+		"OIDC_CLIENTS":               cliClientID + ":http://127.0.0.1/callback," + deviceClientID + ":",
 		"OIDC_ALLOWED_DOMAINS":       "example.com",
 		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
 		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",

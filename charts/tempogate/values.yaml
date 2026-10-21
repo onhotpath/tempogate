@@ -182,9 +182,15 @@ oidc:
   sessionTtl: ""
 
 auth:
-  # Comma-separated `id:redirect_uri_prefix` client allowlist
-  # (OIDC_CLIENTS). Non-secret.
+  # Comma-separated `id:redirect_uri` client allowlist (OIDC_CLIENTS) of
+  # exact redirect URIs, e.g.
+  # "temporal-ui:https://temporal.example.com/auth/sso/callback,tempogate-cli:http://127.0.0.1/callback,tempogate-device:"
+  # Loopback http://127.0.0.1/<path> entries match any port; an empty value
+  # registers a device-only client. Non-secret.
   clients: ""
+  # OIDC_ALLOW_INSECURE_REDIRECT_URIS. Dev only: allow plain-http,
+  # non-loopback redirect URIs in `clients`. Keep false in production.
+  allowInsecureRedirectUris: false
   # Email domains permitted to complete SSO. Empty ⇒ nobody is admitted.
   allowedDomains: []
   # Optional confidential-client carve-out (OIDC_CLIENT_SECRETS) — secret

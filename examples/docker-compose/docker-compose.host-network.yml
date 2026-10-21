@@ -32,7 +32,9 @@ services:
     network_mode: host
     environment:
       OIDC_ISSUER: "http://localhost:8000"
-      OIDC_CLIENTS: "temporal-ui:http://localhost:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1:,tempogate-device:,tempogate-device-ui:http://localhost:8000/device/sso-callback"
+      # localhost is not in the loopback class, so these http URIs rely on
+      # OIDC_ALLOW_INSECURE_REDIRECT_URIS from the base compose file.
+      OIDC_CLIENTS: "temporal-ui:http://localhost:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1/callback,tempogate-device:,tempogate-device-ui:http://localhost:8000/device/sso-callback"
       OIDC_GOOGLE_AUTH_ENDPOINT: "http://localhost:8081/auth"
       OIDC_GOOGLE_TOKEN_ENDPOINT: "http://localhost:8081/token"
       OIDC_GOOGLE_ISSUER_URL: "http://localhost:8081"

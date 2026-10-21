@@ -71,7 +71,7 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 		s.mg.issuer(),
 	)
 
-	clients := "tempogate-device:cli,tempogate-device-ui:" + testIssuer + "/device/sso-callback"
+	clients := "tempogate-device:,tempogate-device-ui:" + testIssuer + "/device/sso-callback"
 	reg, err := oidc.ParseClientRegistry(clients)
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("tempogate-device-ui:" + deviceUIInternalSecret))

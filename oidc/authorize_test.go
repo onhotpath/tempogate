@@ -89,7 +89,7 @@ func (s *AuthorizeSuite) TearDownTest() {
 }
 
 func (s *AuthorizeSuite) serverFor(store oidc.AuthRequestStore, opts ...oidc.Option) *httptest.Server {
-	reg, err := oidc.ParseClientRegistry("ui:https://app.example.com/auth,cli:http://127.0.0.1")
+	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",cli:http://127.0.0.1/callback,tempogate-device:")
 	s.Require().NoError(err)
 
 	a := oidc.New(store, reg, testIssuer, testGoogleCID, testGoogleAuth, opts...)
@@ -142,7 +142,7 @@ func (s *AuthorizeSuite) TestValidRequestRedirectsToGoogle() {
 // redirect_uri (https://h/idp/callback/google). The Authorizer needs no
 // path-awareness of its own — this guards that property from regressing.
 func (s *AuthorizeSuite) TestPathIssuerRedirectURICarriesPrefix() {
-	reg, err := oidc.ParseClientRegistry("ui:https://app.example.com/auth")
+	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
 	a := oidc.New(s.store, reg, testIssuer+"/idp", testGoogleCID, testGoogleAuth,
 		oidc.WithClock(func() time.Time { return fixedNow }),
@@ -185,7 +185,7 @@ func (s *AuthorizeSuite) TestValidRequestPersistsAuthRequestWithTTL() {
 // and `webui` confidential (a secret), so the PKCE carve-out can be exercised
 // against the same shared store.
 func (s *AuthorizeSuite) confidentialSrv() *httptest.Server {
-	reg, err := oidc.ParseClientRegistry("ui:https://app.example.com/auth,webui:" + testRedirectURI)
+	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",webui:" + testRedirectURI)
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:ui-secret"))
 
@@ -242,6 +242,23 @@ func (s *AuthorizeSuite) TestConfidentialClientWithChallengeStillEnforcesS256() 
 	s.Zero(s.store.count())
 }
 
+// TestLoopbackClientAcceptsAnyPort is the RFC 8252 §7.3 positive case: the
+// CLI binds an ephemeral port, so a loopback registration matches the exact
+// path on any port, and the requested URI (port included) is what gets bound
+// into the AuthRequest.
+func (s *AuthorizeSuite) TestLoopbackClientAcceptsAnyPort() {
+	q := validParams()
+	q.Set("client_id", "cli")
+	q.Set("redirect_uri", "http://127.0.0.1:54321/callback")
+
+	resp := s.get(s.srv, q)
+	defer resp.Body.Close()
+
+	s.Require().Equal(http.StatusFound, resp.StatusCode)
+	s.Require().Equal(1, s.store.count())
+	s.Equal("http://127.0.0.1:54321/callback", s.store.only().RedirectURI)
+}
+
 func (s *AuthorizeSuite) TestNoncePersistedIntoAuthRequest() {
 	q := validParams()
 	q.Set("nonce", "rp-nonce-123")
@@ -266,9 +283,30 @@ func (s *AuthorizeSuite) TestInvalidRequestsReturnOAuth2Errors() {
 			wantError: "invalid_client",
 		},
 		{
-			name:      "redirect_uri outside registered prefix",
+			name:      "redirect_uri not registered",
 			mutate:    func(q url.Values) { q.Set("redirect_uri", "https://evil.example.com/cb") },
 			wantError: "invalid_request",
+		},
+		{
+			name:      "redirect_uri extends the registered URI (dot segments)",
+			mutate:    func(q url.Values) { q.Set("redirect_uri", testRedirectURI+"/../../open-redirect") },
+			wantError: "invalid_request",
+		},
+		{
+			name: "loopback redirect_uri hiding another host in userinfo",
+			mutate: func(q url.Values) {
+				q.Set("client_id", "cli")
+				q.Set("redirect_uri", "http://127.0.0.1:@evil.example/callback")
+			},
+			wantError: "invalid_request",
+		},
+		{
+			name: "device-only client cannot use the authorization-code flow",
+			mutate: func(q url.Values) {
+				q.Set("client_id", "tempogate-device")
+				q.Set("redirect_uri", "http://127.0.0.1:1234/callback")
+			},
+			wantError: "unauthorized_client",
 		},
 		{
 			name:      "unsupported response_type",
@@ -350,7 +388,7 @@ func (s *AuthorizeSuite) TestDefaultStateGeneratorProducesOpaqueState() {
 }
 
 func (s *AuthorizeSuite) TestMalformedGoogleEndpointIsServerError() {
-	reg, err := oidc.ParseClientRegistry("ui:https://app.example.com/auth")
+	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
 	a := oidc.New(&memAuthStore{}, reg, testIssuer, testGoogleCID, "http://%zz/bad")
 

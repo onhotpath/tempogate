@@ -66,7 +66,7 @@ func (s *TokenE2ESuite) SetupTest() {
 		s.mg.issuer(),
 	)
 
-	reg, err := oidc.ParseClientRegistry("ui:https://app.example.com/auth,webui:https://app.example.com/auth,tempogate-device:cli")
+	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",webui:" + testRedirectURI + ",tempogate-device:")
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:" + e2eConfidentialSecret))
 

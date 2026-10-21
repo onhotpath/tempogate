@@ -24,6 +24,7 @@ type Result struct {
 	OIDCBasePath          string        `name:"oidc_base_path"`
 	OIDCClients           string        `name:"oidc_clients"`
 	OIDCClientSecrets     string        `name:"oidc_client_secrets"`
+	OIDCAllowInsecureURIs bool          `name:"oidc_allow_insecure_redirect_uris"`
 	OIDCAllowedDomains    string        `name:"oidc_allowed_domains"`
 	OIDCSessionTTL        time.Duration `name:"oidc_session_ttl"`
 	OIDCSessionSigningKey string        `name:"oidc_session_signing_key"`
@@ -49,6 +50,7 @@ func Fx() fx.Option {
 				OIDCBasePath:          issuerBasePath(cfg.OIDC.Issuer),
 				OIDCClients:           cfg.OIDC.Clients,
 				OIDCClientSecrets:     cfg.OIDC.ClientSecrets,
+				OIDCAllowInsecureURIs: cfg.OIDC.AllowInsecureRedirectURIs,
 				OIDCAllowedDomains:    cfg.OIDC.AllowedDomains,
 				OIDCSessionTTL:        cfg.OIDC.SessionTTL,
 				OIDCSessionSigningKey: cfg.OIDC.SessionSigningKey,

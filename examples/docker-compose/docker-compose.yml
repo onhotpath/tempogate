@@ -71,12 +71,16 @@ services:
       OIDC_ISSUER: "http://tempogate:8000"
       # Four registered clients:
       #   - temporal-ui            (confidential, see CLIENT_SECRETS): Web UI SSO.
-      #   - tempogate-cli          (public, PKCE):                     loopback `tempogate login`.
-      #   - tempogate-device       (public, no redirect URI):          CLI side of
-      #                             `tempogate login --device` — see docs/cli-device-login.md.
+      #   - tempogate-cli          (public, PKCE):                     loopback `tempogate login`;
+      #                             http://127.0.0.1/callback matches any port.
+      #   - tempogate-device       (public, device-only, empty value): CLI side of
+      #                             `tempogate login --device` - see docs/cli-device-login.md.
       #   - tempogate-device-ui    (confidential, see CLIENT_SECRETS): tempogate's own
       #                             verification page bouncing through Google SSO.
-      OIDC_CLIENTS: "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1:,tempogate-device:,tempogate-device-ui:http://tempogate:8000/device/sso-callback"
+      # Each value is an exact redirect URI (docs/configuration.md#redirect-uri-registration).
+      OIDC_CLIENTS: "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1/callback,tempogate-device:,tempogate-device-ui:http://tempogate:8000/device/sso-callback"
+      # The in-network hosts above are plain http. Dev only: never set this in production.
+      OIDC_ALLOW_INSECURE_REDIRECT_URIS: "true"
       OIDC_CLIENT_SECRETS: "temporal-ui:${TEMPORAL_UI_CLIENT_SECRET:-local-temporal-ui-confidential-secret},tempogate-device-ui:${TEMPOGATE_DEVICE_UI_CLIENT_SECRET:-local-tempogate-device-ui-confidential-secret}"
       # Device flow: HMAC key signing the short-lived verification-page session
       # cookie. Base64url-encoded 32-byte randomness. Demo value below; in real

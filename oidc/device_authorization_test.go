@@ -129,7 +129,7 @@ func (s *DeviceAuthorizationSuite) serverFor(
 	issuer string,
 	opts ...oidc.DeviceAuthorizationOption,
 ) *httptest.Server {
-	reg, err := oidc.ParseClientRegistry("tempogate-device:cli,webui:" + testRedirectURI)
+	reg, err := oidc.ParseClientRegistry("tempogate-device:,webui:" + testRedirectURI + ",ui:" + testRedirectURI)
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:webui-secret"))
 
@@ -247,6 +247,7 @@ func (s *DeviceAuthorizationSuite) TestClientIDErrors() {
 		{"missing client_id", "", "invalid_request", http.StatusBadRequest},
 		{"unknown client_id", "some-other-client", "invalid_client", http.StatusUnauthorized},
 		{"confidential client", "webui", "invalid_client", http.StatusUnauthorized},
+		{"public client registered for the code flow", "ui", "unauthorized_client", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {

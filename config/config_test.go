@@ -210,7 +210,7 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "oidc clients and google overridden by env",
 			env: map[string]string{
-				"OIDC_CLIENTS":              "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1",
+				"OIDC_CLIENTS":              "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1/callback",
 				"OIDC_GOOGLE_CLIENT_ID":     "google-client-123.apps.googleusercontent.com",
 				"OIDC_GOOGLE_AUTH_ENDPOINT": "http://127.0.0.1:9999/mock/auth",
 			},
@@ -237,11 +237,49 @@ func (s *ConfigSuite) TestNew() {
 				},
 				OIDC: OIDCConfig{
 					Issuer:     "http://127.0.0.1:8000",
-					Clients:    "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1",
+					Clients:    "ui:https://temporal.example.com/auth/sso/callback,cli:http://127.0.0.1/callback",
 					SessionTTL: 5 * time.Minute,
 					Google: GoogleConfig{
 						ClientID:      "google-client-123.apps.googleusercontent.com",
 						AuthEndpoint:  "http://127.0.0.1:9999/mock/auth",
+						TokenEndpoint: "https://oauth2.googleapis.com/token",
+						IssuerURL:     "https://accounts.google.com",
+					},
+				},
+			},
+		},
+		{
+			name: "insecure redirect URIs opt-in overridden by env",
+			env: map[string]string{
+				"OIDC_ALLOW_INSECURE_REDIRECT_URIS": "true",
+			},
+			want: &Config{
+				Log: LogConfig{Level: "info"},
+				HTTP: HTTPConfig{
+					Listener: Listener{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 8000,
+					},
+				},
+				Admin: AdminConfig{
+					Listener: Listener{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 8081,
+					},
+				},
+				State: StateConfig{
+					Sqlite: SqliteConfig{
+						Path:        "/var/lib/tempogate/state.db",
+						MaxConns:    1,
+						BusyTimeout: 5 * time.Second,
+					},
+				},
+				OIDC: OIDCConfig{
+					Issuer:                    "http://127.0.0.1:8000",
+					AllowInsecureRedirectURIs: true,
+					SessionTTL:                5 * time.Minute,
+					Google: GoogleConfig{
+						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
 						IssuerURL:     "https://accounts.google.com",
 					},

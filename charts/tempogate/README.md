@@ -119,7 +119,8 @@ auth:
 | `oidc.issuer` | `""` | `OIDC_ISSUER` — externally reachable base URL. |
 | `oidc.sessionSigningKeySecretRef` | `{name,key}` empty | Secret holding `OIDC_SESSION_SIGNING_KEY` (base64url 32-byte HMAC key for the device-flow verification-page cookie). tempogate refuses to boot when unset. |
 | `oidc.sessionTtl` | `""` | `OIDC_SESSION_TTL` — verification-page cookie TTL (Go duration). `""` leaves the binary default (5m). |
-| `auth.clients` | `""` | `OIDC_CLIENTS` — `id:redirect_uri_prefix` allowlist. |
+| `auth.clients` | `""` | `OIDC_CLIENTS` - `id:redirect_uri` allowlist of exact redirect URIs (loopback `http://127.0.0.1/<path>` matches any port; `id:` registers a device-only client). See [docs/configuration.md](../../docs/configuration.md#redirect-uri-registration). |
+| `auth.allowInsecureRedirectUris` | `false` | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` - dev only; allow plain-http non-loopback redirect URIs. |
 | `auth.allowedDomains` | `[]` | `OIDC_ALLOWED_DOMAINS` — SSO email-domain gate. |
 | `auth.clientSecretsSecretRef` | `{name,key}` empty | Secret holding `OIDC_CLIENT_SECRETS`. |
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |

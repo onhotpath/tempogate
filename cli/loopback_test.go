@@ -390,7 +390,8 @@ func (s *LoopbackSuite) TestMalformedTokenJSONIsRejected() {
 func (s *LoopbackSuite) TestLoopbackRedirectURIShape() {
 	// The ephemeral default must still produce a 127.0.0.1 loopback callback
 	// URI built from the actually-bound port, never a wildcard or hostname —
-	// that is what tempogate's client-registry prefix is validated against.
+	// tempogate matches it against the portless http://127.0.0.1/callback
+	// registration with only the port free.
 	_, err := s.newFlow().Run(context.Background())
 	s.Require().NoError(err)
 	s.Regexp(`^http://127\.0\.0\.1:\d+/callback$`, s.issuer.gotRedirectURI)

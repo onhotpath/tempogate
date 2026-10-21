@@ -143,7 +143,7 @@ Run a published image:
 ```bash
 TEMPOGATE_IMAGE=${TEMPOGATE_IMAGE:-ghcr.io/onhotpath/tempogate:latest}
 export OIDC_SESSION_SIGNING_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
-export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback'
+export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1/device/sso-callback'
 export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
 docker volume create tempogate-state
 docker run --rm --mount source=tempogate-state,target=/var/lib/tempogate \
@@ -217,7 +217,7 @@ cd tempogate
 make build
 export STATE_SQLITE_PATH="$PWD/state.db"
 export OIDC_SESSION_SIGNING_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
-export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback'
+export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1/device/sso-callback'
 export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
 ./.bin/tempogate migrate
 ./.bin/tempogate serve            # listens on 127.0.0.1:8000
@@ -278,7 +278,8 @@ separator.
 | Env var | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `OIDC_ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. May include a path (e.g. `https://host/idp`) — see [Sub-path hosting](#sub-path-hosting) |
-| `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri_prefix` allowlist. Register the CLI as `tempogate-cli:http://127.0.0.1:` |
+| `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri` allowlist of **exact** redirect URIs (repeat an id for several). Loopback `http://127.0.0.1/<path>` entries match any port. Register the CLI as `tempogate-cli:http://127.0.0.1/callback` and the device CLI as `tempogate-device:` |
+| `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
 | `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in |
 | `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
 | `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
