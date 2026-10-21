@@ -12,9 +12,10 @@ implements.
   every client. This matches the OAuth 2.0 Security BCP (RFC 9700) and
   OAuth 2.1.
 * One carve-out: a client **registered with a secret** (a *confidential*
-  client) may complete the flow **without PKCE**, but only by
-  **authenticating that secret at the token endpoint**. PKCE is still
-  enforced for such a client if it *does* send a `code_challenge`.
+  client) may complete the flow **without PKCE**.
+  It never skips client authentication: a confidential client
+  **always authenticates its secret at the token endpoint**, and PKCE is
+  enforced **on top** whenever it sent a `code_challenge` (RFC 9700 §2.1.1).
 * A client with **no secret** (a *public* client) can **never** skip PKCE.
   The carve-out can never collapse into "no PKCE *and* no client
   authentication".
@@ -86,27 +87,36 @@ the client have a registered secret?**
   present, `S256` is still required regardless of client type. The carve-out
   only ever *widens* behaviour when a challenge is absent; it never weakens
   validation of a challenge that was sent.
-* **`/token`** — the redeemed authorization code itself decides which proof
-  is required:
-  * a code minted **with** a PKCE challenge always demands a valid
-    `code_verifier` (unchanged, strict — and it still applies to a
-    confidential client that opted into PKCE);
-  * a code minted **without** a challenge (only reachable via the
-    confidential path at `/authorize`) requires the client to authenticate
-    its secret, compared in constant time. A public client has no secret, so
-    this fails closed for it — a public client can never ride the carve-out
-    even if it presents a code with no challenge.
-* A request proving **neither** a PKCE verifier **nor** a client secret is
-  rejected as `invalid_request` *before* the single-use code is consumed, so
-  a malformed/confused request cannot burn a code or downgrade the strict
-  default.
+* **`/token`** - two independent checks, both of which must pass:
+  * **client authentication**, decided by the client's registration, not by
+    the code.
+    A confidential client must present its secret (HTTP Basic or the
+    `client_secret` form field), compared in constant time, or the request
+    fails with `401 invalid_client`.
+    A PKCE verifier never substitutes for the secret, so a leaked code plus a
+    known verifier is not enough to mint a token for a confidential client.
+    A public client has no secret and must send a `code_verifier`.
+  * **PKCE**, decided by the code.
+    A code minted **with** a challenge always demands a valid
+    `code_verifier`, confidential clients included; a missing or wrong
+    verifier fails with `invalid_grant`.
+    A code minted **without** a challenge is only reachable via the
+    confidential path at `/authorize`; a public client presenting one fails
+    closed with `invalid_grant`.
+* Client authentication runs *before* the single-use code is consumed, so a
+  request that fails it (no secret, wrong secret, unknown client) cannot
+  burn the code for the real client.
+* `/token` also enforces the grants a client is registered for (RFC 6749
+  §5.2): `authorization_code`, the device-code grant and `refresh_token` are
+  each refused with `unauthorized_client` for a client not registered for
+  them.
 
 Net properties:
 
 * Public clients: PKCE mandatory, exactly as before. No change, no
   relaxation.
-* Confidential clients: may omit PKCE, but must then authenticate with their
-  secret; if they use PKCE, it is fully enforced.
+* Confidential clients: always authenticate with their secret; may omit
+  PKCE, and if they use PKCE it is enforced in addition to the secret.
 * There is no configuration in which a flow completes with neither PKCE nor
   client authentication.
 
@@ -150,7 +160,7 @@ PKCE decision and with no security downside:
 The threat PKCE addresses for *public* clients is authorization-code
 interception by a party that can receive the redirect but does not hold a
 client secret. A confidential client that authenticates its secret at the
-token endpoint already forces an attacker to possess that secret to redeem an
+token endpoint (which tempogate requires on every redemption) already forces an attacker to possess that secret to redeem an
 intercepted code; the secret plus TLS covers the same threat class that PKCE
 covers for secret-less clients. The residual gap versus OAuth 2.1 is that
 PKCE additionally binds the code to a *single authorization request*, which a

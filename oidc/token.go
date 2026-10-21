@@ -87,27 +87,27 @@ type TokenStore interface {
 	ConsumeRefresh(ctx context.Context, token string) (Refresh, error)
 }
 
-// ClientAuthenticator authenticates a confidential client's secret presented
-// at the token endpoint. *ClientRegistry satisfies it structurally; the
-// narrow interface (consumer-defines-the-interface, see state/doc.go) keeps
-// the /token handler decoupled from the registry's redirect-allowlist
-// concerns. It is consulted only on the confidential carve-out path — a
-// redeemed code that carried no PKCE challenge — so a client with no secret
-// can never authenticate this way.
-type ClientAuthenticator interface {
+// TokenClients is the client registry as the /token handler needs it: look
+// a client up to learn its grants and whether it is confidential, and verify
+// a presented secret. ClientRegistry satisfies it structurally; the narrow
+// interface (consumer-defines-the-interface, see state/doc.go) keeps the
+// /token handler decoupled from the registry's redirect-allowlist concerns.
+type TokenClients interface {
+	Lookup(clientID string) (Client, bool)
 	Authenticate(clientID, secret string) bool
 }
 
 // Token serves POST /token: it completes the authorization-code flow by
-// exchanging a redeemed code for a signed JWT — PKCE-verified for public
-// clients, client-secret-authenticated for the confidential carve-out —
-// renews sessions via the refresh-token grant, and (when a DeviceCodeStore
-// is wired in) redeems the RFC 8628 device-code grant the CLI polls on.
+// exchanging a redeemed code for a signed JWT (a confidential client always
+// authenticates its secret; PKCE is verified whenever the code carries a
+// challenge), renews sessions via the refresh-token grant, and (when a
+// DeviceCodeStore is wired in) redeems the RFC 8628 device-code grant the CLI
+// polls on.
 type Token struct {
 	store      TokenStore
 	devices    DeviceCodeStore
 	signer     *keys.Signer
-	clients    ClientAuthenticator
+	clients    TokenClients
 	now        func() time.Time
 	newRefresh func() (string, error)
 }
@@ -134,7 +134,7 @@ func WithDeviceCodeStore(s DeviceCodeStore) TokenOption {
 	return func(t *Token) { t.devices = s }
 }
 
-func NewToken(store TokenStore, signer *keys.Signer, clients ClientAuthenticator, opts ...TokenOption) *Token {
+func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts ...TokenOption) *Token {
 	t := &Token{
 		store:      store,
 		signer:     signer,
@@ -207,7 +207,7 @@ func (t *Token) handle(ctx context.Context, in *tokenInput) (*tokenOutput, error
 	case grantRefreshToken:
 		return t.refreshTokenGrant(ctx, form)
 	case grantDeviceCode:
-		return t.deviceCodeGrant(ctx, form)
+		return t.deviceCodeGrant(ctx, form, in.Authorization)
 	case "":
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "grant_type is required")
 	default:
@@ -216,16 +216,16 @@ func (t *Token) handle(ctx context.Context, in *tokenInput) (*tokenOutput, error
 }
 
 // AuthCodeRedemptionRequest is the parsed input to the auth-code-grant
-// redemption step — already past form parsing, Basic-auth parsing, and the
-// PKCE-vs-secret carve-out routing. The public POST /token handler and the
-// device-flow verification UI both build one of these and hand it to
-// RedeemAuthorizationCode; neither needs an HTTP round-trip to do so.
+// redemption step, already past form parsing and Basic-auth parsing. The
+// public POST /token handler and the device-flow verification UI both build
+// one of these and hand it to RedeemAuthorizationCode; neither needs an HTTP
+// round-trip to do so.
 type AuthCodeRedemptionRequest struct {
 	Code         string
 	ClientID     string
 	RedirectURI  string
-	CodeVerifier string // PKCE; empty when authenticating by client secret.
-	ClientSecret string // empty when authenticating by PKCE.
+	CodeVerifier string // PKCE; empty when the code carries no challenge.
+	ClientSecret string // required for a confidential client; empty for a public one.
 }
 
 // AuthCodeRedemption is the consumed AuthCode's claims, ready for either
@@ -238,9 +238,9 @@ type AuthCodeRedemption struct {
 }
 
 // RedeemAuthorizationCode validates a presented authorization code,
-// consumes it single-use, runs the PKCE-or-client-secret proof appropriate
-// to how the code was minted, and returns the code's claims. No HTTP shape
-// involved — callers have already parsed their inputs. Errors are returned
+// authenticates the client, consumes the code single-use, enforces PKCE when
+// the code was minted with a challenge, and returns the code's claims. No
+// HTTP shape involved — callers have already parsed their inputs. Errors are returned
 // as OAuth2-shaped huma.StatusErrors via oauthErr so the public /token
 // handler can propagate them verbatim; in-process callers can inspect
 // errors.Is(..., huma.StatusError) or just surface the message.
@@ -249,14 +249,17 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code is required")
 	}
 
-	// A request that proves neither PKCE possession nor a client secret is
-	// malformed regardless of which client it claims to be — reject it
-	// before consuming the single-use code. (Which proof is actually
-	// required is decided post-consume from the code's own challenge, so the
-	// strict default cannot be downgraded by a confidential-looking
-	// request against a public client's code.)
-	if in.CodeVerifier == "" && in.ClientSecret == "" {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_verifier (PKCE) or client authentication is required")
+	// Client authentication is a property of the request, not of the code,
+	// so it runs before the single-use code is consumed: a party holding a
+	// leaked code but not the secret cannot redeem it, nor burn it for the
+	// real client.
+	c, err := t.authenticateClient(in.ClientID, in.ClientSecret, GrantTypeAuthorizationCode)
+	if err != nil {
+		return nil, err
+	}
+	// A public client has no secret, so the verifier is its only proof.
+	if c.Secret == "" && in.CodeVerifier == "" {
+		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_verifier is required (PKCE)")
 	}
 
 	ac, err := t.store.ConsumeAuthCode(ctx, in.Code)
@@ -277,35 +280,56 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "redirect_uri does not match the authorization request")
 	}
 
-	// The code itself decides which proof is required. A code minted with a
-	// PKCE challenge always demands the verifier — that path is unchanged and
-	// strict, and a confidential client that chose PKCE still gets it
-	// enforced. Only a code minted with no challenge (the confidential
-	// carve-out, gated at /authorize on IsConfidential) falls through to
-	// client-secret authentication.
-	if ac.CodeChallenge != "" {
+	// PKCE is enforced on top of client authentication whenever the code was
+	// minted with a challenge, confidential clients included (RFC 9700
+	// §2.1.1). A code with no challenge is only minted for a confidential
+	// client (the /authorize carve-out), so a public client presenting one
+	// fails closed.
+	switch {
+	case ac.CodeChallenge != "":
 		if in.CodeVerifier == "" {
-			return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_verifier is required (PKCE)")
+			return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "code_verifier is required (PKCE)")
 		}
 		if !verifyPKCE(in.CodeVerifier, ac.CodeChallenge) {
 			return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
 		}
-	} else if !t.clients.Authenticate(ac.ClientID, in.ClientSecret) {
-		return nil, oauthErr(http.StatusUnauthorized, "invalid_client", "client authentication failed")
+	case c.Secret == "":
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "authorization code is not bound to a PKCE challenge")
 	}
 
 	return &AuthCodeRedemption{Email: ac.Email, ClientID: ac.ClientID, Nonce: ac.Nonce}, nil
 }
 
-func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
-	basicID, basicSecret, hasBasic := parseBasicAuth(authHeader)
-	clientID := form.Get("client_id")
-	presentedSecret := form.Get("client_secret")
-	if hasBasic {
-		clientID = basicID
-		presentedSecret = basicSecret
+// authenticateClient resolves the client a /token request speaks for,
+// authenticates it, and checks that its registration allows grant g. A
+// confidential client always proves its secret (RFC 6749 §3.2.1), whatever
+// other proof the request carries. A public client has none to prove, but a
+// secret it does present must still be valid rather than silently ignored.
+func (t *Token) authenticateClient(clientID, secret string, g GrantType) (Client, error) {
+	c, ok := t.clients.Lookup(clientID)
+	if !ok {
+		return Client{}, oauthErr(http.StatusUnauthorized, "invalid_client", "unknown client")
 	}
+	if (c.Secret != "" || secret != "") && !t.clients.Authenticate(clientID, secret) {
+		return Client{}, oauthErr(http.StatusUnauthorized, "invalid_client", "client authentication failed")
+	}
+	if !c.Allows(g) {
+		return Client{}, oauthErr(http.StatusBadRequest, "unauthorized_client", "client is not registered for this grant type")
+	}
+	return c, nil
+}
 
+// clientCredentials reads the client_id and secret a /token request presents:
+// HTTP Basic when sent, otherwise the form body (RFC 6749 §2.3.1).
+func clientCredentials(form url.Values, authHeader string) (id, secret string) {
+	if id, secret, ok := parseBasicAuth(authHeader); ok {
+		return id, secret
+	}
+	return form.Get("client_id"), form.Get("client_secret")
+}
+
+func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
+	clientID, presentedSecret := clientCredentials(form, authHeader)
 	r, err := t.RedeemAuthorizationCode(ctx, AuthCodeRedemptionRequest{
 		Code:         form.Get("code"),
 		ClientID:     clientID,
@@ -335,6 +359,11 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values) (*tokenO
 
 	if t.now().After(rt.ExpiresAt) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "refresh token expired")
+	}
+	// The token was issued to rt.ClientID; refuse it once that client is no
+	// longer registered for refresh.
+	if c, ok := t.clients.Lookup(rt.ClientID); !ok || !c.Allows(GrantTypeRefreshToken) {
+		return nil, oauthErr(http.StatusBadRequest, "unauthorized_client", "client is not registered for the refresh_token grant")
 	}
 
 	// No nonce on refresh: OIDC Core binds nonce to the original
@@ -433,7 +462,7 @@ func randomRefresh() (string, error) {
 // each half is unescaped — falling back to the raw value if it is not valid
 // percent-encoding. ok is false for any other or missing scheme, so the
 // caller falls back to form-body credentials. The secret is not validated
-// here; ClientAuthenticator does that in constant time.
+// here; TokenClients.Authenticate does that in constant time.
 func parseBasicAuth(header string) (id, secret string, ok bool) {
 	const prefix = "Basic "
 	if len(header) <= len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {

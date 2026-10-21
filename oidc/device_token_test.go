@@ -406,14 +406,22 @@ func (s *TokenSuite) TestDeviceCodeApprovedMintsTokenAndConsumes() {
 // produce the same sub/email/aud/permissions/TTL. (jti, iat, exp drift per
 // mint; nonce is deliberately absent on the device path.)
 func (s *TokenSuite) TestDeviceCodeClaimsMatchAuthorizationCode() {
+	// /token enforces each client's registered grants, so the comparison
+	// needs a client allowed both; ParseClientRegistry never builds one.
+	const dual = "dual-grant"
+	s.clients[dual] = oidc.Client{
+		RedirectURIs: []string{testRedirectURI},
+		GrantTypes:   []oidc.GrantType{oidc.GrantTypeAuthorizationCode, oidc.GrantTypeDeviceCode},
+	}
+
 	// authorization_code path with empty nonce (no rp-nonce in the auth code).
 	ac := s.authCode("code-1")
 	ac.Nonce = ""
-	ac.ClientID = "tempogate-device"
+	ac.ClientID = dual
 	s.store.putCode(ac)
 
 	f := authCodeForm()
-	f.Set("client_id", "tempogate-device")
+	f.Set("client_id", dual)
 	acResp := s.post(f)
 	s.Require().Equal(200, acResp.StatusCode)
 	acTok, err := s.verifier.Verify(context.Background(), s.decodeTokenResponse(acResp).AccessToken)
@@ -421,9 +429,11 @@ func (s *TokenSuite) TestDeviceCodeClaimsMatchAuthorizationCode() {
 	s.Require().NoError(err)
 
 	// device_code path with the same email + client_id.
-	s.seedPending("dc-1", "BCDFGHJK")
+	dc := pendingDeviceCode("dc-1", "BCDFGHJK")
+	dc.ClientID = dual
+	s.deviceStore.put(dc)
 	s.approve("BCDFGHJK", "alice@example.com")
-	dcResp := s.post(deviceForm("dc-1", "tempogate-device"))
+	dcResp := s.post(deviceForm("dc-1", dual))
 	defer dcResp.Body.Close()
 	s.Require().Equal(200, dcResp.StatusCode)
 	dcTok, err := s.verifier.Verify(context.Background(), s.decodeTokenResponse(dcResp).AccessToken)

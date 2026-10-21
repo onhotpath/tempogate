@@ -53,8 +53,8 @@ const (
 // confidential client* — one that authenticates at the token endpoint with a
 // shared secret and does not implement PKCE (the Temporal Web UI's OIDC
 // client is the motivating example). Such a client, and only such a client,
-// may omit PKCE; it must still authenticate its secret at /token, and PKCE is
-// still enforced if it chooses to send a code_challenge. See
+// may omit PKCE; it always authenticates its secret at /token, and PKCE is
+// enforced on top if it chooses to send a code_challenge. See
 // docs/pkce-and-confidential-clients.md.
 type Client struct {
 	RedirectURIs []string
@@ -289,6 +289,12 @@ func (c Client) matchRedirectURI(raw string) bool {
 		}
 	}
 	return false
+}
+
+// Lookup returns the registration for clientID, if any.
+func (r ClientRegistry) Lookup(clientID string) (Client, bool) {
+	c, ok := r[clientID]
+	return c, ok
 }
 
 // IsConfidential reports whether clientID is a registered confidential client

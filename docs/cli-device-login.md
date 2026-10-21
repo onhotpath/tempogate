@@ -145,7 +145,7 @@ OIDC_CLIENTS=\
 
 | client_id              | Visibility | Why it exists                                                                             |
 | ---------------------- | ---------- | ----------------------------------------------------------------------------------------- |
-| `tempogate-device`     | external   | The public client the CLI presents at `/device_authorization` and `/token`. Registered with an empty value, which makes it **device-only**: it may use the device authorization grant and refresh tokens, and `/authorize` refuses it with `unauthorized_client`. A client registered with redirect URIs is likewise refused at `/device_authorization`. |
+| `tempogate-device`     | external   | The public client the CLI presents at `/device_authorization` and `/token`. Registered with an empty value, which makes it **device-only**: it may use the device authorization grant and refresh tokens, and `/authorize` refuses it with `unauthorized_client`. A client registered with redirect URIs is likewise refused at `/device_authorization`, and `/token` refuses either kind a grant it is not registered for. |
 | `tempogate-device-ui`  | internal   | Confidential client that tempogate **uses as a client of itself** to drive the verification page through `/authorize` + Google SSO. Its callback is `<issuer>/device/sso-callback`. |
 
 tempogate checks at startup that `tempogate-device-ui` is registered for exactly `<issuer>/device/sso-callback` (for a loopback issuer such as `http://127.0.0.1:8000`, the port-less `http://127.0.0.1/device/sso-callback` also matches) and refuses to boot otherwise, since `/authorize` would reject every verification bounce.
