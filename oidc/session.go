@@ -2,9 +2,7 @@ package oidc
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -259,14 +257,12 @@ func (m *SessionManager) sidFromRequest(r *http.Request) (string, bool) {
 	return m.verifyCookie(c.Value)
 }
 
-// signCookie produces base64url(sid).base64url(HMAC-SHA256(key, sid)). The
-// sid round-trips out of the cookie unchanged so the store lookup uses the
-// exact value the row was saved under.
+// signCookie produces base64url(sid).base64url(MAC), the MAC labelled with
+// macLabelSessionCookie. The sid round-trips out of the cookie unchanged so
+// the store lookup uses the exact value the row was saved under.
 func (m *SessionManager) signCookie(sid string) string {
-	mac := hmac.New(sha256.New, m.signingKey)
-	mac.Write([]byte(sid))
 	return base64.RawURLEncoding.EncodeToString([]byte(sid)) + "." +
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+		base64.RawURLEncoding.EncodeToString(labeledMAC(m.signingKey, macLabelSessionCookie, []byte(sid)))
 }
 
 // verifyCookie checks the format, decodes both halves and verifies the MAC
@@ -286,9 +282,7 @@ func (m *SessionManager) verifyCookie(value string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	want := hmac.New(sha256.New, m.signingKey)
-	want.Write(sidBytes)
-	if subtle.ConstantTimeCompare(gotMAC, want.Sum(nil)) != 1 {
+	if subtle.ConstantTimeCompare(gotMAC, labeledMAC(m.signingKey, macLabelSessionCookie, sidBytes)) != 1 {
 		return "", false
 	}
 	return string(sidBytes), true

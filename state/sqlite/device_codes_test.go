@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,39 +82,37 @@ func (s *StoreSuite) TestLookupDeviceCodeByUserCodeUnknown() {
 		"expected ErrDeviceCodeNotFound, got %v", err)
 }
 
-func (s *StoreSuite) TestTouchDeviceCodePoll() {
-	cases := []struct {
-		name              string
-		bumpInterval      bool
-		wantIntervalAfter int
+func (s *StoreSuite) TestPollDeviceCodeEnforcesInterval() {
+	dc := s.deviceCode("dc-poll", "POLLPOLL")
+	s.Require().NoError(s.store.SaveDeviceCode(s.ctx, dc))
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+
+	steps := []struct {
+		name         string
+		at           time.Time
+		wantSlowDown bool
+		wantInterval int
 	}{
-		{"no bump leaves interval unchanged", false, 5},
-		{"bump adds five seconds", true, 10},
+		{"first poll is never too fast", t0, false, 5},
+		{"inside 5 s is slow_down and bumps", t0.Add(4 * time.Second), true, 10},
+		{"inside the bumped 10 s is slow_down again", t0.Add(13 * time.Second), true, 15},
+		{"after the interval is well-paced", t0.Add(29 * time.Second), false, 15},
 	}
+	for _, st := range steps {
+		slowDown, err := s.store.PollDeviceCode(s.ctx, dc.Code, st.at)
+		s.Require().NoError(err, st.name)
+		s.Equal(st.wantSlowDown, slowDown, st.name)
 
-	for _, tc := range cases {
-		s.Run(tc.name, func() {
-			s.SetupTest()
-			defer s.TearDownTest()
-
-			dc := s.deviceCode("dc-poll-"+tc.name, "POLL"+tc.name[:4])
-			s.Require().NoError(s.store.SaveDeviceCode(s.ctx, dc))
-
-			now := time.Now().UTC().Truncate(time.Microsecond)
-			s.Require().NoError(s.store.TouchDeviceCodePoll(s.ctx, dc.Code, now, tc.bumpInterval))
-
-			got, err := s.store.LookupDeviceCodeByDeviceCode(s.ctx, dc.Code)
-			s.Require().NoError(err)
-			s.Require().NotNil(got.LastPolledAt)
-			s.True(now.Equal(*got.LastPolledAt))
-			s.Equal(tc.wantIntervalAfter, got.IntervalSeconds)
-		})
+		got, err := s.store.LookupDeviceCodeByDeviceCode(s.ctx, dc.Code)
+		s.Require().NoError(err)
+		s.Require().NotNil(got.LastPolledAt)
+		s.True(st.at.Equal(*got.LastPolledAt), st.name)
+		s.Equal(st.wantInterval, got.IntervalSeconds, st.name)
 	}
 }
 
-func (s *StoreSuite) TestTouchDeviceCodePollUnknown() {
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	err := s.store.TouchDeviceCodePoll(s.ctx, "never-saved", now, false)
+func (s *StoreSuite) TestPollDeviceCodeUnknown() {
+	_, err := s.store.PollDeviceCode(s.ctx, "never-saved", time.Now().UTC())
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, ErrDeviceCodeNotFound),
 		"expected ErrDeviceCodeNotFound, got %v", err)
@@ -264,14 +263,12 @@ func (s *StoreSuite) TestConsumeDeviceCodeUnknown() {
 		"expected ErrDeviceCodeNotFound, got %v", err)
 }
 
-// TestTouchDeviceCodePollUnderConcurrencyDoesNotDeadlock locks the
-// single-conn-store contract: TouchDeviceCodePoll is the per-poll write the
-// /token handler executes on every device-flow poll, so a burst of polls on
-// the same row must serialise through the SQLite busy-timeout instead of
-// deadlocking. We fire N goroutines at the same device_code; each call must
-// complete (no errors, no hang) and the final interval_seconds must reflect
-// every increment.
-func (s *StoreSuite) TestTouchDeviceCodePollUnderConcurrencyDoesNotDeadlock() {
+// TestPollDeviceCodeConcurrentPollsGetOneAnswer is RFC 8628 §3.5 under
+// parallel polling: N polls racing on one row inside a single interval must
+// produce exactly one well-paced answer, every other poll is slow_down, and
+// every slow_down bump lands. They must also serialise through the SQLite
+// busy-timeout rather than deadlock.
+func (s *StoreSuite) TestPollDeviceCodeConcurrentPollsGetOneAnswer() {
 	dc := s.deviceCode("dc-concurrent", "CONCXX12")
 	s.Require().NoError(s.store.SaveDeviceCode(s.ctx, dc))
 
@@ -279,25 +276,70 @@ func (s *StoreSuite) TestTouchDeviceCodePollUnderConcurrencyDoesNotDeadlock() {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(n)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		wellPace int
+	)
 	errCh := make(chan error, n)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	for range n {
-		go func() {
-			defer wg.Done()
-			if err := s.store.TouchDeviceCodePoll(ctx, dc.Code, now, true); err != nil {
+		wg.Go(func() {
+			slowDown, err := s.store.PollDeviceCode(ctx, dc.Code, now)
+			if err != nil {
 				errCh <- err
+				return
 			}
-		}()
+			if !slowDown {
+				mu.Lock()
+				wellPace++
+				mu.Unlock()
+			}
+		})
 	}
 	wg.Wait()
 	close(errCh)
 	for err := range errCh {
 		s.Require().NoError(err)
 	}
+	s.Equal(1, wellPace, "exactly one of %d parallel polls may pass as well-paced", n)
 
 	got, err := s.store.LookupDeviceCodeByDeviceCode(s.ctx, dc.Code)
 	s.Require().NoError(err)
-	s.Equal(5+5*n, got.IntervalSeconds, "every increment must land")
+	s.Equal(5+5*(n-1), got.IntervalSeconds, "every slow_down bump must land")
+}
+
+// TestDecideDeviceCodeRejectsExpiredRow: Approve and Deny refuse a row whose
+// expires_at has passed, as defence in depth behind the /token expiry
+// check. The row stays untouched so the polling client sees expired_token.
+func (s *StoreSuite) TestDecideDeviceCodeRejectsExpiredRow() {
+	decide := map[string]func(userCode string, now time.Time) error{
+		"approve": func(userCode string, now time.Time) error {
+			return s.store.ApproveDeviceCode(s.ctx, userCode, "alice@example.com", now)
+		},
+		"deny": func(userCode string, now time.Time) error {
+			return s.store.DenyDeviceCode(s.ctx, userCode, now)
+		},
+	}
+	for name, fn := range decide {
+		s.Run(name, func() {
+			s.SetupTest()
+			defer s.TearDownTest()
+
+			dc := s.deviceCode("dc-expired-"+name, "EXPIRED"+strings.ToUpper(name[:1]))
+			s.Require().NoError(s.store.SaveDeviceCode(s.ctx, dc))
+
+			for _, at := range []time.Time{dc.ExpiresAt, dc.ExpiresAt.Add(time.Second)} {
+				err := fn(dc.UserCode, at)
+				s.Require().Error(err)
+				s.Truef(errors.Is(err, ErrDeviceCodeNotPending), "expected ErrDeviceCodeNotPending, got %v", err)
+			}
+
+			got, err := s.store.LookupDeviceCodeByUserCode(s.ctx, dc.UserCode)
+			s.Require().NoError(err)
+			s.Nil(got.ApprovedAt)
+			s.Nil(got.DeniedAt)
+			s.Empty(got.Email)
+		})
+	}
 }

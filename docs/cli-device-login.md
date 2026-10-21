@@ -124,6 +124,7 @@ polls arrive faster than the published interval the second returns `slow_down`
 **and** the stored interval is bumped +5 s — so a misbehaving client converges
 on a polite cadence after a couple of round-trips rather than starving the
 endpoint.
+The check and the record are one atomic step, so polls fired in parallel do not slip through together: of several polls inside one interval, at most one gets a real answer and the rest get `slow_down`.
 
 The whole flow has one hard deadline: `expires_in` (the device-code TTL the
 server returned in its initial response). When that elapses, polling returns
@@ -146,6 +147,8 @@ OIDC_CLIENTS=\
 | ---------------------- | ---------- | ----------------------------------------------------------------------------------------- |
 | `tempogate-device`     | external   | The public client the CLI presents at `/device_authorization` and `/token`. Registered with an empty value, which makes it **device-only**: it may use the device authorization grant and refresh tokens, and `/authorize` refuses it with `unauthorized_client`. A client registered with redirect URIs is likewise refused at `/device_authorization`. |
 | `tempogate-device-ui`  | internal   | Confidential client that tempogate **uses as a client of itself** to drive the verification page through `/authorize` + Google SSO. Its callback is `<issuer>/device/sso-callback`. |
+
+tempogate checks at startup that `tempogate-device-ui` is registered for exactly `<issuer>/device/sso-callback` (for a loopback issuer such as `http://127.0.0.1:8000`, the port-less `http://127.0.0.1/device/sso-callback` also matches) and refuses to boot otherwise, since `/authorize` would reject every verification bounce.
 
 `tempogate-device-ui` is confidential — register a secret for it:
 
@@ -180,9 +183,36 @@ in this release.
 
 * **The user_code is short by design.** It is meant to be human-typeable.
   Protection against guessing comes from a short TTL (`expires_in`, default
-  5 minutes), the server-side polling cadence (`slow_down` bumps the
-  interval whenever a client polls too fast), and the human visually
+  5 minutes), attempt limits on the verification page (below), one
+  uniform message for every unusable code, and the human visually
   verifying the code matches before approving.
+* **User-code attempts are rate limited (RFC 8628 §5.1).** Every page that
+  looks a code up (`POST /device`, `/device/confirm`, `/device/approve`,
+  `/device/deny`) counts **failed** lookups against two budgets: 20 per
+  minute per client IP and 5 per minute per verification session.
+  A code that turns out valid costs nothing, so honest users behind one NAT
+  do not throttle each other.
+  Once a budget is spent the page answers `429 Too Many Requests` with
+  "Too many attempts. Wait a minute, then try again." for any code, live or
+  not, so a throttled guesser learns nothing; the budget refills
+  continuously over the minute.
+  An unknown, expired, approved or denied code all get the same "That code
+  is not valid" page, so a guess cannot tell a real code from a dead one.
+  The limits are fixed (not configurable) and kept in memory per replica,
+  so N replicas allow up to N times the budget, which is still far from
+  useful against ~36.6 bits of user_code.
+  The client IP is the TCP peer address; `X-Forwarded-For` is not trusted.
+  Behind a reverse proxy or load balancer every client therefore shares the
+  proxy's IP budget, and the per-session budget is what tells signed-in
+  users apart.
+  The flip side: one client submitting bad codes through that proxy can
+  briefly throttle code entry for everyone else behind it, until the
+  budget refills.
+* **Approve and Deny must be same-origin.** The POST needs a matching
+  `Origin`, or, when a browser omits it, a `Referer` on the issuer's scheme
+  and host whose path sits under the issuer's path.
+  The `Referer` is parsed, not prefix-matched, so
+  `https://tempogate.example.com.evil.com/` does not pass.
 * **The verification URL is safe to share, the `device_code` is not.**
   The URL only lets someone *enter* a code; without the `device_code`
   itself (which lives only on the CLI host) the polling endpoint cannot be
@@ -197,6 +227,13 @@ in this release.
   never send a `Secure` one back over http.
   It is *not* a general-purpose tempogate login session — the only thing it
   authorizes is approving or denying a pending device flow.
+* **One key, separate MACs.** `OIDC_SESSION_SIGNING_KEY` signs both the
+  session cookie and the SSO-bounce `state`, each under its own label
+  (`tempogate/session-cookie`, `tempogate/device/bounce-state`), so a value
+  minted for one never verifies as the other.
+  Upgrading from a release without the labels invalidates cookies and
+  bounce states issued before the upgrade; both live minutes, and an
+  affected user just restarts the sign-in.
 * **The minted token is identical to a loopback token.** Same lifetime,
   same `permissions` claim, same `aud`, same JWKS-verified signature. The
   device flow changes *how* the human authenticates the CLI, not what the

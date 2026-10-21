@@ -92,8 +92,8 @@ func (s *statefulDeviceCodeStore) LookupDeviceCodeByUserCode(_ context.Context, 
 	return dc, nil
 }
 
-func (s *statefulDeviceCodeStore) TouchDeviceCodePoll(_ context.Context, _ string, _ time.Time, _ bool) error {
-	return nil
+func (s *statefulDeviceCodeStore) PollDeviceCode(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return false, nil
 }
 
 func (s *statefulDeviceCodeStore) ApproveDeviceCode(_ context.Context, userCode, email string, now time.Time) error {
@@ -106,7 +106,7 @@ func (s *statefulDeviceCodeStore) ApproveDeviceCode(_ context.Context, userCode,
 	if !ok {
 		return oidc.ErrDeviceCodeNotFound
 	}
-	if dc.ApprovedAt != nil || dc.DeniedAt != nil {
+	if dc.ApprovedAt != nil || dc.DeniedAt != nil || !now.Before(dc.ExpiresAt) {
 		return oidc.ErrDeviceCodeNotPending
 	}
 	dc.ApprovedAt = &now
@@ -126,7 +126,7 @@ func (s *statefulDeviceCodeStore) DenyDeviceCode(_ context.Context, userCode str
 	if !ok {
 		return oidc.ErrDeviceCodeNotFound
 	}
-	if dc.ApprovedAt != nil || dc.DeniedAt != nil {
+	if dc.ApprovedAt != nil || dc.DeniedAt != nil || !now.Before(dc.ExpiresAt) {
 		return oidc.ErrDeviceCodeNotPending
 	}
 	dc.DeniedAt = &now
@@ -382,7 +382,7 @@ func (s *DeviceUISuite) TestEnterPostErrorPaths() {
 		{
 			name:      "unknown user_code",
 			body:      url.Values{"user_code": {"ZZZZ-ZZZZ"}},
-			wantMatch: "not active",
+			wantMatch: "That code is not valid",
 		},
 		{
 			name: "expired user_code",
@@ -396,7 +396,7 @@ func (s *DeviceUISuite) TestEnterPostErrorPaths() {
 					ExpiresAt: deviceUINow.Add(-time.Minute),
 				})
 			},
-			wantMatch: "expired",
+			wantMatch: "That code is not valid",
 		},
 		{
 			name: "already approved",
@@ -412,7 +412,7 @@ func (s *DeviceUISuite) TestEnterPostErrorPaths() {
 					ApprovedAt: &stamp,
 				})
 			},
-			wantMatch: "already been used",
+			wantMatch: "That code is not valid",
 		},
 	}
 	for _, tc := range cases {
@@ -802,7 +802,7 @@ func (s *DeviceUISuite) TestApproveOnAlreadyDecidedRowSurfacesAsError() {
 
 	s.Equal(http.StatusOK, resp.StatusCode)
 	body := readBody(s.T(), resp)
-	s.Contains(body, "already been used")
+	s.Contains(body, "That code is not valid")
 }
 
 func (s *DeviceUISuite) TestApproveOnUnknownRowSurfacesAsError() {
@@ -818,7 +818,7 @@ func (s *DeviceUISuite) TestApproveOnUnknownRowSurfacesAsError() {
 
 	s.Equal(http.StatusOK, resp.StatusCode)
 	body := readBody(s.T(), resp)
-	s.Contains(body, "not active")
+	s.Contains(body, "That code is not valid")
 }
 
 // TestConfirmExpiredOrDecidedRowIsError covers handleConfirm's expired
@@ -842,7 +842,7 @@ func (s *DeviceUISuite) TestConfirmExpiredOrDecidedRowIsError() {
 				CreatedAt: deviceUINow.Add(-time.Hour),
 				ExpiresAt: deviceUINow.Add(-time.Minute),
 			},
-			want: "expired",
+			want: "That code is not valid",
 		},
 		{
 			name: "already approved",
@@ -854,7 +854,7 @@ func (s *DeviceUISuite) TestConfirmExpiredOrDecidedRowIsError() {
 				ExpiresAt:  deviceUINow.Add(15 * time.Minute),
 				ApprovedAt: ptr(deviceUINow),
 			},
-			want: "already been used",
+			want: "That code is not valid",
 		},
 		{
 			name: "already denied",
@@ -866,7 +866,7 @@ func (s *DeviceUISuite) TestConfirmExpiredOrDecidedRowIsError() {
 				ExpiresAt: deviceUINow.Add(15 * time.Minute),
 				DeniedAt:  ptr(deviceUINow),
 			},
-			want: "already been used",
+			want: "That code is not valid",
 		},
 		{
 			name: "unknown row",
@@ -877,7 +877,7 @@ func (s *DeviceUISuite) TestConfirmExpiredOrDecidedRowIsError() {
 				CreatedAt: deviceUINow,
 				ExpiresAt: deviceUINow.Add(15 * time.Minute),
 			},
-			want: "not active",
+			want: "That code is not valid",
 		},
 	}
 	for _, tc := range cases {
@@ -1086,35 +1086,13 @@ func (s *DeviceUISuite) TestSessionUnexpectedLookupErrorIs500() {
 	}
 }
 
-// TestNewDeviceUITreatsBadIssuerSafely guards originPrefix's "issuer
-// does not parse" branch. A device-ui constructed with a non-URL issuer
-// still serves the rendered pages, but its Origin gate fails closed so a
-// misconfigured server can never accept the Approve form.
-func (s *DeviceUISuite) TestNewDeviceUITreatsBadIssuerSafely() {
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, ":::not-a-url",
-		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
-		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return deviceUITestStateNonce, nil }),
-	)
-	s.Require().NoError(err, "NewDeviceUI should not fail on a syntactically odd issuer")
-	mux := http.NewServeMux()
-	ui.Register(humago.New(mux, huma.DefaultConfig("device-ui-badissuer", "0.0.0")))
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	cookieValue := s.seedSession()
-	r, err := http.NewRequest(http.MethodPost, srv.URL+"/device/approve",
-		strings.NewReader(url.Values{"csrf_token": {deviceUITestSID}, "user_code": {deviceUITestUserDisplay}}.Encode()))
-	s.Require().NoError(err)
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Header.Set("Cookie", cookieValue)
-	r.Header.Set("Origin", testIssuer)
-
-	resp, err := s.client.Do(r)
-	s.Require().NoError(err)
-	defer resp.Body.Close()
-	s.Equal(http.StatusOK, resp.StatusCode)
-	s.Contains(readBody(s.T(), resp), "did not come from the expected page",
-		"a parseable Origin against an unparseable issuer must fail closed")
+// TestNewDeviceUIRejectsBadIssuer: an issuer that does not parse to an
+// absolute URL cannot have a matching sso-callback registration, so
+// construction fails rather than serving a UI whose same-origin check and
+// form actions have nothing to compare against.
+func (s *DeviceUISuite) TestNewDeviceUIRejectsBadIssuer() {
+	_, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, ":::not-a-url")
+	s.Require().ErrorIs(err, oidc.ErrInternalDeviceUIClientRedirectMismatch)
 }
 
 // TestSSOCallbackVerifyBounceStateBranches drives the remaining
@@ -1155,7 +1133,7 @@ func (s *DeviceUISuite) TestSSOCallbackVerifyBounceStateBranches() {
 			func() string {
 				raw := []byte("not-json-at-all")
 				return base64.RawURLEncoding.EncodeToString(raw) + "." +
-					base64.RawURLEncoding.EncodeToString(hmacOf(s.key, raw))
+					base64.RawURLEncoding.EncodeToString(bounceStateMAC(s.key, raw))
 			}(),
 		},
 		{
@@ -1163,7 +1141,7 @@ func (s *DeviceUISuite) TestSSOCallbackVerifyBounceStateBranches() {
 			func() string {
 				raw := validPayload("", deviceUINow.Add(time.Minute).Unix())
 				return base64.RawURLEncoding.EncodeToString(raw) + "." +
-					base64.RawURLEncoding.EncodeToString(hmacOf(s.key, raw))
+					base64.RawURLEncoding.EncodeToString(bounceStateMAC(s.key, raw))
 			}(),
 		},
 	}
@@ -1481,10 +1459,22 @@ func signedBounceStateWithKey(canonical, nonce string, exp int64, key []byte) st
 		Nonce    string `json:"nonce"`
 		Exp      int64  `json:"exp"`
 	}{UserCode: canonical, Nonce: nonce, Exp: exp})
-	mac := hmacOf(key, payload)
+	mac := bounceStateMAC(key, payload)
 	return base64.RawURLEncoding.EncodeToString(payload) + "." +
 		base64.RawURLEncoding.EncodeToString(mac)
 }
+
+func bounceStateMAC(key, payload []byte) []byte {
+	return hmacOf(key, append([]byte(bounceStateMACLabel+"\x00"), payload...))
+}
+
+// bounceStateMACLabel and sessionCookieMACLabel mirror the production
+// domain-separation labels; restated here so a silent change to either
+// breaks these tests rather than every in-flight bounce.
+const (
+	bounceStateMACLabel   = "tempogate/device/bounce-state"
+	sessionCookieMACLabel = "tempogate/session-cookie"
+)
 
 func hmacOf(key, payload []byte) []byte {
 	h := stdHMACSHA256(key)

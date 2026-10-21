@@ -127,7 +127,7 @@ func (s *SessionSuite) SetupTest() {
 
 func (s *SessionSuite) signedCookie(sid string) string {
 	mac := hmac.New(sha256.New, s.key)
-	mac.Write([]byte(sid))
+	mac.Write([]byte(sessionCookieMACLabel + "\x00" + sid))
 	return base64.RawURLEncoding.EncodeToString([]byte(sid)) + "." +
 		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

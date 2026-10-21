@@ -107,42 +107,71 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 	return dc, nil
 }
 
-// TouchDeviceCodePoll records the latest poll timestamp and, when
-// bumpInterval is true, raises the server-tracked minimum-poll-interval by
-// the RFC 8628 §3.5 increment (+5 seconds). The /token handler calls this on
-// every device-code poll: it sets bumpInterval only when the poll arrived
-// inside the current interval window (the slow_down path), so well-behaved
-// clients never pay the penalty.
-func (s *Store) TouchDeviceCodePoll(ctx context.Context, deviceCode string, now time.Time, bumpInterval bool) error {
-	stmt := `UPDATE device_codes SET last_polled_at = ? WHERE device_code = ?`
-	args := []any{now, deviceCode}
-	if bumpInterval {
-		stmt = `UPDATE device_codes
-		        SET last_polled_at = ?, interval_seconds = interval_seconds + 5
-		        WHERE device_code = ?`
+// PollDeviceCode records a /token poll and enforces the RFC 8628 §3.5
+// minimum interval in one step, so parallel polls cannot all pass as
+// well-paced. A poll inside the stored interval of the previous one is
+// slow_down: it bumps interval_seconds by 5 and reports true. Otherwise it
+// claims the row by compare-and-swap on the exact stored last_polled_at, so
+// of N concurrent well-paced-looking polls exactly one wins and the rest
+// are slow_down. The interval is judged in Go because timestamps are stored
+// as Go time strings that SQLite's date functions cannot read.
+func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (bool, error) {
+	var (
+		lastPolled    sql.NullTime
+		lastPolledRaw sql.NullString
+		interval      int
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT last_polled_at, CAST(last_polled_at AS TEXT), interval_seconds
+		 FROM device_codes WHERE device_code = ?`,
+		deviceCode,
+	).Scan(&lastPolled, &lastPolledRaw, &interval)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("%w: %s", ErrDeviceCodeNotFound, deviceCode)
 	}
-	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
-		return fmt.Errorf("sqlite: touch device code poll: %w", err)
+		return false, fmt.Errorf("sqlite: poll device code: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("sqlite: touch device code poll rows: %w", err)
+
+	if !lastPolled.Valid || now.Sub(lastPolled.Time) >= time.Duration(interval)*time.Second {
+		var prev any
+		if lastPolledRaw.Valid {
+			prev = lastPolledRaw.String
+		}
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE device_codes SET last_polled_at = ?
+			 WHERE device_code = ? AND last_polled_at IS ?`,
+			now, deviceCode, prev,
+		)
+		if err != nil {
+			return false, fmt.Errorf("sqlite: poll device code: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 1 {
+			return false, err
+		}
+		// Lost the swap: another poll stamped the row after our read, so
+		// this one arrived inside the interval of that poll.
 	}
-	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrDeviceCodeNotFound, deviceCode)
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE device_codes
+		 SET last_polled_at = ?, interval_seconds = interval_seconds + 5
+		 WHERE device_code = ?`,
+		now, deviceCode,
+	); err != nil {
+		return false, fmt.Errorf("sqlite: poll device code slow_down: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // ApproveDeviceCode atomically stamps the row as approved by `email` only
-// when it is still pending (both approved_at and denied_at NULL). Zero rows
-// affected ⇒ ErrDeviceCodeNotPending, which the verification handler maps to
-// "already_decided" — a second click on Approve, an Approve after Deny, or a
-// completely unknown user_code all collapse to the same outward error so the
-// UI cannot be coaxed into revealing whether a user_code is in use.
+// when it is still pending (both approved_at and denied_at NULL) and not
+// expired at now. Otherwise it returns ErrDeviceCodeNotPending: a second
+// click on Approve, an Approve after Deny, an expired code, or a completely
+// unknown user_code all collapse to the same outward error so the UI cannot
+// be coaxed into revealing whether a user_code is in use.
 func (s *Store) ApproveDeviceCode(ctx context.Context, userCode, email string, now time.Time) error {
-	return s.decideDeviceCode(ctx,
+	return s.decideDeviceCode(ctx, now,
 		`UPDATE device_codes
 		 SET approved_at = ?, email = ?
 		 WHERE user_code = ?
@@ -153,8 +182,10 @@ func (s *Store) ApproveDeviceCode(ctx context.Context, userCode, email string, n
 	)
 }
 
+// DenyDeviceCode is ApproveDeviceCode's counterpart; the same pending and
+// unexpired conditions apply.
 func (s *Store) DenyDeviceCode(ctx context.Context, userCode string, now time.Time) error {
-	return s.decideDeviceCode(ctx,
+	return s.decideDeviceCode(ctx, now,
 		`UPDATE device_codes
 		 SET denied_at = ?
 		 WHERE user_code = ?
@@ -165,7 +196,26 @@ func (s *Store) DenyDeviceCode(ctx context.Context, userCode string, now time.Ti
 	)
 }
 
-func (s *Store) decideDeviceCode(ctx context.Context, stmt string, args []any, userCode string) error {
+// decideDeviceCode checks expiry before the conditional UPDATE. The check is
+// done in Go (stored timestamps are Go time strings SQLite cannot compare
+// reliably) and is race-free because expires_at never changes after insert.
+// /token rejects an expired code anyway; refusing the decision too keeps the
+// row from ever reading as approved past its lifetime.
+func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string, args []any, userCode string) error {
+	var expiresAt time.Time
+	err := s.db.QueryRowContext(ctx,
+		`SELECT expires_at FROM device_codes WHERE user_code = ?`, userCode,
+	).Scan(&expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrDeviceCodeNotPending, userCode)
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite: decide device code: %w", err)
+	}
+	if !now.Before(expiresAt) {
+		return fmt.Errorf("%w: %s expired", ErrDeviceCodeNotPending, userCode)
+	}
+
 	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("sqlite: decide device code: %w", err)

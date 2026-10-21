@@ -67,8 +67,8 @@ func (m *memDeviceCodeStore) LookupDeviceCodeByUserCode(_ context.Context, _ str
 	return oidc.DeviceCode{}, oidc.ErrDeviceCodeNotFound
 }
 
-func (m *memDeviceCodeStore) TouchDeviceCodePoll(_ context.Context, _ string, _ time.Time, _ bool) error {
-	return oidc.ErrDeviceCodeNotFound
+func (m *memDeviceCodeStore) PollDeviceCode(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return false, oidc.ErrDeviceCodeNotFound
 }
 
 func (m *memDeviceCodeStore) ApproveDeviceCode(_ context.Context, _, _ string, _ time.Time) error {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 // deviceCodeGrant implements RFC 8628 §3.4 (device-code redemption) plus the
@@ -27,7 +26,7 @@ import (
 //     A too-fast poll never advances the state machine, so an expired or
 //     denied row that is also being polled too fast still returns slow_down
 //     first (the client slows down and gets the truthful status next time).
-//  5. last_polled_at stamp on the well-paced poll.
+//  5. last_polled_at stamp on the well-paced poll, atomic with step 4.
 //  6. Expiry / denial — consumed on the first observing poll, so a second
 //     poll returns invalid_grant rather than the same status indefinitely.
 //  7. Approval gate — authorization_pending until the user clicks Approve.
@@ -66,15 +65,17 @@ func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values) (*tokenOut
 
 	// §3.5 slow_down — strictly from the stored interval, which includes any
 	// prior bumps. A poll that arrives inside the window bumps the floor by
-	// +5s; a well-paced poll never bumps.
-	if dc.LastPolledAt != nil && now.Sub(*dc.LastPolledAt) < time.Duration(dc.IntervalSeconds)*time.Second {
-		if err := t.devices.TouchDeviceCodePoll(ctx, deviceCode, now, true); err != nil {
-			return nil, fmt.Errorf("oidc: touch device code poll: %w", err)
-		}
-		return nil, oauthErr(http.StatusBadRequest, "slow_down", "polling faster than the agreed interval")
+	// +5s; a well-paced poll never bumps. The store decides and records in
+	// one atomic step, so parallel polls cannot all pass as well-paced.
+	slowDown, err := t.devices.PollDeviceCode(ctx, deviceCode, now)
+	if errors.Is(err, ErrDeviceCodeNotFound) {
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown or already-consumed device_code")
 	}
-	if err := t.devices.TouchDeviceCodePoll(ctx, deviceCode, now, false); err != nil {
-		return nil, fmt.Errorf("oidc: touch device code poll: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: record device code poll: %w", err)
+	}
+	if slowDown {
+		return nil, oauthErr(http.StatusBadRequest, "slow_down", "polling faster than the agreed interval")
 	}
 
 	// Expiry and denial are terminal — consume the row on the first observing

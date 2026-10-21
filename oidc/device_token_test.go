@@ -3,6 +3,8 @@ package oidc_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"net/url"
 	"sync"
 	"time"
@@ -23,7 +25,7 @@ type memDeviceFlowStore struct {
 	rows   map[string]oidc.DeviceCode
 	byUser map[string]string // user_code → device_code
 
-	touchErr   error
+	pollErr    error
 	consumeErr error
 }
 
@@ -84,23 +86,24 @@ func (m *memDeviceFlowStore) LookupDeviceCodeByUserCode(_ context.Context, userC
 	return m.rows[dcCode], nil
 }
 
-func (m *memDeviceFlowStore) TouchDeviceCodePoll(_ context.Context, deviceCode string, now time.Time, bumpInterval bool) error {
+func (m *memDeviceFlowStore) PollDeviceCode(_ context.Context, deviceCode string, now time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.touchErr != nil {
-		return m.touchErr
+	if m.pollErr != nil {
+		return false, m.pollErr
 	}
 	dc, ok := m.rows[deviceCode]
 	if !ok {
-		return oidc.ErrDeviceCodeNotFound
+		return false, oidc.ErrDeviceCodeNotFound
 	}
+	slowDown := dc.LastPolledAt != nil && now.Sub(*dc.LastPolledAt) < time.Duration(dc.IntervalSeconds)*time.Second
 	t := now
 	dc.LastPolledAt = &t
-	if bumpInterval {
+	if slowDown {
 		dc.IntervalSeconds += 5
 	}
 	m.rows[deviceCode] = dc
-	return nil
+	return slowDown, nil
 }
 
 func (m *memDeviceFlowStore) ApproveDeviceCode(_ context.Context, userCode, email string, now time.Time) error {
@@ -471,4 +474,33 @@ func (s *TokenSuite) TestUnsupportedGrantTypeListsDeviceCode() {
 	s.Require().NoError(json.NewDecoder(resp.Body).Decode(&body))
 	s.Equal("unsupported_grant_type", body.Error)
 	s.Contains(body.Desc, "device_code", "error_description must enumerate device_code now that it is supported")
+}
+
+// TestDeviceCodePollRecordFailures: a row consumed between the lookup and
+// the poll record is invalid_grant like any unknown code; any other store
+// failure is a server error, never a silent pass.
+func (s *TokenSuite) TestDeviceCodePollRecordFailures() {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantError  string
+	}{
+		{"row vanished", oidc.ErrDeviceCodeNotFound, http.StatusBadRequest, "invalid_grant"},
+		{"store failure", errors.New("disk on fire"), http.StatusInternalServerError, ""},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			s.seedPending("dc-1", "BCDFGHJK")
+			s.deviceStore.pollErr = tc.err
+			defer func() { s.deviceStore.pollErr = nil }()
+
+			resp := s.post(deviceForm("dc-1", "tempogate-device"))
+			defer resp.Body.Close()
+			s.Equal(tc.wantStatus, resp.StatusCode)
+			if tc.wantError != "" {
+				s.Equal(tc.wantError, s.decodeOAuthError(resp))
+			}
+		})
+	}
 }

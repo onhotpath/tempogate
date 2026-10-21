@@ -20,6 +20,9 @@ const (
 	// that a --force key rotation propagates promptly; long enough that a
 	// busy frontend isn't refetching on every verification.
 	wellKnownCacheControl = "public, max-age=300"
+
+	// deviceCodeGrantType is the RFC 8628 §3.4 grant_type /token accepts.
+	deviceCodeGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 )
 
 // jwkRSA is one RFC 7517 RSA public key. kty/use/alg form the envelope;
@@ -45,8 +48,10 @@ type jwksOutput struct {
 // openIDConfig is the OIDC discovery document. Endpoint URLs are derived
 // from the issuer plus the paths the oidc handlers register at, so the
 // document and the live routes cannot drift. The supported-* lists describe
-// exactly the flow tempogate implements: authorization-code + PKCE (S256
-// only), refresh-token renewal, RS256-signed tokens.
+// exactly the flows tempogate implements: authorization-code + PKCE (S256
+// only), refresh-token renewal, the RFC 8628 device grant, RS256-signed
+// tokens. oidc.Fx always wires the device flow, so its endpoint and grant
+// type are always advertised.
 type openIDConfig struct {
 	Issuer                           string   `json:"issuer"`
 	AuthorizationEndpoint            string   `json:"authorization_endpoint"`
@@ -131,7 +136,7 @@ func registerWellKnown(a huma.API, k JWKSSource, issuer string) {
 				DeviceAuthorizationEndpoint:      issuer + oidc.DeviceAuthorizationPath,
 				JwksURI:                          issuer + jwksPath,
 				ResponseTypesSupported:           []string{"code"},
-				GrantTypesSupported:              []string{"authorization_code", "refresh_token"},
+				GrantTypesSupported:              []string{"authorization_code", "refresh_token", deviceCodeGrantType},
 				CodeChallengeMethodsSupported:    []string{"S256"},
 				ScopesSupported:                  []string{"openid", "profile", "email"},
 				SubjectTypesSupported:            []string{"public"},
