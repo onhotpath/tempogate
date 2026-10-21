@@ -163,6 +163,19 @@ func TestCLIDeviceLogin(t *testing.T) {
 		resp, err := client.ListNamespaces(authed, &workflowservice.ListNamespacesRequest{PageSize: 10})
 		require.NoError(t, err, "device-flow JWT must pass Temporal's default ClaimMapper")
 		require.NotEmpty(t, resp.GetNamespaces(), "admin token should see namespaces")
+
+		// --- tempogate token renews a device-flow session as the client the
+		// tokens were issued to (tempogate-device, not the loopback default).
+		require.Equal(t, deviceClientID, tok.ClientID, "device login must persist its client_id")
+		expiring := tok
+		expiring.ExpiresAt = time.Now().Add(-time.Minute)
+		st.writeTokenTo(ctx, t, cliDeviceTokenFile, expiring)
+		refreshed := st.runTokenFrom(ctx, t, cliDeviceTokenFile)
+		require.NotEqual(t, tok.AccessToken, refreshed, "an expiring device-flow token must be refreshed")
+		assertTempogateJWT(t, refreshed)
+		after := st.readTokenFrom(ctx, t, cliDeviceTokenFile)
+		require.NotEqual(t, tok.RefreshToken, after.RefreshToken, "the refresh token must rotate on use")
+		require.Equal(t, deviceClientID, after.ClientID)
 	})
 
 	t.Run("negative paths", func(t *testing.T) {

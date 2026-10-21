@@ -216,6 +216,7 @@ func (s *DeviceFlowSuite) TestHappyPathPollsThenReturnsToken() {
 	s.Equal(3, s.issuer.calls(), "two pending polls plus the success")
 
 	s.Equal("tempogate-device", s.issuer.gotClientID, "default device client_id")
+	s.Equal("tempogate-device", tok.ClientID)
 	s.Equal("urn:ietf:params:oauth:grant-type:device_code", s.issuer.gotGrantType)
 	s.Equal("long-device-code-abc", s.issuer.gotDeviceCode)
 
@@ -469,13 +470,14 @@ func (s *DeviceFlowSuite) TestPromptOmitsCompleteURIWhenServerOmitsIt() {
 func (s *DeviceFlowSuite) TestCustomClientIDAndScopeArePropagated() {
 	s.issuer.script(successResp())
 
-	_, err := s.newFlow(
+	tok, err := s.newFlow(
 		cli.WithDeviceClientID("my-cli"),
 		cli.WithDeviceScope("openid email profile"),
 	).Run(context.Background())
 	s.Require().NoError(err)
 
 	s.Equal("my-cli", s.issuer.gotClientID)
+	s.Equal("my-cli", tok.ClientID, "the token must remember its client so refresh can present it")
 	s.Equal("openid email profile", s.issuer.gotScope)
 }
 

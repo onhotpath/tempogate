@@ -403,7 +403,7 @@ func (s *StoreSuite) TestConsumeRefreshRoundTripAndRotation() {
 	r := s.refresh("consume-refresh-1")
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, r))
 
-	got, err := s.store.ConsumeRefresh(s.ctx, r.Token)
+	got, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID)
 	s.Require().NoError(err)
 	s.Equal(r.Token, got.Token)
 	s.Equal(r.JTI, got.JTI)
@@ -412,7 +412,7 @@ func (s *StoreSuite) TestConsumeRefreshRoundTripAndRotation() {
 	s.True(r.CreatedAt.Equal(got.CreatedAt))
 	s.True(r.ExpiresAt.Equal(got.ExpiresAt))
 
-	_, err = s.store.ConsumeRefresh(s.ctx, r.Token)
+	_, err = s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID)
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, oidc.ErrRefreshNotFound),
 		"second consume should be ErrRefreshNotFound, got %v", err)
@@ -424,8 +424,25 @@ func (s *StoreSuite) TestConsumeRefreshRoundTripAndRotation() {
 	s.Zero(remaining)
 }
 
+// TestConsumeRefreshOtherClientLeavesRow: the client binding is part of the
+// single atomic DELETE, so a token presented by the wrong client is reported
+// missing and stays redeemable by the client it was issued to.
+func (s *StoreSuite) TestConsumeRefreshOtherClientLeavesRow() {
+	r := s.refresh("bound-refresh")
+	s.Require().NoError(s.store.SaveRefresh(s.ctx, r))
+
+	_, err := s.store.ConsumeRefresh(s.ctx, r.Token, "someone-else")
+	s.Require().Error(err)
+	s.Truef(errors.Is(err, oidc.ErrRefreshNotFound),
+		"cross-client consume should be ErrRefreshNotFound, got %v", err)
+
+	got, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID)
+	s.Require().NoError(err)
+	s.Equal(r.ClientID, got.ClientID)
+}
+
 func (s *StoreSuite) TestConsumeRefreshNotFound() {
-	_, err := s.store.ConsumeRefresh(s.ctx, "never-saved")
+	_, err := s.store.ConsumeRefresh(s.ctx, "never-saved", "ui")
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, oidc.ErrRefreshNotFound),
 		"expected ErrRefreshNotFound, got %v", err)
@@ -473,7 +490,7 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			return s.store.SaveRefresh(s.ctx, s.refresh("closed"))
 		}},
 		{"ConsumeRefresh", func() error {
-			_, err := s.store.ConsumeRefresh(s.ctx, "closed")
+			_, err := s.store.ConsumeRefresh(s.ctx, "closed", "ui")
 			return err
 		}},
 		{"SaveDeviceCode", func() error {

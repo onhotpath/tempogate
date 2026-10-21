@@ -34,18 +34,20 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 	return nil
 }
 
-// ConsumeRefresh atomically deletes and returns the refresh token. The
-// DELETE ... RETURNING is a single statement, so the max-1-conn store cannot
-// hand the same token to two concurrent refreshes: the loser sees zero rows
-// and gets oidc.ErrRefreshNotFound. Rotation falls out of the same property —
-// every successful exchange consumes the row, so a captured token is usable
-// at most once before the legitimate client's next refresh invalidates it.
-func (s *Store) ConsumeRefresh(ctx context.Context, token string) (oidc.Refresh, error) {
+// ConsumeRefresh atomically deletes and returns the refresh token issued to
+// clientID. The DELETE ... RETURNING is a single statement, so the max-1-conn
+// store cannot hand the same token to two concurrent refreshes: the loser
+// sees zero rows and gets oidc.ErrRefreshNotFound. Rotation falls out of the
+// same property: every successful exchange consumes the row, so a captured
+// token is usable at most once before the legitimate client's next refresh
+// invalidates it. The client_id predicate in the same statement means a
+// token presented by another client is reported missing and left intact.
+func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string) (oidc.Refresh, error) {
 	var r oidc.Refresh
 	err := s.db.QueryRowContext(ctx,
-		`DELETE FROM refresh_tokens WHERE token = ?
+		`DELETE FROM refresh_tokens WHERE token = ? AND client_id = ?
 		 RETURNING token, jti, client_id, email, created_at, expires_at`,
-		token,
+		token, clientID,
 	).Scan(
 		&r.Token, &r.JTI, &r.ClientID, &r.Email, &r.CreatedAt, &r.ExpiresAt,
 	)

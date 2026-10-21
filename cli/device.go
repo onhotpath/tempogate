@@ -455,6 +455,7 @@ func (f *DeviceFlow) pollOnce(ctx context.Context, deviceCode string) (Token, po
 			AccessToken:  tr.AccessToken,
 			RefreshToken: tr.RefreshToken,
 			ExpiresAt:    f.now().Add(time.Duration(tr.ExpiresIn) * time.Second),
+			ClientID:     f.clientID,
 		}, actionDone, nil
 	}
 

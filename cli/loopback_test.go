@@ -150,6 +150,7 @@ func (s *LoopbackSuite) TestHappyPathReturnsTokenAndExpiry() {
 
 	s.Equal("authorization_code", s.issuer.gotGrantType)
 	s.Equal("tempogate-cli", s.issuer.gotClientID, "default client_id")
+	s.Equal("tempogate-cli", tok.ClientID)
 }
 
 func (s *LoopbackSuite) TestPKCEVerifierIsSpecCompliant() {
@@ -167,9 +168,10 @@ func (s *LoopbackSuite) TestPKCEVerifierIsSpecCompliant() {
 }
 
 func (s *LoopbackSuite) TestCustomClientIDIsSent() {
-	_, err := s.newFlow(cli.WithClientID("my-cli")).Run(context.Background())
+	tok, err := s.newFlow(cli.WithClientID("my-cli")).Run(context.Background())
 	s.Require().NoError(err)
 	s.Equal("my-cli", s.issuer.gotClientID)
+	s.Equal("my-cli", tok.ClientID, "the token must remember its client so refresh can present it")
 }
 
 func (s *LoopbackSuite) TestStateMismatchAborts() {

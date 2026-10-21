@@ -366,6 +366,7 @@ func (f *Flow) exchange(ctx context.Context, code, verifier, redirectURI string)
 		AccessToken:  tr.AccessToken,
 		RefreshToken: tr.RefreshToken,
 		ExpiresAt:    f.now().Add(time.Duration(tr.ExpiresIn) * time.Second),
+		ClientID:     f.clientID,
 	}, nil
 }
 

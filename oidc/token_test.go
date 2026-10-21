@@ -77,7 +77,8 @@ func (m *memKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error) {
 
 // memTokenStore satisfies oidc.TokenStore structurally. ConsumeAuthCode and
 // ConsumeRefresh delete the row so single-use / rotation are exercised by the
-// suite, not just asserted in prose.
+// suite, not just asserted in prose; ConsumeRefresh honours the client
+// binding the same way the sqlite store's DELETE does.
 type memTokenStore struct {
 	mu                sync.Mutex
 	codes             map[string]oidc.AuthCode
@@ -132,18 +133,25 @@ func (m *memTokenStore) SaveRefresh(_ context.Context, r oidc.Refresh) error {
 	return nil
 }
 
-func (m *memTokenStore) ConsumeRefresh(_ context.Context, token string) (oidc.Refresh, error) {
+func (m *memTokenStore) ConsumeRefresh(_ context.Context, token, clientID string) (oidc.Refresh, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.consumeRefreshErr != nil {
 		return oidc.Refresh{}, m.consumeRefreshErr
 	}
 	r, ok := m.refresh[token]
-	if !ok {
+	if !ok || r.ClientID != clientID {
 		return oidc.Refresh{}, oidc.ErrRefreshNotFound
 	}
 	delete(m.refresh, token)
 	return r, nil
+}
+
+func (m *memTokenStore) hasRefresh(token string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.refresh[token]
+	return ok
 }
 
 func (m *memTokenStore) lastRefresh() oidc.Refresh {
@@ -595,6 +603,7 @@ func (s *TokenSuite) TestRefreshTokenGrantRotatesAndMintsSamePermissions() {
 	f := url.Values{}
 	f.Set("grant_type", "refresh_token")
 	f.Set("refresh_token", "old-refresh")
+	f.Set("client_id", "ui")
 	resp := s.post(f)
 	defer resp.Body.Close()
 
@@ -639,10 +648,9 @@ func (s *TokenSuite) TestRefreshTokenGrantErrors() {
 			}
 			f := url.Values{}
 			f.Set("grant_type", "refresh_token")
+			f.Set("client_id", "ui")
 			if tc.token != "" {
 				f.Set("refresh_token", tc.token)
-			} else {
-				f.Set("filler", "x")
 			}
 			resp := s.post(f)
 			defer resp.Body.Close()
