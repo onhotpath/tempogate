@@ -114,7 +114,10 @@ func (s *DeviceAuthorizationE2ESuite) TestRoundTripAgainstRealStoreAndDiscovery(
 
 	byUser, err := s.store.LookupDeviceCodeByUserCode(context.Background(), canonical)
 	s.Require().NoError(err)
-	s.Equal(body.DeviceCode, byUser.Code)
+	// The device code is stored only as a hash, so the user_code path
+	// cannot return it; the row's other fields identify it.
+	s.Equal(byDevice.ClientID, byUser.ClientID)
+	s.True(byDevice.CreatedAt.Equal(byUser.CreatedAt))
 
 	// Discovery doc must point at the very path the response advertises.
 	discResp, err := s.client.Get(s.srv.URL + "/.well-known/openid-configuration")

@@ -54,8 +54,9 @@ func (s *StoreSuite) TestLookupDeviceCodeByUserCodeReturnsSameRow() {
 
 	got, err := s.store.LookupDeviceCodeByUserCode(s.ctx, dc.UserCode)
 	s.Require().NoError(err)
-	s.Equal(dc.Code, got.Code)
 	s.Equal(dc.UserCode, got.UserCode)
+	s.Equal(dc.ClientID, got.ClientID)
+	s.True(dc.ExpiresAt.Equal(got.ExpiresAt))
 }
 
 func (s *StoreSuite) TestSaveDeviceCodeDuplicate() {
@@ -248,7 +249,7 @@ func (s *StoreSuite) TestConsumeDeviceCodeRoundTripAndSingleUse() {
 
 	var remaining int
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT count(*) FROM device_codes WHERE device_code = ?`, dc.Code)
+		`SELECT count(*) FROM device_codes WHERE device_code_hash = ?`, sha256Hex(dc.Code))
 	s.Require().NoError(row.Scan(&remaining))
 	s.Zero(remaining)
 

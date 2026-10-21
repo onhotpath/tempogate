@@ -88,7 +88,8 @@ type DeviceCodeStore interface {
 	// token (the verification-page path). Caller normalises (uppercase,
 	// strip dashes) before calling; the column is stored already
 	// normalised. Non-destructive. Returns ErrDeviceCodeNotFound on zero
-	// rows.
+	// rows. The result's Code may be empty: a store may keep only a hash of
+	// the device code.
 	LookupDeviceCodeByUserCode(ctx context.Context, userCode string) (DeviceCode, error)
 
 	// PollDeviceCode records a /token poll and reports whether it arrived

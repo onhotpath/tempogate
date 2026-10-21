@@ -56,3 +56,20 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 	}
 	return out, nil
 }
+
+// UpdateKeypairPrivatePEM rewrites one keypair's private half in place, for
+// `tempogate keys encrypt`.
+func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, privatePEM []byte) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE keypairs SET private_pem = ? WHERE kid = ?`, privatePEM, kid)
+	if err != nil {
+		return fmt.Errorf("sqlite: update keypair: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: update keypair: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("sqlite: update keypair: no keypair with kid %s", kid)
+	}
+	return nil
+}

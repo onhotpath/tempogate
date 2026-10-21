@@ -6,10 +6,23 @@ type fxParams struct {
 	fx.In
 
 	Store KeyStore
+
+	EncryptionKey     string `name:"keys_encryption_key" optional:"true"`
+	EncryptionKeyFile string `name:"keys_encryption_key_file" optional:"true"`
 }
 
-func newFx(p fxParams) *Keys {
-	return New(WithStore(p.Store))
+// newFx fails graph construction on a malformed KEK, so a typo is caught at
+// startup rather than when the first key is written.
+func newFx(p fxParams) (*Keys, error) {
+	kek, err := LoadEncryptionKey(p.EncryptionKey, p.EncryptionKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	opts := []Option{WithStore(p.Store)}
+	if kek != nil {
+		opts = append(opts, WithEncryptionKey(kek))
+	}
+	return New(opts...), nil
 }
 
 type signerParams struct {

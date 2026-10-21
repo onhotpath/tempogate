@@ -1,7 +1,6 @@
 package servercmd
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -23,7 +22,7 @@ func newKeysCmd(p keysParams) *cobra.Command {
 		Use:   "keys",
 		Short: "Manage tempogate signing keys",
 	}
-	root.AddCommand(newKeysGenerateCmd(p))
+	root.AddCommand(newKeysGenerateCmd(p), newKeysEncryptCmd(p))
 	return root
 }
 
@@ -34,11 +33,7 @@ func newKeysGenerateCmd(p keysParams) *cobra.Command {
 		Short: "Generate the JWT signing keypair (fails if one exists; use --force to rotate)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-
-			if err := p.Store.Ping(ctx); err != nil {
-				return fmt.Errorf("state store unreachable: %w", err)
-			}
-			if err := p.Store.IsCurrent(ctx); err != nil {
+			if err := storeReady(ctx, p.Store); err != nil {
 				return err
 			}
 
@@ -54,4 +49,28 @@ func newKeysGenerateCmd(p keysParams) *cobra.Command {
 	}
 	c.Flags().BoolVar(&force, "force", false, "rotate by adding a new keypair even if one already exists")
 	return c
+}
+
+// newKeysEncryptCmd encrypts the signing keys an earlier run stored in clear,
+// once KEYS_ENCRYPTION_KEY is configured. New keys are encrypted on write;
+// this is the one-off step for the existing ones. A running server keeps its
+// keys in memory, so this is safe while it serves; its next start needs the
+// KEK.
+func newKeysEncryptCmd(p keysParams) *cobra.Command {
+	return &cobra.Command{
+		Use:   "encrypt",
+		Short: "Encrypt stored signing keys with KEYS_ENCRYPTION_KEY (idempotent)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			if err := storeReady(ctx, p.Store); err != nil {
+				return err
+			}
+			n, err := p.Keys.EncryptStored(ctx, p.Store)
+			if err != nil {
+				return err
+			}
+			cmd.Printf("encrypted %d keypair(s)\n", n)
+			return nil
+		},
+	}
 }

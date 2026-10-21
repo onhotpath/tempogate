@@ -89,6 +89,12 @@ services:
       # With this plain-http issuer the cookie is not marked Secure; an https
       # OIDC_ISSUER (any real deployment) makes it Secure automatically.
       OIDC_SESSION_SIGNING_KEY: "${TEMPOGATE_SESSION_SIGNING_KEY:-rR2qre32BN8f7gFU8Al1szcjZz9R8Ks2g8jtoJNizls}"
+      # Optional: base64 32-byte key that encrypts the signing key stored in
+      # the state volume. Unset (plain PEM) by default for the demo; in real
+      # deployments generate once with `openssl rand -base64 32`, supply via a
+      # Secret, and keep it out of the volume's backups. Once set, tempogate
+      # needs it to start. See docs/configuration.md#signing-key-encryption.
+      KEYS_ENCRYPTION_KEY: "${TEMPOGATE_KEYS_ENCRYPTION_KEY:-}"
       OIDC_ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
       # Point tempogate's upstream Google client at the bundled mock.
       OIDC_GOOGLE_CLIENT_ID: "tempogate-upstream"

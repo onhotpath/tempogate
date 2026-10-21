@@ -69,7 +69,7 @@ func (s *StoreSuite) TestSaveRefreshIntoRevokedFamilyFails() {
 
 	var n int
 	s.Require().NoError(s.store.db.QueryRowContext(s.ctx,
-		`SELECT count(*) FROM refresh_tokens WHERE token = 'child'`).Scan(&n))
+		`SELECT count(*) FROM refresh_tokens WHERE token_hash = ?`, sha256Hex("child")).Scan(&n))
 	s.Zero(n)
 }
 
@@ -160,7 +160,7 @@ func (s *StoreSuite) TestListRefreshSessions() {
 
 // TestMigration0011BackfillsRefreshLineage applies the migrations up to 0009
 // (independent of whatever 0010 a parallel change adds), seeds refresh rows
-// in the pre-0011 shape, then migrates and checks the backfill: auth_time is
+// in the pre-0011 shape, then migrates to 0011 and checks the backfill: auth_time is
 // the row's created_at (so existing sessions are capped at created_at +
 // OIDC_REFRESH_MAX_LIFETIME) and every row gets its own family.
 func TestMigration0011BackfillsRefreshLineage(t *testing.T) {
@@ -169,15 +169,7 @@ func TestMigration0011BackfillsRefreshLineage(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
-	_, err = store.db.ExecContext(ctx, schemaVersionDDL)
-	require.NoError(t, err)
-	migs, err := loadMigrations()
-	require.NoError(t, err)
-	for _, m := range migs {
-		if m.version <= 9 {
-			require.NoError(t, applyMigration(ctx, store.db, m))
-		}
-	}
+	migrateTo(t, store, 9)
 
 	created := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	for _, tok := range []string{"legacy-1", "legacy-2"} {
@@ -188,16 +180,21 @@ func TestMigration0011BackfillsRefreshLineage(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, store.Migrate(ctx))
-	require.NoError(t, store.IsCurrent(ctx))
+	// Stop at 0011: 0012 drops refresh rows (they held raw tokens).
+	migrateTo(t, store, 11)
 
 	families := map[string]bool{}
 	for _, tok := range []string{"legacy-1", "legacy-2"} {
-		r, err := store.ConsumeRefresh(ctx, tok, "tempogate-cli", time.Now().UTC())
-		require.NoError(t, err, "a backfilled row is live and consumable")
-		require.True(t, r.AuthTime.Equal(created), "auth_time backfilled from created_at, got %s", r.AuthTime)
-		require.NotEmpty(t, r.FamilyID)
-		families[r.FamilyID] = true
+		var (
+			authTime time.Time
+			familyID string
+		)
+		require.NoError(t, store.db.QueryRowContext(ctx,
+			`SELECT auth_time, family_id FROM refresh_tokens WHERE token = ? AND consumed_at IS NULL`, tok,
+		).Scan(&authTime, &familyID), "a backfilled row is live")
+		require.True(t, authTime.Equal(created), "auth_time backfilled from created_at, got %s", authTime)
+		require.NotEmpty(t, familyID)
+		families[familyID] = true
 	}
 	require.Len(t, families, 2, "each legacy row is its own family")
 }

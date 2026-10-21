@@ -459,3 +459,12 @@ func (s *ConfigSuite) TestNew() {
 		})
 	}
 }
+
+func (s *ConfigSuite) TestKeysEncryptionKeyFromEnv() {
+	s.T().Setenv("KEYS_ENCRYPTION_KEY", "a2V5")
+	s.T().Setenv("KEYS_ENCRYPTION_KEY_FILE", "/run/secrets/kek")
+
+	got, err := New(Params{})
+	s.Require().NoError(err)
+	s.Equal(KeysConfig{EncryptionKey: "a2V5", EncryptionKeyFile: "/run/secrets/kek"}, got.Keys)
+}

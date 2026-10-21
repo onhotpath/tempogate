@@ -40,9 +40,34 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. |
+| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. See below for how its contents are protected. |
 | `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise; horizontal scaling needs a shared backend (not yet available). |
 | `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before erroring. |
+
+The database file and its `-wal` / `-shm` companions are created (and on every start, reset to) mode `0600`, whatever the umask.
+A missing state directory is created `0700`.
+An existing directory, such as a mounted volume, is left as it is; tempogate logs a warning if other users can enter it (group access, as a Kubernetes `fsGroup` grants, is expected and not reported).
+
+Refresh tokens (including consumed ones), authorization codes, device codes and verification-page session ids are stored only as their SHA-256, so a copy of the database (a backup, a volume snapshot) holds nothing a client could present.
+The device flow's `user_code` is the exception: it is short enough that its hash would be reversed by trying every code, and approving it needs a signed-in browser session anyway.
+Upgrading to migration `0012` deletes the existing rows of those tables, because SQLite cannot compute the hashes: every user signs in once more after the upgrade.
+
+### Signing-key encryption
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `KEYS_ENCRYPTION_KEY` | _(empty)_ | Base64-encoded 32-byte key-encryption key (KEK). When set, the private signing key is stored AES-256-GCM encrypted under it instead of as plain PEM. Generate once with `openssl rand -base64 32` and supply via a Secret. |
+| `KEYS_ENCRYPTION_KEY_FILE` | _(empty)_ | Path to a file holding the same base64 value (surrounding whitespace ignored), e.g. a mounted Kubernetes Secret. Set at most one of the two. |
+
+Without a KEK the signing key is readable by anyone who can read the database, and with it they can mint tokens Temporal accepts.
+With a KEK, the database alone is not enough: keep the KEK somewhere a database backup does not go.
+
+- New keys (the first boot, `tempogate keys generate`) are written encrypted.
+- Keys stored before the KEK was set keep working, and `tempogate serve` warns about them. Encrypt them once with `tempogate keys encrypt` (safe to repeat; run it in the serving pod in Kubernetes, e.g. `kubectl exec deploy/tempogate -- /tempogate keys encrypt`).
+- Once a key is encrypted, `tempogate serve` refuses to start without the KEK, or with a different one, and says so.
+- Encrypted rows are bound to their key id, so they cannot be swapped between rows.
+- There is no KEK rotation yet. Losing the KEK loses the signing keys: remove the `keypairs` rows and restart to mint a new key, after which every token issued before stops validating.
+- Rolling back to a release without KEK support fails at startup once a key is encrypted.
 
 ### OIDC — server identity and Google federation
 

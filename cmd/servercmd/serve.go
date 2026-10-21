@@ -59,6 +59,10 @@ func newServeCmd(p serveParams) *cobra.Command {
 			if err := p.Keys.Init(ctx); err != nil {
 				return fmt.Errorf("keys init: %w", err)
 			}
+			if kids := p.Keys.UnencryptedKids(); len(kids) > 0 {
+				p.Logger.Warn("signing keys are stored unencrypted although KEYS_ENCRYPTION_KEY is set; run `tempogate keys encrypt`",
+					zap.Strings("kids", kids))
+			}
 
 			// Two http.Server instances, two muxes — the public listener
 			// literally has no /admin/* handler, so admin reachability is a

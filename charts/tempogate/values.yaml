@@ -147,6 +147,21 @@ state:
 log:
   level: info
 
+keys:
+  # KEYS_ENCRYPTION_KEY - base64-encoded 32-byte key-encryption key. When
+  # set, the private signing key is stored AES-256-GCM encrypted on the PVC
+  # instead of as plain PEM, so a PVC snapshot or backup alone cannot mint
+  # tokens. Supply it via an existing Secret you create out of band, and keep
+  # that Secret out of the PVC's backups; generate the value once with:
+  #   openssl rand -base64 32
+  # Once a key is encrypted the Deployment refuses to boot without this
+  # value. Keys stored before it was set keep working; encrypt them with
+  #   kubectl exec deploy/<release>-tempogate -- /tempogate keys encrypt
+  # See docs/configuration.md#signing-key-encryption.
+  encryptionKeySecretRef:
+    name: ""
+    key: ""
+
 oidc:
   # Externally reachable base URL of this server. Advertised as `issuer`
   # and used to derive jwks_uri in the discovery document, e.g.

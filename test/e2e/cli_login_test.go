@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -347,12 +348,33 @@ func (s *cliStack) runTokenFrom(ctx context.Context, t *testing.T, path string) 
 
 // ---------- stack bring-up ----------
 
+type cliStackConfig struct {
+	env       map[string]string
+	imageUser bool
+}
+
+type cliStackOption func(*cliStackConfig)
+
+// withTempogateEnv merges extra variables onto tempogate's base config.
+func withTempogateEnv(env map[string]string) cliStackOption {
+	return func(c *cliStackConfig) {
+		for k, v := range env {
+			c.env[k] = v
+		}
+	}
+}
+
+// withImageUser runs tempogate as the image's own nonroot user with the
+// state volume on the image's /var/lib/tempogate, which Docker seeds (owner
+// and mode included) from the image the first time it mounts the volume:
+// the posture of a plain `docker run -v`, unlike the root default.
+func withImageUser() cliStackOption {
+	return func(c *cliStackConfig) { c.imageUser = true }
+}
+
 // setupCLIStack brings up tempogate + mockgoogle + temporal + cliclient (the
-// shared headless-Chrome + tempogate-binary container). extraTempogateEnv is
-// merged onto the base OIDC_* config so the device-flow acceptance proof can
-// register its extra client_ids + signing key without forcing the loopback
-// proof to carry inert config.
-func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[string]string) *cliStack {
+// shared headless-Chrome + tempogate-binary container).
+func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *cliStack {
 	t.Helper()
 	root := repoRoot(t)
 
@@ -400,12 +422,19 @@ func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[s
 		"OIDC_GOOGLE_ISSUER_URL":     mockIssuer,
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
-	for _, m := range extraTempogateEnv {
-		for k, v := range m {
-			tgEnv[k] = v
-		}
+	cfg := cliStackConfig{env: tgEnv}
+	user, stateMount := "0:0", "/state"
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if cfg.imageUser {
+		user, stateMount = "", "/var/lib/tempogate"
+		tgEnv["STATE_SQLITE_PATH"] = stateMount + "/state.db"
 	}
 	stateVol := fmt.Sprintf("tempogate-cli-e2e-state-%d", time.Now().UnixNano())
+	// Registered before the containers so it runs after they are terminated
+	// (t.Cleanup is LIFO).
+	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", stateVol).Run() })
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -414,8 +443,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[s
 			FromDockerfile: tgFrom,
 			Cmd:            []string{"migrate"},
 			Env:            tgEnv,
-			User:           "0:0",
-			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
+			User:           user,
+			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, testcontainers.ContainerMountTarget(stateMount))),
 			WaitingFor:     wait.ForExit().WithExitTimeout(2 * time.Minute),
 		},
 		Started: true,
@@ -429,8 +458,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[s
 			FromDockerfile: tgFrom,
 			Cmd:            []string{"serve"},
 			Env:            tgEnv,
-			User:           "0:0",
-			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
+			User:           user,
+			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, testcontainers.ContainerMountTarget(stateMount))),
 			ExposedPorts:   []string{"8000/tcp"},
 			Networks:       []string{netName},
 			NetworkAliases: alias("tempogate"),
