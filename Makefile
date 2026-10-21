@@ -20,7 +20,7 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull test-chart test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
         gci golangci-lint govulncheck actionlint
 
 start: ## Run the binary directly with build-info ldflags injected
@@ -157,6 +157,9 @@ test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI
 DEPLOY_IMAGE    ?= tempogate:smoke
 KIND_CLUSTER    ?= tempogate-smoke
 COMPOSE_PROJECT ?= tempogate-smoke
+
+test-chart: ## static assertions on the rendered Helm chart (helm + yq, no cluster)
+	test/deploy/chart-assertions.sh
 
 test-deploy-kind: ## helm template + install into a throwaway kind cluster
 	IMAGE=$(DEPLOY_IMAGE) CLUSTER=$(KIND_CLUSTER) test/deploy/kind-smoke.sh

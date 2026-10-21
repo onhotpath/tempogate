@@ -1,3 +1,4 @@
+{{- include "tempogate.validateValues" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,9 +6,7 @@ metadata:
   labels:
     {{- include "tempogate.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   # SQLite tolerates one writer; a rolling update would briefly run two
   # pods contending for the same PVC. Recreate stops the old pod first.
   strategy:
@@ -33,6 +32,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "tempogate.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

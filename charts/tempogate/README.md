@@ -39,7 +39,7 @@ curl -fsS http://127.0.0.1:8000/healthz
 
 - **Single replica, by design.** The default state store is SQLite on one
   ReadWriteOnce PVC, and SQLite allows exactly one writer. `replicaCount`
-  MUST stay `1` and `autoscaling` MUST stay disabled until a shared state
+  MUST stay `1` and `autoscaling` MUST stay disabled (the chart refuses to render otherwise) until a shared state
   backend lands upstream. The Deployment uses the `Recreate` strategy so an
   update never runs two pods against the same volume.
 - **Separate admin listener.** `service.port` serves the public OIDC/OAuth2
@@ -111,17 +111,18 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `replicaCount` | `1` | Pods. MUST stay `1` (SQLite single-writer). |
+| `replicaCount` | `1` | Pods. MUST be `0` or `1` (SQLite single-writer); larger values fail the render. |
 | `image.repository` | `ghcr.io/onhotpath/tempogate` | Image repository. |
 | `image.tag` | `""` | Image tag; defaults to the chart `appVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Image pull secrets. |
 | `nameOverride` / `fullnameOverride` | `""` | Name overrides. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount. |
+| `serviceAccount.automount` | `false` | Mount a ServiceAccount token (ServiceAccount and pod spec). tempogate never calls the Kubernetes API. |
 | `serviceAccount.name` | `""` | ServiceAccount name (generated when empty). |
 | `podAnnotations` / `podLabels` | `{}` | Extra pod metadata. |
-| `podSecurityContext` | `runAsNonRoot`, uid/gid/fsGroup `65532` | Pod security context (matches the distroless `nonroot` user). |
-| `securityContext` | drop ALL, no privilege escalation, read-only rootfs | Container security context. |
+| `podSecurityContext` | `runAsNonRoot`, uid/gid/fsGroup `65532`, `seccompProfile: RuntimeDefault` | Pod security context (matches the distroless `nonroot` user). |
+| `securityContext` | drop ALL, no privilege escalation, read-only rootfs, `seccompProfile: RuntimeDefault` | Container security context. |
 | `service.type` | `ClusterIP` | Service type. |
 | `service.port` | `8000` | The public HTTP port (OIDC + health). |
 | `service.admin.enabled` | `false` | Bind the admin listener on all pod interfaces and add a `<fullname>-admin` Service. Requires `admin.tokenSha256SecretRef`. |
@@ -135,7 +136,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `livenessProbe` | `GET /healthz` | Liveness probe. |
 | `readinessProbe` | `GET /readyz` | Readiness probe. |
 | `startupProbe` | `GET /healthz`, 20×3s | Startup probe (guards slow first boot). |
-| `autoscaling.enabled` | `false` | MUST stay disabled (single-writer). |
+| `autoscaling.enabled` | `false` | Not supported (single-writer); `true` fails the render. |
 | `persistence.enabled` | `true` | Provision a PVC for the SQLite store. |
 | `persistence.existingClaim` | `""` | Use an existing PVC instead. |
 | `persistence.storageClass` | `""` | StorageClass (`""` = cluster default, `"-"` = none). |

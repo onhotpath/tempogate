@@ -51,6 +51,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Reject values that would run more than one SQLite writer against the state
+PVC. Included from the Deployment so every render evaluates it.
+*/}}
+{{- define "tempogate.validateValues" -}}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail (printf "replicaCount=%v is not supported: the SQLite state store allows exactly one writer, so replicaCount must be 0 or 1" .Values.replicaCount) }}
+{{- end }}
+{{- if .Values.autoscaling.enabled }}
+{{- fail "autoscaling.enabled=true is not supported: the SQLite state store allows exactly one writer, so tempogate cannot be scaled horizontally" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "tempogate.serviceAccountName" -}}
