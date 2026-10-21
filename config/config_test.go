@@ -573,6 +573,19 @@ func (s *ConfigSuite) TestNew() {
 				return c
 			}(),
 		},
+		{
+			name: "insecure issuer opt-in overridden by env",
+			env: map[string]string{
+				"OIDC_ISSUER":                "http://tempogate:8000",
+				"OIDC_ALLOW_INSECURE_ISSUER": "true",
+			},
+			want: func() *Config {
+				c := defaultConfig()
+				c.OIDC.Issuer = "http://tempogate:8000"
+				c.OIDC.AllowInsecureIssuer = true
+				return c
+			}(),
+		},
 	}
 
 	for _, tc := range cases {
@@ -583,7 +596,7 @@ func (s *ConfigSuite) TestNew() {
 
 			got, err := New(Params{})
 			s.Require().NoError(err)
-			s.Equal(tc.want, got)
+			s.Equal(tc.want, got.Config)
 		})
 	}
 }
@@ -594,8 +607,8 @@ func (s *ConfigSuite) TestKeysEncryptionKeyFromEnv() {
 
 	got, err := New(Params{})
 	s.Require().NoError(err)
-	s.Equal("a2V5", got.Keys.EncryptionKey)
-	s.Equal("/run/secrets/kek", got.Keys.EncryptionKeyFile)
+	s.Equal("a2V5", got.Config.Keys.EncryptionKey)
+	s.Equal("/run/secrets/kek", got.Config.Keys.EncryptionKeyFile)
 }
 
 func (s *ConfigSuite) TestFxProjectsKeysEncryptionKey() {

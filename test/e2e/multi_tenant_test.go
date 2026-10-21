@@ -308,6 +308,7 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 		"ADMIN_LISTENER":             "0.0.0.0:8081",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_ALLOW_INSECURE_ISSUER": "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":               "noop:https://noop.invalid/cb",
 		"OIDC_ALLOWED_DOMAINS":       "example.com",
 		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",

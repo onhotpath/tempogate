@@ -110,6 +110,7 @@ func setupDeviceStack(ctx context.Context, t *testing.T, basePath string) (strin
 		"HTTP_LISTENER":              "0.0.0.0:8000",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                issuer,
+		"OIDC_ALLOW_INSECURE_ISSUER": "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":               deviceClientID + ":",
 		"OIDC_ALLOWED_DOMAINS":       "example.com",
 		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",

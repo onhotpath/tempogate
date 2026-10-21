@@ -45,6 +45,11 @@ curl -fsS http://tempogate:8000/healthz      # -> 200
 > Linux and prefer no `/etc/hosts` edit? Use the host-network overlay — see
 > the [example README](../examples/docker-compose/README.md#linux-skip-the-edit).
 
+> The demo serves its issuer over plain `http://tempogate:8000`, which
+> `tempogate serve` refuses by default; the compose file opts in with
+> `OIDC_ALLOW_INSECURE_ISSUER=true`.
+> A real deployment uses an `https://` issuer and leaves that unset.
+
 ## 2. Log in via the Web UI
 
 Open **http://temporal-ui:8080** and click **Sign in**.

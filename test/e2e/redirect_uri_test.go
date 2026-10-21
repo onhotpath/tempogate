@@ -154,6 +154,7 @@ func redirectTestEnv(clients string) map[string]string {
 		"HTTP_LISTENER":              "0.0.0.0:8000",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_ALLOW_INSECURE_ISSUER": "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":               clients,
 		"OIDC_ALLOWED_DOMAINS":       "example.com",
 		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",

@@ -145,6 +145,12 @@ type SqliteConfig struct {
 type OIDCConfig struct {
 	Issuer string `ferry:"issuer"`
 
+	// AllowInsecureIssuer lets `serve` start with a plain-http Issuer on a
+	// non-loopback host. Development only: see ValidateIssuer. Kept separate
+	// from OIDC_ALLOW_INSECURE_REDIRECT_URIS so each relaxation is opted into
+	// on its own.
+	AllowInsecureIssuer bool `ferry:"allow_insecure_issuer"`
+
 	// Clients is the v1 client registry: a comma-separated list of
 	// "id:redirect_uri" entries. The first ':' splits id from URI, so the URI
 	// keeps its scheme (e.g. "ui:https://x/cb"). Each URI is matched exactly

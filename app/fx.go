@@ -32,6 +32,7 @@ func New(opts ...Option) fx.Option {
 		o(cfg)
 	}
 	base := []fx.Option{
+		fx.Supply(config.ProcessPath()),
 		config.Fx(),
 		log.Fx(),
 		fx.WithLogger(func(l *zap.Logger) fxevent.Logger {

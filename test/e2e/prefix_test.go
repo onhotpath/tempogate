@@ -46,6 +46,7 @@ func TestSubPathIssuerHosting(t *testing.T) {
 		"API_DOCS_ENABLED":           "true",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                issuer,
+		"OIDC_ALLOW_INSECURE_ISSUER": "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":               "ui:https://app.example.com/",
 		"OIDC_ALLOWED_DOMAINS":       "example.com",
 		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",

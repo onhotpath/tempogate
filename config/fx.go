@@ -57,10 +57,13 @@ type Result struct {
 	KeysEncryptionKeyFile string        `name:"keys_encryption_key_file"`
 }
 
+// Fx loads the configuration from the file named by an fx-supplied Path (see
+// ProcessPath), else ./application.yaml, then the environment.
 func Fx() fx.Option {
 	return fx.Options(
 		fx.Provide(New),
 		fx.Provide(project),
+		fx.Invoke(logSource),
 	)
 }
 

@@ -149,6 +149,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `log.level` | `info` | `LOG_LEVEL` (`debug`/`info`/`warn`/`error`). |
 | `keys.encryptionKeySecretRef` | `{name,key}` empty | Secret holding `KEYS_ENCRYPTION_KEY` (base64 32-byte key that encrypts the stored signing key). Recommended in production; once set, tempogate needs it to boot. See [docs/configuration.md](../../docs/configuration.md#signing-key-encryption). |
 | `oidc.issuer` | `""` | `OIDC_ISSUER` — externally reachable base URL. |
+| `oidc.allowInsecureIssuer` | `false` | `OIDC_ALLOW_INSECURE_ISSUER` - development only. `serve` refuses a plain-http issuer on a non-loopback host unless this is `true`. |
 | `oidc.sessionSigningKeySecretRef` | `{name,key}` empty | Secret holding `OIDC_SESSION_SIGNING_KEY` (base64url 32-byte HMAC key for the device-flow verification-page cookie). tempogate refuses to boot when unset. |
 | `oidc.sessionTtl` | `""` | `OIDC_SESSION_TTL` — verification-page cookie TTL (Go duration). `""` leaves the binary default (5m). |
 | `auth.clients` | `""` | `OIDC_CLIENTS` - `id:redirect_uri` allowlist of exact redirect URIs (loopback `http://127.0.0.1/<path>` matches any port; `id:` registers a device-only client). See [docs/configuration.md](../../docs/configuration.md#redirect-uri-registration). |

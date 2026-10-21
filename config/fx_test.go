@@ -1,6 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -108,4 +112,50 @@ func TestProjectsKeyLifetimes(t *testing.T) {
 	require.Equal(t, time.Minute, got.RetirementGrace)
 	require.Equal(t, time.Second, got.ReloadInterval)
 	require.Equal(t, 3*time.Minute, got.PublishDelay)
+}
+
+func TestFxLogsWhichConfigFileWasUsed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "custom.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("log:\n  level: warn\n"), 0o600))
+
+	for _, tc := range []struct {
+		name  string
+		path  Path
+		setup func(t *testing.T)
+		want  string
+	}{
+		{name: "explicit", path: Path(path), want: `level=DEBUG msg="loaded config file" path=` + path},
+		{name: "none", setup: func(t *testing.T) { t.Chdir(t.TempDir()) }, want: ""},
+		{
+			name: "unreadable cwd",
+			setup: func(t *testing.T) {
+				if os.Geteuid() == 0 {
+					t.Skip("permission checks do not apply to root")
+				}
+				d := t.TempDir()
+				t.Chdir(d)
+				require.NoError(t, os.Chmod(d, 0))
+				t.Cleanup(func() { _ = os.Chmod(d, 0o700) })
+			},
+			want: `level=WARN msg="skipping unreadable config file" path=application.yaml`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setup != nil {
+				tc.setup(t)
+			}
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			fxtest.New(t,
+				Fx(),
+				fx.Supply(tc.path, logger),
+			).RequireStart().RequireStop()
+			if tc.want == "" {
+				require.Empty(t, buf.String())
+				return
+			}
+			require.Contains(t, buf.String(), tc.want)
+		})
+	}
 }

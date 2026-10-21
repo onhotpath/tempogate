@@ -73,6 +73,9 @@ services:
       # Externally reachable base URL — advertised as `issuer`, derives
       # jwks_uri. Same string on host and in-network (see header comment).
       OIDC_ISSUER: "http://tempogate:8000"
+      # serve refuses a plain-http issuer on a non-loopback host; this demo
+      # has no TLS, so opt in explicitly. Never set this in production.
+      OIDC_ALLOW_INSECURE_ISSUER: "true"
       # Four registered clients:
       #   - temporal-ui            (confidential, see CLIENT_SECRETS): Web UI SSO.
       #   - tempogate-cli          (public, PKCE):                     loopback `tempogate login`;
