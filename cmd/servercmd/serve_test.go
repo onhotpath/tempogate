@@ -3,12 +3,17 @@ package servercmd
 import (
 	"context"
 	"database/sql"
+	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/config"
+	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
@@ -93,4 +98,44 @@ func (s *ServeCmdSuite) TestRejectsUnreachableStore() {
 	s.Contains(err.Error(), "state store unreachable")
 
 	s.store = nil
+}
+
+// TestServesUntilCancelled drives serve's happy path: on a migrated store it
+// bootstraps the signing keypair, binds both listeners, marks readiness, and
+// shuts down cleanly when the command's context is cancelled.
+func (s *ServeCmdSuite) TestServesUntilCancelled() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+
+	readiness := api.NewReadiness()
+	loopback := config.Listener{IP: net.IPv4(127, 0, 0, 1)} // port 0: any free port
+	cmd := newServeCmd(supply(serveParams{
+		Logger:        zap.NewNop(),
+		Store:         s.store,
+		Reaper:        sqlite.NewReaper(s.store),
+		Keys:          keys.New(keys.WithStore(s.store)),
+		Servers:       api.New(readiness),
+		Readiness:     readiness,
+		Listener:      loopback,
+		AdminListener: loopback,
+	}))
+	cmd.SetOut(new(testWriter))
+	cmd.SetErr(new(testWriter))
+
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- cmd.ExecuteContext(ctx) }()
+
+	s.Require().Eventually(readiness.IsReady, 10*time.Second, 10*time.Millisecond)
+	kps, err := s.store.LoadKeypairs(s.ctx)
+	s.Require().NoError(err)
+	s.Len(kps, 1, "serve must bootstrap the signing keypair before listening")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		s.Require().NoError(err)
+	case <-time.After(10 * time.Second):
+		s.FailNow("serve did not stop after cancellation")
+	}
 }

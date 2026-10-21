@@ -54,8 +54,8 @@ func fxCommands(t *testing.T) map[string]*cobra.Command {
 // TestFxBuildsCommandDepsOnlyWhenRun is the regression guard for the lazy
 // server graph: with only STATE_SQLITE_PATH configured, Fx() must still
 // contribute every server subcommand (so `--help` works), `migrate`, `keys`
-// and `sessions` must run, and only `serve` may fail, naming the missing OIDC
-// setting.
+// and `sessions` must run, and only `serve` and `gen-oas` (which build the
+// API) may fail, naming the missing OIDC setting.
 func TestFxBuildsCommandDepsOnlyWhenRun(t *testing.T) {
 	t.Setenv("STATE_SQLITE_PATH", filepath.Join(t.TempDir(), "state.db"))
 	t.Setenv("OIDC_SESSION_SIGNING_KEY", "")
@@ -76,7 +76,9 @@ func TestFxBuildsCommandDepsOnlyWhenRun(t *testing.T) {
 	require.NoError(t, exec("keys", "generate"))
 	require.NoError(t, exec("sessions", "list"))
 
-	err := exec("serve")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "OIDC_SESSION_SIGNING_KEY is required")
+	for _, name := range []string{"serve", "gen-oas"} {
+		err := exec(name)
+		require.Errorf(t, err, "%s needs the full server stack", name)
+		require.Contains(t, err.Error(), "OIDC_SESSION_SIGNING_KEY is required")
+	}
 }
