@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -178,11 +177,9 @@ func (tg *restartableTempogate) start(t *testing.T, env map[string]string, migra
 	ctx := tg.ctx
 	img, from := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", tg.root)
 	if tg.vol == "" {
-		tg.vol = "tempogate-lifecycle-e2e-state-" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
-		vol := tg.vol
-		// Registered before any container so it runs after all of them
-		// have been terminated (t.Cleanup is LIFO).
-		tg.owner.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", vol).Run() })
+		// Owned by owner and created before any container, so it is removed
+		// after all of them have been terminated.
+		tg.vol = stateVolume(tg.owner, "tempogate-lifecycle-e2e-state")
 	}
 	mounts := testcontainers.Mounts(testcontainers.VolumeMount(tg.vol, "/state"))
 

@@ -17,10 +17,8 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -59,10 +57,7 @@ func TestSubPathIssuerHosting(t *testing.T) {
 	// lives under the prefix; pass the prefixed issuer so the registration
 	// matches what the verification-UI handler builds.
 	addDeviceUIServerEnv(env, issuer)
-	// Registered before the containers so it runs after they are terminated
-	// (t.Cleanup is LIFO): a volume in use cannot be removed.
-	stateVol := fmt.Sprintf("tempogate-prefix-e2e-state-%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", stateVol).Run() })
+	stateVol := stateVolume(t, "tempogate-prefix-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

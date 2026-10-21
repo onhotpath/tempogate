@@ -11,7 +11,6 @@ package e2e
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -28,7 +27,7 @@ func TestSubcommandsRunWithoutServerConfig(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	img, from := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", repoRoot(t))
-	stateVol := fmt.Sprintf("tempogate-cli-only-e2e-state-%d", time.Now().UnixNano())
+	stateVol := stateVolume(t, "tempogate-cli-only-e2e-state")
 
 	// Order matters: keys generate refuses a stale schema, so it proves the
 	// preceding migrate actually wrote to the shared volume.
@@ -38,20 +37,18 @@ func TestSubcommandsRunWithoutServerConfig(t *testing.T) {
 		{"version"},
 		{"--help"},
 	}
-	for i, args := range steps {
-		last := i == len(steps)-1
-		code, logs := runOneShot(ctx, t, img, from, stateVol, last, args...)
+	for _, args := range steps {
+		code, logs := runOneShot(ctx, t, img, from, stateVol, args...)
 		require.Equalf(t, 0, code, "tempogate %v must exit 0 with only STATE_SQLITE_PATH set; logs:\n%s", args, logs)
 	}
 }
 
 // runOneShot runs `tempogate <args...>` to completion with only
 // STATE_SQLITE_PATH set and returns its exit code and output. The container
-// is removed before returning; removeVolume also drops the shared state
-// volume, so pass it on the final step only.
+// is removed before returning; the shared state volume is not.
 func runOneShot(
 	ctx context.Context, t *testing.T, img string, from testcontainers.FromDockerfile,
-	stateVol string, removeVolume bool, args ...string,
+	stateVol string, args ...string,
 ) (int, string) {
 	t.Helper()
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -69,11 +66,7 @@ func runOneShot(
 	})
 	require.NoErrorf(t, err, "tempogate %v", args)
 
-	var opts []testcontainers.TerminateOption
-	if removeVolume {
-		opts = append(opts, testcontainers.RemoveVolumes(stateVol))
-	}
-	defer func() { require.NoError(t, c.Terminate(ctx, opts...)) }()
+	defer func() { require.NoError(t, c.Terminate(ctx)) }()
 
 	state, err := c.State(ctx)
 	require.NoError(t, err)

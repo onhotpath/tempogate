@@ -30,9 +30,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -446,10 +444,7 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		user, stateMount = "", "/var/lib/tempogate"
 		tgEnv["STATE_SQLITE_PATH"] = stateMount + "/state.db"
 	}
-	stateVol := fmt.Sprintf("tempogate-cli-e2e-state-%d", time.Now().UnixNano())
-	// Registered before the containers so it runs after they are terminated
-	// (t.Cleanup is LIFO).
-	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", stateVol).Run() })
+	stateVol := stateVolume(t, "tempogate-cli-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

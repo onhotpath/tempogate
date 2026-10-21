@@ -1,6 +1,6 @@
+# syntax=docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 # Build context is the repo root so the mock shares the module (and its jwx
 # pin) with tempogate. Built only by the e2e test via testcontainers.
-# syntax=docker/dockerfile:1.24
 ARG GO_IMAGE=golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
 
 FROM ${GO_IMAGE} AS builder

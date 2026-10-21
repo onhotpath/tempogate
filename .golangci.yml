@@ -3,6 +3,10 @@ version: "2"
 run:
   timeout: 5m
   tests: true
+  # Lint the e2e-tagged suite under test/e2e too; without the tag those files
+  # are invisible to every linter.
+  build-tags:
+    - e2e
 
 linters:
   default: none
