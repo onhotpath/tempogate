@@ -151,7 +151,8 @@ test-e2e-pull: ## pre-pull the third-party images the e2e tests run
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
 
 # Deployment smoke tests: install the Helm chart into a throwaway kind
-# cluster (migrate Job completes, pod becomes Ready) and run the
+# cluster (migrate initContainer succeeds, pod becomes Ready, an upgrade
+# migrates again in a fresh pod, helm test passes) and run the
 # docker-compose example's migrate service. Need docker; kind + helm +
 # kubectl for the chart. Both build DEPLOY_IMAGE first unless SKIP_BUILD=1.
 DEPLOY_IMAGE    ?= tempogate:smoke

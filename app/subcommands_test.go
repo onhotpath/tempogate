@@ -20,7 +20,7 @@ import (
 // SubcommandsSuite runs the real composition root (app.New) the way main does,
 // with nothing but STATE_SQLITE_PATH configured. Only `serve` needs the OIDC
 // configuration; every other subcommand (and --help) must run without it, or
-// a fresh deployment's migrate Job fails before `serve` ever gets a chance.
+// a fresh deployment's migrate step fails before `serve` ever gets a chance.
 type SubcommandsSuite struct {
 	suite.Suite
 

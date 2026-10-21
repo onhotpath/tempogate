@@ -54,16 +54,17 @@ curl -fsS http://127.0.0.1:8000/healthz
   https deployment, `extraEnv` included, and the admin listener never
   serves them. Get the specs with `tempogate gen-oas` and
   `tempogate gen-oas --admin` instead.
-- **Schema migrations** run in a dedicated `tempogate migrate` Job
-  applied alongside the release (not a Helm hook — Helm v4's sequential
-  hook execution deadlocks a hook Job against a chart-managed
-  `WaitForFirstConsumer` PVC). The migrate pod and the serve pod share
-  the PVC; whichever the scheduler places first is the volume's first
-  consumer, so the chart needs no special StorageClass. `serve` refuses
-  to run against a stale store, so a serve pod that starts before the
-  migration finishes exits and is restarted until the schema is current
-  (seconds, on SQLite). The Job name carries the release revision so
-  `helm upgrade` always runs a fresh migration.
+- **Schema migrations** run in a `migrate` initContainer of the
+  tempogate pod, before `serve` starts, on the same volume. With one
+  replica and the `Recreate` strategy the previous pod has exited before
+  the new pod's `migrate` runs, so a migration never races a running
+  server or needs a second ReadWriteOnce attachment, on install,
+  upgrade, and rollback alike. It is not a Helm hook: a hook Job would
+  either own the chart's PVC lifecycle or race the old pod for the
+  volume. Read the migration output with
+  `kubectl logs <pod> -c migrate`. Chart releases up to 0.3.0 ran a
+  separate `<release>-migrate-<revision>` Job instead; Helm removes it on
+  the first upgrade to this version.
 - **State is release-managed.** The chart-managed PVC is removed on
   `helm uninstall` (signing keypair + refresh tokens included). To keep
   state across an uninstall, pre-create a PVC and set
@@ -161,7 +162,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `admin.tokenSha256SecretRef` | `{name,key}` empty | Secret holding `ADMIN_TOKEN_SHA256` (hex SHA-256 digests of admin tokens). Unset locks the admin API. |
 | `admin.allowedHosts` | `[]` | `ADMIN_ALLOWED_HOSTS`. Empty with `service.admin.enabled` allows the admin Service DNS names on its port plus loopback names on any port. |
 | `admin.allowSystemGrants` | `false` | `ADMIN_ALLOW_SYSTEM_GRANTS`: allow cluster-wide `temporal-system` keys. |
-| `extraEnv` | `[]` | Extra env vars (Deployment and migrate Job). |
+| `extraEnv` | `[]` | Extra env vars (serve container and migrate initContainer). |
 | `volumes` / `volumeMounts` | `[]` | Extra volumes/mounts. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |
 

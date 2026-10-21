@@ -94,11 +94,11 @@ when set, otherwise the chart-managed claim.
 {{- end }}
 
 {{/*
-Secret-derived env entries for the Deployment. The migrate Job does not get
-them: `tempogate migrate` needs only the state store, so it never sees secret
-material. The non-secret vars come from the ConfigMap via envFrom, and user
-extraEnv from tempogate.extraEnv; both reach the Deployment and the migrate
-Job.
+Secret-derived env entries for the serve container. The migrate
+initContainer does not get them: `tempogate migrate` needs only the state
+store, so it never sees secret material. The non-secret vars come from the
+ConfigMap via envFrom, and user extraEnv from tempogate.extraEnv; both reach
+the serve container and the migrate initContainer.
 */}}
 {{- define "tempogate.secretEnv" -}}
 {{- with .Values.auth.upstream.google.clientIdSecretRef }}
@@ -179,7 +179,8 @@ cannot present. Otherwise empty, leaving the binary's loopback default.
 {{- end }}
 
 {{/*
-User extraEnv, appended verbatim to the Deployment and the migrate Job.
+User extraEnv, appended verbatim to the serve container and the migrate
+initContainer.
 */}}
 {{- define "tempogate.extraEnv" -}}
 {{- with .Values.extraEnv }}

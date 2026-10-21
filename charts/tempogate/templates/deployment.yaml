@@ -8,7 +8,8 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   # SQLite tolerates one writer; a rolling update would briefly run two
-  # pods contending for the same PVC. Recreate stops the old pod first.
+  # pods contending for the same PVC. Recreate stops the old pod first,
+  # which is also what makes the migrate initContainer below race-free.
   strategy:
     type: Recreate
   selector:
@@ -37,6 +38,37 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # `tempogate migrate` runs before `serve` on the same volume, in the
+      # same pod. With one replica and the Recreate strategy the previous
+      # pod has exited before this one starts, so the migration never races
+      # a running server and never needs a second ReadWriteOnce attachment.
+      initContainers:
+        - name: migrate
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          # Same non-secret config and extraEnv as `serve`, so an operator
+          # override (e.g. STATE_SQLITE_BUSY_TIMEOUT) applies to both. No
+          # secrets: migrate builds only the SQLite store.
+          envFrom:
+            - configMapRef:
+                name: {{ include "tempogate.configMapName" . }}
+          {{- $extraEnv := include "tempogate.extraEnv" . | trim }}
+          {{- if $extraEnv }}
+          env:
+            {{- $extraEnv | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: state
+              mountPath: {{ .Values.state.mountPath }}
       containers:
         - name: {{ .Chart.Name }}
           {{- with .Values.securityContext }}

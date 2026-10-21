@@ -106,10 +106,10 @@ Refresh tokens are reaped a whole family at a time, once no token in it can be u
 See [docs/configuration.md](configuration.md#abuse-controls).
 
 **Migration is a separate step.** `serve` refuses to run against a stale
-schema. In Kubernetes a dedicated `migrate` Job runs alongside the release
-(not a Helm hook — a hook Job mounting the chart's own first-consumer PVC
-deadlocks); a `serve` pod that starts first simply exits and is restarted
-until the schema is current.
+schema. In Kubernetes `migrate` runs as an initContainer of the single
+tempogate pod; the `Recreate` strategy stops the previous pod first, so the
+migration never races a running server for the SQLite file or its
+ReadWriteOnce volume.
 
 **PKCE mandatory, with one auditable carve-out.** Every registered client is
 public and must use PKCE. A deliberately separate `OIDC_CLIENT_SECRETS`

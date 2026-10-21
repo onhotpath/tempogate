@@ -59,7 +59,7 @@ echo "==> seccompProfile RuntimeDefault"
 expect_eq "Deployment pod seccompProfile" "RuntimeDefault" \
   "$(q Deployment .spec.template.spec.securityContext.seccompProfile.type)"
 expect_eq "Deployment containers seccompProfile" "RuntimeDefault" \
-  "$(q Deployment '[(.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | .securityContext.seccompProfile.type] | unique | join(",")')"
+  "$(q Deployment '[((.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[]) | .securityContext.seccompProfile.type] | unique | join(",")')"
 expect_eq "test pod seccompProfile" "RuntimeDefault" \
   "$(q Pod .spec.securityContext.seccompProfile.type)"
 expect_eq "test pod runs as non-root" "true" "$(q Pod .spec.securityContext.runAsNonRoot)"
@@ -71,6 +71,41 @@ if [[ "$image" =~ ^[^@]+:[^@:]+@sha256:[0-9a-f]{64}$ ]]; then
 else
   fail "test pod image is not pinned as repo:tag@sha256:<digest>: '$image'"
 fi
+
+echo "==> migrations run in a migrate initContainer, not a Job"
+expect_eq "no Job is rendered" "" "$(yq 'select(.kind == "Job") | .metadata.name' <<<"$manifests")"
+expect_eq "no Job is rendered with an existingClaim" "" \
+  "$(render --set persistence.existingClaim=my-claim | yq 'select(.kind == "Job") | .metadata.name')"
+init() { q Deployment ".spec.template.spec.initContainers[] | select(.name == \"migrate\") | $1"; }
+expect_eq "Deployment has a migrate initContainer" "migrate" "$(init .name)"
+expect_eq "migrate initContainer runs 'migrate'" '["migrate"]' "$(init '.args | to_json(0)')"
+expect_eq "migrate initContainer uses the serve image" \
+  "$(q Deployment '.spec.template.spec.containers[0].image')" "$(init .image)"
+expect_eq "migrate initContainer gets the ConfigMap env" \
+  "$(q ConfigMap .metadata.name)" "$(init '.envFrom[0].configMapRef.name')"
+expect_eq "migrate initContainer gets no secrets" "0" \
+  "$(init '[.env // [] | .[] | select(.valueFrom.secretKeyRef)] | length')"
+expect_eq "migrate initContainer mounts the state volume" "state:/var/lib/tempogate" \
+  "$(init '.volumeMounts[] | select(.name == "state") | .name + ":" + .mountPath')"
+expect_eq "migrate initContainer has the serve container's securityContext" \
+  "$(q Deployment '.spec.template.spec.containers[0].securityContext | to_json(0)')" \
+  "$(init '.securityContext | to_json(0)')"
+secret_refs=()
+for ref in auth.upstream.google.clientIdSecretRef auth.upstream.google.clientSecretSecretRef \
+  auth.clientSecretsSecretRef admin.tokenSha256SecretRef oidc.sessionSigningKeySecretRef \
+  keys.encryptionKeySecretRef; do
+  secret_refs+=(--set "$ref.name=s" --set "$ref.key=k")
+done
+secret_deploy=$(render "${secret_refs[@]}" | yq 'select(.kind == "Deployment")')
+expect_eq "with every secret ref set, serve gets all six secret env vars" "6" \
+  "$(yq '[.spec.template.spec.containers[0].env[] | select(.valueFrom.secretKeyRef)] | length' <<<"$secret_deploy")"
+expect_eq "with every secret ref set, migrate still gets none (no KEK, no admin token)" "0" \
+  "$(yq '.spec.template.spec.initContainers[] | select(.name == "migrate") |
+    [.env // [] | .[] | select(.valueFrom.secretKeyRef)] | length' <<<"$secret_deploy")"
+expect_eq "extraEnv reaches the migrate initContainer" "7s" \
+  "$(render --set 'extraEnv[0].name=STATE_SQLITE_BUSY_TIMEOUT' --set 'extraEnv[0].value=7s' |
+    yq 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") |
+      .env[] | select(.name == "STATE_SQLITE_BUSY_TIMEOUT") | .value')"
 
 if [ "$failures" -ne 0 ]; then
   echo "FAIL: $failures chart assertion(s) failed" >&2
