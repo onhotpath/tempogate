@@ -127,7 +127,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		deviceCode,
 	).Scan(&lastPolled, &lastPolledRaw, &interval)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, fmt.Errorf("%w: %s", ErrDeviceCodeNotFound, deviceCode)
+		return false, ErrDeviceCodeNotFound
 	}
 	if err != nil {
 		return false, fmt.Errorf("sqlite: poll device code: %w", err)
@@ -207,13 +207,13 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 		`SELECT expires_at FROM device_codes WHERE user_code = ?`, userCode,
 	).Scan(&expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: %s", ErrDeviceCodeNotPending, userCode)
+		return ErrDeviceCodeNotPending
 	}
 	if err != nil {
 		return fmt.Errorf("sqlite: decide device code: %w", err)
 	}
 	if !now.Before(expiresAt) {
-		return fmt.Errorf("%w: %s expired", ErrDeviceCodeNotPending, userCode)
+		return fmt.Errorf("%w: expired", ErrDeviceCodeNotPending)
 	}
 
 	res, err := s.db.ExecContext(ctx, stmt, args...)

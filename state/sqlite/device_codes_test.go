@@ -116,6 +116,7 @@ func (s *StoreSuite) TestPollDeviceCodeUnknown() {
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, ErrDeviceCodeNotFound),
 		"expected ErrDeviceCodeNotFound, got %v", err)
+	s.NotContains(err.Error(), "never-saved", "device_code is a bearer secret and must not reach logs")
 }
 
 func (s *StoreSuite) TestApproveDeviceCodeTransitionsRow() {
@@ -176,6 +177,7 @@ func (s *StoreSuite) TestApproveDeviceCodeUnknownUserCode() {
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, ErrDeviceCodeNotPending),
 		"expected ErrDeviceCodeNotPending, got %v", err)
+	s.NotContains(err.Error(), "NEVERSAVED", "user_code must not reach logs")
 }
 
 func (s *StoreSuite) TestDenyDeviceCodeTransitionsRow() {
@@ -333,6 +335,7 @@ func (s *StoreSuite) TestDecideDeviceCodeRejectsExpiredRow() {
 				err := fn(dc.UserCode, at)
 				s.Require().Error(err)
 				s.Truef(errors.Is(err, ErrDeviceCodeNotPending), "expected ErrDeviceCodeNotPending, got %v", err)
+				s.NotContains(err.Error(), dc.UserCode, "user_code must not reach logs")
 			}
 
 			got, err := s.store.LookupDeviceCodeByUserCode(s.ctx, dc.UserCode)
