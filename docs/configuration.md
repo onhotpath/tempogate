@@ -281,7 +281,7 @@ At startup it logs how many rules grant a `temporal-system` role, warns about ru
 
 **Changes take effect at the next refresh.** Rules are configuration, so a change needs a restart.
 Every refresh then resolves the permissions again, after the [domain re-check](#refresh-token-sessions): a narrower grant mints a narrower token, and an empty one revokes the whole session (`invalid_grant`, logged as a `refresh_authz_denied` warning with the family id and email).
-Access tokens already issued keep their permissions until they expire, so a change reaches a signed-in user within `OIDC_ACCESS_TOKEN_TTL` (4h) of the restart; `tempogate sessions revoke --email <e>` ends their sessions at once.
+Access tokens already issued keep their permissions until they expire, so a change reaches a signed-in user within `OIDC_ACCESS_TOKEN_TTL` (4h) of the restart; to end someone's sessions at once (their refresh tokens, not the access tokens already issued), run `tempogate sessions revoke --email <e>` or call `POST /admin/sessions/revoke` (see [Refresh-token sessions](#refresh-token-sessions)).
 
 **Checking a rule set.** `tempogate authz explain --email <e>` reads the same configuration as `serve` and prints the rules that match, whether the default applied, and the permissions the access token would carry (or that the sign-in is denied).
 It also flags an email whose domain is not in `OIDC_ALLOWED_DOMAINS`.
@@ -310,6 +310,7 @@ That is no longer the default: with no rules and no default, `tempogate serve` s
 - To move to rules, list the people who need cluster admin with `email:` rules, grant everyone else what they need per namespace, and leave the default empty.
   Check the result with `tempogate authz explain --email <e>` before restarting.
 - Existing sessions keep working: their next refresh mints a token with the new permissions, or ends the session if the person is granted nothing.
+  Access tokens issued before the upgrade keep `temporal-system:admin` until they expire (`OIDC_ACCESS_TOKEN_TTL`); revoking sessions (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) only stops their renewal.
 
 ### Token subject
 
