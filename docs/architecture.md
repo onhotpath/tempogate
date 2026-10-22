@@ -68,7 +68,7 @@ Temporal.
 ## Design decisions
 
 **Single binary, subcommands.** One distroless binary with `serve`, `login`,
-`token`, `keys`, `sessions`, `migrate`, `version`. Operators run `serve`; the
+`token`, `keys`, `sessions`, `authz`, `migrate`, `version`. Operators run `serve`; the
 same binary is the laptop CLI. Migrations are embedded and applied by `migrate`.
 Each server subcommand builds only the dependencies it uses, when it runs:
 `serve` (and `gen-oas`) need the full OIDC configuration, while `migrate`,
@@ -199,6 +199,41 @@ root. See [docs/configuration.md](configuration.md#sub-path-hosting).
 A 5xx body is generic (for example `internal server error (request id <id>)`) and never includes the underlying error; the device verification page shows the same id on its HTML error page.
 The real cause is logged at `error` level with a matching `request_id` field, so a user's report can be traced with `kubectl logs | grep <id>`.
 4xx bodies, including OAuth `error` / `error_description`, are unchanged, and so is the one deliberate OAuth-shaped 5xx: `502 upstream_error` from `/callback/google`, whose description is fixed text.
+
+## Multi-tenancy
+
+tempogate puts a token's authorization in a flat `permissions` claim of `"<namespace>:<role>"` entries.
+That is the shape that Temporal's default JWT `ClaimMapper` parses into a role bitmask per namespace.
+
+- Entries for **different** namespaces accumulate independently, so one token can grant `read` on one namespace and `admin` on another.
+- Entries for the **same** namespace are ORed together by the ClaimMapper, not overridden ([`default_jwt_claim_mapper.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_jwt_claim_mapper.go#L134-L143) in Temporal v1.32.1, unchanged since v1.25).
+  So `ns:admin` plus `ns:read` authorizes admin, whatever Temporal's documentation says about overriding.
+  tempogate itself never emits duplicates: `perms.Grant` keeps one entry per namespace with the highest role it was given, so both readings give the same result.
+
+tempogate grants the roles `read`, `write` and `admin`.
+`worker` alone authorizes nothing.
+In Temporal's role bitmask it is below `read`, and the default authorizer requires at least `read` for every API except health checks.
+Task-queue polling is a write API (see [`getRequiredRole`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L67-L77) and [`roles.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/roles.go#L9-L12)).
+So the admin API refuses `role: worker` with 422; grant `write` to the workers of a namespace.
+Integration keys minted as `worker` before this rule keep working as before: they authorize nothing.
+
+To grant access to every namespace, grant a role on the `temporal-system` namespace.
+It is the only construct the default ClaimMapper recognises for "every namespace".
+The same authorizer treats the literal `*` as a real namespace name, so the `perms.AddWildcard` Go API is rewritten to `temporal-system:<role>` before serialization.
+The model is in the [`perms`](../perms/perms.go) package.
+The `/admin/keys` admin API and the OIDC `/token` flow both build their claim through `perms.Grant`; the `/token` flow takes its input from the [authorization rules](configuration.md#authorization).
+
+A token issued for `tenant-a` cannot do any action on `tenant-b`.
+The default authorizer at the Temporal frontend enforces that boundary, not tempogate.
+[`test/e2e/multi_tenant_test.go`](../test/e2e/multi_tenant_test.go) proves it end to end.
+It provisions two namespaces against a real `temporal-frontend`, and asserts two things:
+
+- the cross-namespace denial (gRPC `PermissionDenied`);
+- the multi-namespace accumulation (one token, two namespaces, different roles enforced independently).
+
+The `/admin/keys` admin API mints one (namespace, role) per key, by design, so audit and rotation always reason over a minimal scope.
+A caller that needs several namespaces gets several keys.
+People get the multi-namespace shape from the [authorization rules](configuration.md#authorization) through the OIDC `/token` path.
 
 ## See also
 

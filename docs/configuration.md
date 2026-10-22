@@ -6,7 +6,7 @@ Every tempogate setting, its default, and when you need it.
 
 Three layers, last wins:
 
-1. **Built-in defaults** (the table below).
+1. **Built-in defaults** (the [quick reference](#quick-reference) and the tables below).
 2. **An optional yaml file.**
    Nested keys are normal YAML (`oidc: { issuer: ... }`).
    Which file:
@@ -23,6 +23,62 @@ Three layers, last wins:
 Environment is the recommended surface for containers and Kubernetes. Nested
 config keys flatten with a **`_`** separator: `oidc.google.client_id`
 becomes `OIDC_GOOGLE_CLIENT_ID`.
+
+## Quick reference
+
+One row per setting, for a quick look.
+The sections below give the full detail of each one.
+
+**Minimum for real SSO:** `OIDC_ISSUER`, `OIDC_CLIENTS`, `OIDC_ALLOWED_DOMAINS`, `OIDC_SESSION_SIGNING_KEY`, `OIDC_GOOGLE_CLIENT_ID`, `OIDC_GOOGLE_CLIENT_SECRET`, and at least one `OIDC_AUTHZ_RULES_<n>` (or `OIDC_AUTHZ_DEFAULT_PERMISSIONS`).
+If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
+
+| Env var | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `OIDC_ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. Must be `https://` unless the host is loopback (see `OIDC_ALLOW_INSECURE_ISSUER`). May include a path (e.g. `https://host/idp`) - see [Sub-path hosting](#sub-path-hosting) |
+| `OIDC_ALLOW_INSECURE_ISSUER` | No | `false` | Development only. `serve` refuses a plain-http `OIDC_ISSUER` unless its host is loopback (`localhost`, `127.0.0.0/8`, `::1`) or this is `true` |
+| `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri` allowlist of **exact** redirect URIs (repeat an id for several). Loopback `http://127.0.0.1/<path>` entries match any port. Register the CLI as `tempogate-cli:http://127.0.0.1/callback` and the device CLI as `tempogate-device:` |
+| `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
+| `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in and again on every refresh |
+| `OIDC_ALLOWED_HOSTED_DOMAINS` | Recommended | _(empty)_ | Comma-separated Google Workspace domains; when set, Google's `hd` claim must match ("Workspace mode"). See [Hosted domain (Workspace mode)](#hosted-domain-workspace-mode) |
+| `OIDC_AUTHZ_RULES_<n>` | This or the next | _(none)_ | Indexed rules (`OIDC_AUTHZ_RULES_0`, `_1`, ...) `"<email:address\|domain:domain>=<namespace>:<role>[,...]"` mapping a signed-in person to Temporal permissions; re-applied on every refresh. See [Authorization](#authorization) |
+| `OIDC_AUTHZ_DEFAULT_PERMISSIONS` | This or the previous | _(empty)_ | Comma-separated permissions for admitted people no rule matches; empty denies them. `serve` refuses to start with no rules and no default. `temporal-system:admin` keeps the pre-rules behaviour (logged as a warning) |
+| `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access token (ID tokens live 5 minutes) |
+| `OIDC_ACCESS_TOKEN_AUDIENCE` | No | `temporal` | `aud` of every access token and integration key; set Temporal's `global.authorization.audience` (v1.29.0+) to match. See [Access tokens and ID tokens](#access-tokens-and-id-tokens) |
+| `OIDC_REFRESH_TOKEN_TTL` | No | `168h` (7 days) | Idle lifetime of each rotated refresh token |
+| `OIDC_REFRESH_MAX_LIFETIME` | No | `168h` (7 days) | Absolute session lifetime from sign-in; rotation never extends it. See [Refresh-token sessions](#refresh-token-sessions) |
+| `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
+| `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
+| `OIDC_SESSION_SIGNING_KEY` | Yes | _(empty)_ | Base64url 32-byte HMAC key for the device-flow session cookie and SSO `state`, and for deriving the Google leg's PKCE verifier, nonce and browser binding; `serve` refuses to boot without it |
+| `OIDC_SESSION_TTL` | No | `5m` | Lifetime of the device-flow verification-page session cookie |
+| `OIDC_GOOGLE_AUTH_ENDPOINT`, `OIDC_GOOGLE_TOKEN_ENDPOINT`, `OIDC_GOOGLE_ISSUER_URL` | No | Google's | Upstream endpoint overrides, for a mock IdP only |
+| `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
+| `HTTP_LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
+| `HTTP_TRUSTED_PROXIES` | Behind a reverse proxy | _(empty)_ | Comma-separated CIDRs or addresses of proxies whose `X-Forwarded-For` is trusted for the client address. See [Abuse controls](#abuse-controls) |
+| `HTTP_RATE_LIMIT_AUTHORIZE`, `HTTP_RATE_LIMIT_DEVICE_AUTHORIZATION`, `HTTP_RATE_LIMIT_DEVICE_VERIFICATION`, `HTTP_RATE_LIMIT_TOKEN` | No | `30`, `10`, `20`, `60` | Requests per minute per client address to `/authorize`, `/device_authorization`, `POST /device` and `/token`; `0` disables |
+| `API_DOCS_ENABLED` | No | `false` | Dev only: serve the OpenAPI document and docs page on the public listener. `serve` refuses it unless `OIDC_ISSUER` is plain `http://` |
+| `ADMIN_LISTENER` | No | `127.0.0.1:8081` | `host:port` for the separate admin listener (`/admin/*`, Prometheus `/metrics`); never expose it publicly |
+| `ADMIN_TOKEN_SHA256` | To use the admin API | _(empty)_ | Comma-separated hex SHA-256 digests of accepted admin bearer tokens. Empty locks the admin API (401) |
+| `ADMIN_ALLOWED_HOSTS` | For a non-loopback admin bind | loopback names on the `ADMIN_LISTENER` port | Comma-separated `host[:port]` accepted in `Host`; others get 421 (DNS-rebinding defence) |
+| `ADMIN_ALLOW_SYSTEM_GRANTS` | No | `false` | Allow minting cluster-wide `temporal-system` keys (403 otherwise) |
+| `ADMIN_KEYS_MAX_TTL` | No | `2160h` (90 days) | Furthest in the future an integration key's required `expires_at` may lie |
+| `SERVER_READ_HEADER_TIMEOUT`, `SERVER_READ_TIMEOUT`, `SERVER_WRITE_TIMEOUT`, `SERVER_IDLE_TIMEOUT`, `SERVER_MAX_HEADER_BYTES`, `SERVER_SHUTDOWN_TIMEOUT` | No | `10s`, `15s`, `30s`, `60s`, `16384`, `15s` | HTTP server hardening for both listeners; see [HTTP server hardening](#http-server-hardening) |
+| `STATE_DRIVER` | No | `sqlite` | State store backend: `sqlite` (one replica) or `postgres` (one or more). See [State store](#state-store) |
+| `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
+| `STATE_SQLITE_MAX_CONNS` | No | `1` | SQLite connection pool size; do not raise (one writer) |
+| `STATE_SQLITE_BUSY_TIMEOUT` | No | `5s` | How long a query waits on a locked database |
+| `STATE_POSTGRES_DSN` / `STATE_POSTGRES_DSN_FILE` | With `STATE_DRIVER=postgres` | _(empty)_ | PostgreSQL 15+ connection string (or a file holding it, re-read per connection); a remote host needs `sslmode=verify-full`. See [PostgreSQL](#postgresql) |
+| `STATE_POSTGRES_MAX_CONNS`, `STATE_POSTGRES_CONN_MAX_IDLE_TIME` | No | `10`, `30m` | Connection pool size per replica (at least 2) and idle timeout |
+| `STATE_POSTGRES_LISTEN_DSN` | Behind a transaction-mode pooler | the main DSN | Direct connection for the change-notification `LISTEN` |
+| `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE` | No | `false` | Dev only: allow a non-loopback host without `sslmode=verify-full` |
+| `STATE_REAPER_INTERVAL` | No | `5m` | How often `serve` deletes expired state; `0` disables |
+| `KEYS_ENCRYPTION_KEY` / `KEYS_ENCRYPTION_KEY_FILE` | No | _(empty)_ | Base64 32-byte key (or a file holding it) that encrypts the stored signing key. See [Signing-key encryption](#signing-key-encryption) |
+| `KEYS_RETIREMENT_GRACE` | No | `4h` | How long a retired signing key stays in JWKS and keeps verifying |
+| `KEYS_RELOAD_INTERVAL` | No | `30s` | How often `serve` re-reads signing keys from the state store |
+| `KEYS_PUBLISH_DELAY` | No | `5m` | How long a new signing key is published before it signs; must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`. See the [rotation runbook](#rotation-runbook) |
+| `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_REQUESTS` | No | `true` | One access-log line per HTTP request (no query strings, headers or bodies) |
+| `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
+| `TEMPOGATE_LOGIN_MODE` | No | _(empty)_ | **Client-side**. `device` makes `tempogate login` use the device flow, as `--device` does; an explicit `--device` or `--device=false` wins |
 
 ## Environment variables
 
