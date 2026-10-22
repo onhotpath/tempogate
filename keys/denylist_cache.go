@@ -25,13 +25,21 @@ const DefaultDenylistTTL = 30 * time.Second
 // process restart. Multi-process deployments rely on TTL alone — the cache
 // is in-process and never coordinated across instances; v1 accepts that
 // bounded staleness.
+//
+// Memory is bounded too: every verified jti gets an entry, so expired entries
+// are swept once per TTL and the map is capped at maxEntries. Dropping an
+// entry only costs the next lookup a round-trip, because the backing store,
+// not the cache, is the record of revocation; under cap pressure "active"
+// entries go first so cached revocations keep answering without a lookup.
 type DenylistCache struct {
-	checker DenylistChecker
-	ttl     time.Duration
-	now     func() time.Time
+	checker    DenylistChecker
+	ttl        time.Duration
+	maxEntries int
+	now        func() time.Time
 
-	mu      sync.Mutex
-	entries map[string]cacheEntry
+	mu        sync.Mutex
+	entries   map[string]cacheEntry
+	nextSweep time.Time
 }
 
 type cacheEntry struct {
@@ -62,14 +70,30 @@ func WithDenylistClock(now func() time.Time) DenylistCacheOption {
 	return func(c *DenylistCache) { c.now = now }
 }
 
+// DefaultDenylistMaxEntries caps the cache at roughly 10 MB: well above the
+// distinct jtis a single instance verifies within one TTL, so the cap only
+// bites under a flood of distinct tokens.
+const DefaultDenylistMaxEntries = 100_000
+
+// WithDenylistMaxEntries overrides DefaultDenylistMaxEntries. A non-positive
+// value leaves the default in place.
+func WithDenylistMaxEntries(n int) DenylistCacheOption {
+	return func(c *DenylistCache) {
+		if n > 0 {
+			c.maxEntries = n
+		}
+	}
+}
+
 // NewDenylistCache builds a cache with DefaultDenylistTTL and wall-clock
 // expiry. The returned cache satisfies keys.DenylistChecker, so it can be
 // passed to WithDenylist on a Verifier.
 func NewDenylistCache(opts ...DenylistCacheOption) *DenylistCache {
 	c := &DenylistCache{
-		ttl:     DefaultDenylistTTL,
-		now:     func() time.Time { return time.Now().UTC() },
-		entries: map[string]cacheEntry{},
+		ttl:        DefaultDenylistTTL,
+		maxEntries: DefaultDenylistMaxEntries,
+		now:        func() time.Time { return time.Now().UTC() },
+		entries:    map[string]cacheEntry{},
 	}
 	for _, o := range opts {
 		o(c)
@@ -97,9 +121,7 @@ func (c *DenylistCache) IsRevoked(ctx context.Context, jti string) (bool, error)
 		return false, err
 	}
 
-	c.mu.Lock()
-	c.entries[jti] = cacheEntry{revoked: revoked, expires: c.now().Add(c.ttl)}
-	c.mu.Unlock()
+	c.store(jti, revoked)
 	return revoked, nil
 }
 
@@ -112,7 +134,42 @@ func (c *DenylistCache) Hydrate(jti string) {
 	if jti == "" {
 		return
 	}
+	c.store(jti, true)
+}
+
+// store memoizes one answer. The sweep runs at most once per TTL, so its
+// O(n) scan is amortized over every insert in that window.
+func (c *DenylistCache) store(jti string, revoked bool) {
+	now := c.now()
 	c.mu.Lock()
-	c.entries[jti] = cacheEntry{revoked: true, expires: c.now().Add(c.ttl)}
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if !now.Before(c.nextSweep) {
+		for k, e := range c.entries {
+			if !now.Before(e.expires) {
+				delete(c.entries, k)
+			}
+		}
+		c.nextSweep = now.Add(c.ttl)
+	}
+	if _, ok := c.entries[jti]; !ok && len(c.entries) >= c.maxEntries {
+		c.evictOne()
+	}
+	c.entries[jti] = cacheEntry{revoked: revoked, expires: now.Add(c.ttl)}
+}
+
+// evictOne drops an "active" entry if there is one, else any entry. Map
+// iteration order is randomized, so with mostly-active entries this finds a
+// victim in O(1) expected steps.
+func (c *DenylistCache) evictOne() {
+	victim := ""
+	for k, e := range c.entries {
+		if !e.revoked {
+			delete(c.entries, k)
+			return
+		}
+		if victim == "" {
+			victim = k
+		}
+	}
+	delete(c.entries, victim)
 }

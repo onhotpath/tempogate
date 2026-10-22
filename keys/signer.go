@@ -2,8 +2,10 @@ package keys
 
 import (
 	"context"
+	"crypto/rsa"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,6 +122,20 @@ type Signer struct {
 	issuer   string
 	audience string
 	now      func() time.Time
+
+	// parsed memoizes the last signing key in its raw form. Parsing a
+	// 4096-bit PEM on every mint is pure CPU waste, and so is handing jwx a
+	// jwk.Key, which it re-exports to a fresh, un-precomputed *rsa.PrivateKey
+	// on every sign. A kid names immutable key material (it is the key's
+	// thumbprint), so a kid match is always a valid hit; Keys.Latest is
+	// still asked on every mint, so rotation, retirement and publish-delay
+	// activation take effect on the next mint.
+	parsed atomic.Pointer[signingKey]
+}
+
+type signingKey struct {
+	kid string
+	key any
 }
 
 func NewSigner(opts ...TokenOption) *Signer {
@@ -253,24 +269,17 @@ func (s *Signer) builder(subject string, ttl time.Duration) (*jwt.Builder, strin
 }
 
 // sign signs b with the latest keypair, stamping kid and typ in the JWS
-// protected header.
+// protected header. Both Mint and MintIDToken go through here, so both use
+// the cached parsed key.
 func (s *Signer) sign(b *jwt.Builder, typ string) (string, error) {
 	kp, err := s.keys.Latest()
 	if err != nil {
 		return "", err
 	}
 
-	privKey, err := jwk.ParseKey(kp.PrivatePEM, jwk.WithX509(true))
+	privKey, err := s.signingKey(kp)
 	if err != nil {
-		return "", fmt.Errorf("keys: parse private key (kid=%s): %w", kp.Kid, err)
-	}
-	// jwx copies kid+alg from the signing key into the JWS protected header,
-	// which is what lets relying parties pick the right JWKS entry.
-	if err := privKey.Set(jwk.KeyIDKey, kp.Kid); err != nil {
-		return "", fmt.Errorf("keys: set kid: %w", err)
-	}
-	if err := privKey.Set(jwk.AlgorithmKey, jwa.RS256()); err != nil {
-		return "", fmt.Errorf("keys: set alg: %w", err)
+		return "", err
 	}
 
 	tok, err := b.Build()
@@ -278,7 +287,12 @@ func (s *Signer) sign(b *jwt.Builder, typ string) (string, error) {
 		return "", fmt.Errorf("keys: build token: %w", err)
 	}
 
+	// The kid in the JWS protected header is what lets relying parties pick
+	// the right JWKS entry.
 	hdr := jws.NewHeaders()
+	if err := hdr.Set(jws.KeyIDKey, kp.Kid); err != nil {
+		return "", fmt.Errorf("keys: set kid: %w", err)
+	}
 	if err := hdr.Set(jws.TypeKey, typ); err != nil {
 		return "", fmt.Errorf("keys: set typ: %w", err)
 	}
@@ -287,4 +301,29 @@ func (s *Signer) sign(b *jwt.Builder, typ string) (string, error) {
 		return "", fmt.Errorf("keys: sign token: %w", err)
 	}
 	return string(signed), nil
+}
+
+// signingKey returns kp's private key parsed to its raw form, from cache when
+// kp is the keypair the previous mint used. Only one entry is kept: just one
+// keypair signs at a time, so a rotation costs a single re-parse.
+func (s *Signer) signingKey(kp Keypair) (any, error) {
+	if c := s.parsed.Load(); c != nil && c.kid == kp.Kid {
+		return c.key, nil
+	}
+	parsed, err := jwk.ParseKey(kp.PrivatePEM, jwk.WithX509(true))
+	if err != nil {
+		return nil, fmt.Errorf("keys: parse private key (kid=%s): %w", kp.Kid, err)
+	}
+	raw, err := jwk.Export[any](parsed)
+	if err != nil {
+		return nil, fmt.Errorf("keys: export private key (kid=%s): %w", kp.Kid, err)
+	}
+	if priv, ok := raw.(*rsa.PrivateKey); ok {
+		// Precompute before publishing the key to other goroutines: it
+		// mutates the key, and without it crypto/rsa rebuilds the CRT
+		// values on every signature.
+		priv.Precompute()
+	}
+	s.parsed.Store(&signingKey{kid: kp.Kid, key: raw})
+	return raw, nil
 }

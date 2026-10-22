@@ -129,25 +129,24 @@ func newTokenRegistrar(t *Token) func(huma.API) {
 	return t.Register
 }
 
-type sessionManagerParams struct {
+// sessionSigningKey is OIDC_SESSION_SIGNING_KEY decoded. It is a distinct
+// type so the graph decodes and validates the setting once and hands every
+// consumer the same bytes.
+type sessionSigningKey []byte
+
+type sessionSigningKeyParams struct {
 	fx.In
 
-	Store BrowserSessionStore
-
-	TTL           time.Duration `name:"oidc_session_ttl"`
-	SigningKeyB64 string        `name:"oidc_session_signing_key"`
-	Issuer        string        `name:"oidc_issuer"`
-	BasePath      string        `name:"oidc_base_path"`
+	SigningKeyB64 string `name:"oidc_session_signing_key"`
 }
 
-// newSessionManager builds the device-flow verification-page session manager
-// against the shared BrowserSessionStore. The HMAC-SHA256 signing key is
-// validated here so a misconfigured OIDC_SESSION_SIGNING_KEY fails graph
-// construction at startup — never at the first failed cookie verify under
-// load. An empty key is treated as missing (mirrors how OIDC_CLIENTS
-// surfaces an unset value); a base64url-decoded length other than 32 is
-// rejected because a shorter key would silently weaken the cookie MAC.
-func newSessionManager(p sessionManagerParams) (*SessionManager, error) {
+// newSessionSigningKey validates the HMAC-SHA256 key so a misconfigured
+// OIDC_SESSION_SIGNING_KEY fails graph construction at startup, never at
+// the first failed cookie verify under load. An empty key is treated as
+// missing (mirrors how OIDC_CLIENTS surfaces an unset value); a
+// base64url-decoded length other than 32 is rejected because a shorter key
+// would silently weaken the cookie MAC.
+func newSessionSigningKey(p sessionSigningKeyParams) (sessionSigningKey, error) {
 	if p.SigningKeyB64 == "" {
 		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY is required (base64url-encoded %d bytes)", sessionSigningKeyBytes)
 	}
@@ -158,7 +157,24 @@ func newSessionManager(p sessionManagerParams) (*SessionManager, error) {
 	if len(key) != sessionSigningKeyBytes {
 		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
 	}
+	return key, nil
+}
 
+type sessionManagerParams struct {
+	fx.In
+
+	Store      BrowserSessionStore
+	SigningKey sessionSigningKey
+
+	TTL      time.Duration `name:"oidc_session_ttl"`
+	Issuer   string        `name:"oidc_issuer"`
+	BasePath string        `name:"oidc_base_path"`
+}
+
+// newSessionManager builds the device-flow verification-page session manager
+// against the shared BrowserSessionStore, keyed by the validated
+// OIDC_SESSION_SIGNING_KEY.
+func newSessionManager(p sessionManagerParams) *SessionManager {
 	opts := []SessionOption{
 		// The device UI is mounted under the issuer's base path, so the
 		// cookie must be too, or the browser never sends it to
@@ -169,7 +185,7 @@ func newSessionManager(p sessionManagerParams) (*SessionManager, error) {
 	if p.TTL > 0 {
 		opts = append(opts, WithSessionTTL(p.TTL))
 	}
-	return NewSessionManager(p.Store, key, opts...), nil
+	return NewSessionManager(p.Store, p.SigningKey, opts...)
 }
 
 // issuerIsPlainHTTP reports whether the issuer is served over plain http
@@ -215,14 +231,14 @@ func newDeviceAuthorizationRegistrar(p deviceAuthorizationParams) func(huma.API)
 type deviceUIParams struct {
 	fx.In
 
-	Devices  DeviceCodeStore
-	Sessions *SessionManager
-	Clients  ClientRegistry
-	Token    *Token
-	Logger   *slog.Logger
+	Devices    DeviceCodeStore
+	Sessions   *SessionManager
+	Clients    ClientRegistry
+	Token      *Token
+	Logger     *slog.Logger
+	SigningKey sessionSigningKey
 
 	Issuer             string `name:"oidc_issuer"`
-	SigningKeyB64      string `name:"oidc_session_signing_key"`
 	GoogleAuthEndpoint string `name:"google_auth_endpoint"`
 }
 
@@ -232,18 +248,10 @@ type deviceUIParams struct {
 // as graph-construction errors, so an operator who forgets the
 // OIDC_CLIENT_SECRETS entry learns about it at startup rather than when
 // the first user submits the verification form. The signing key is the
-// same one OIDC_SESSION_SIGNING_KEY backs SessionManager with, decoded
-// once here so the bounce state and the session cookie share a single
-// cryptographic root.
+// same one SessionManager is built with, so the bounce state and the
+// session cookie share a single cryptographic root.
 func newDeviceUIRegistrar(p deviceUIParams) (func(huma.API), error) {
-	key, err := base64.RawURLEncoding.DecodeString(p.SigningKeyB64)
-	if err != nil {
-		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must be base64url-encoded: %w", err)
-	}
-	if len(key) != sessionSigningKeyBytes {
-		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY must decode to %d bytes, got %d", sessionSigningKeyBytes, len(key))
-	}
-	ui, err := NewDeviceUI(p.Devices, p.Sessions, p.Clients, p.Token, key, p.Issuer,
+	ui, err := NewDeviceUI(p.Devices, p.Sessions, p.Clients, p.Token, p.SigningKey, p.Issuer,
 		// Whitelist the upstream IdP's origin in the device_enter page's CSP
 		// form-action directive. CSP3 checks form-action across the redirect
 		// chain (POST /device → 303 /authorize → 302 upstream), so the
@@ -308,6 +316,7 @@ func Fx() fx.Option {
 			),
 		),
 		fx.Provide(newClientRegistry),
+		fx.Provide(newSessionSigningKey),
 		fx.Provide(newSessionManager),
 		fx.Provide(newToken),
 		fx.Provide(

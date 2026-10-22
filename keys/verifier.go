@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v4/jwa"
@@ -48,6 +49,17 @@ type Verifier struct {
 	audience string
 	now      func() time.Time
 	denylist DenylistChecker
+
+	// parsed memoizes the key set built from the last published keypairs.
+	// It is keyed by the published kids, so any change Keys reports (hot
+	// reload, a retirement grace elapsing, a new key) rebuilds it on the
+	// next Verify, and a kid past grace is never served from it.
+	parsed atomic.Pointer[verifyKeySet]
+}
+
+type verifyKeySet struct {
+	kids []string
+	set  jwk.Set
 }
 
 func NewVerifier(opts ...TokenOption) *Verifier {
@@ -80,24 +92,9 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (jwt.Token, error) {
 		return nil, ErrNoVerificationKeys
 	}
 
-	set := jwk.NewSet()
-	for _, kp := range v.keys.Published() {
-		pub, err := jwk.ParseKey(kp.PublicPEM, jwk.WithX509(true))
-		if err != nil {
-			return nil, fmt.Errorf("keys: parse public key (kid=%s): %w", kp.Kid, err)
-		}
-		if err := pub.Set(jwk.KeyIDKey, kp.Kid); err != nil {
-			return nil, fmt.Errorf("keys: set kid: %w", err)
-		}
-		if err := pub.Set(jwk.AlgorithmKey, jwa.RS256()); err != nil {
-			return nil, fmt.Errorf("keys: set alg: %w", err)
-		}
-		if err := set.AddKey(pub); err != nil {
-			return nil, fmt.Errorf("keys: add key to set (kid=%s): %w", kp.Kid, err)
-		}
-	}
-	if set.Len() == 0 {
-		return nil, ErrNoVerificationKeys
+	set, err := v.keySet()
+	if err != nil {
+		return nil, err
 	}
 
 	parseOpts := []jwt.ParseOption{
@@ -136,4 +133,68 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (jwt.Token, error) {
 		}
 	}
 	return tok, nil
+}
+
+// keySet returns the published keys as a jwk.Set, rebuilt only when the
+// published kids change. A rebuild reuses keys parsed for the previous set
+// (key material is immutable per kid), so a rotation parses just the new key.
+// Concurrent rebuilds may race to store; both results are equally valid.
+func (v *Verifier) keySet() (jwk.Set, error) {
+	kps := v.keys.Published()
+	prev := v.parsed.Load()
+	if prev != nil && sameKids(prev.kids, kps) {
+		if prev.set.Len() == 0 {
+			return nil, ErrNoVerificationKeys
+		}
+		return prev.set, nil
+	}
+
+	set := jwk.NewSet()
+	kids := make([]string, 0, len(kps))
+	for _, kp := range kps {
+		pub, err := v.publicKey(prev, kp)
+		if err != nil {
+			return nil, err
+		}
+		if err := set.AddKey(pub); err != nil {
+			return nil, fmt.Errorf("keys: add key to set (kid=%s): %w", kp.Kid, err)
+		}
+		kids = append(kids, kp.Kid)
+	}
+	v.parsed.Store(&verifyKeySet{kids: kids, set: set})
+	if set.Len() == 0 {
+		return nil, ErrNoVerificationKeys
+	}
+	return set, nil
+}
+
+func (v *Verifier) publicKey(prev *verifyKeySet, kp Keypair) (jwk.Key, error) {
+	if prev != nil {
+		if pub, ok := prev.set.LookupKeyID(kp.Kid); ok {
+			return pub, nil
+		}
+	}
+	pub, err := jwk.ParseKey(kp.PublicPEM, jwk.WithX509(true))
+	if err != nil {
+		return nil, fmt.Errorf("keys: parse public key (kid=%s): %w", kp.Kid, err)
+	}
+	if err := pub.Set(jwk.KeyIDKey, kp.Kid); err != nil {
+		return nil, fmt.Errorf("keys: set kid: %w", err)
+	}
+	if err := pub.Set(jwk.AlgorithmKey, jwa.RS256()); err != nil {
+		return nil, fmt.Errorf("keys: set alg: %w", err)
+	}
+	return pub, nil
+}
+
+func sameKids(kids []string, kps []Keypair) bool {
+	if len(kids) != len(kps) {
+		return false
+	}
+	for i, kp := range kps {
+		if kids[i] != kp.Kid {
+			return false
+		}
+	}
+	return true
 }

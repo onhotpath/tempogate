@@ -3,6 +3,8 @@ package servercmd
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -39,9 +41,19 @@ func newKeysRetireCmd(load deps[keysParams]) *cobra.Command {
 			"every token it signed, integration keys included, stops verifying at Temporal. " +
 			"The only active keypair cannot be retired: run `tempogate keys generate --force` first. " +
 			"Retiring the signing keypair while its replacement is still inside KEYS_PUBLISH_DELAY is " +
-			"refused unless --force is given. A kid may start with '-': pass it after `--`.",
-		Args: cobra.ExactArgs(1),
+			"refused unless --force is given.",
+		// Kids are base64url thumbprints, so about one in 32 starts with '-'
+		// and pflag would read it as a cluster of shorthand flags. RunE
+		// parses the flags itself so such a kid works without `--`.
+		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			args, help, err := parseKidArgs(cmd, args)
+			if err != nil {
+				return err
+			}
+			if help {
+				return cmd.Help()
+			}
 			ctx := cmd.Context()
 			return load(ctx, func(p keysParams) error {
 				if err := storeReady(ctx, p.Store); err != nil {
@@ -68,6 +80,54 @@ func newKeysRetireCmd(load deps[keysParams]) *cobra.Command {
 	c.Flags().BoolVar(&force, "force", false,
 		"retire the signing keypair even though its replacement is still inside KEYS_PUBLISH_DELAY")
 	return c
+}
+
+// kidPattern matches a kid as GenerateKeypair derives it: the unpadded
+// base64url SHA-256 JWK thumbprint, always 43 characters.
+var kidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+// parseKidArgs parses cmd's flags out of args, treating an argument that is
+// not one of cmd's flags but has the shape of a kid as the positional kid
+// even when it starts with '-'. Anything after `--` is positional, as usual,
+// and a malformed flag still fails as an unknown flag. It reports help=true
+// when -h/--help was given, and enforces exactly one kid. cmd must only have
+// bool flags: a value given as a separate argument would be taken as a kid.
+func parseKidArgs(cmd *cobra.Command, args []string) (_ []string, help bool, _ error) {
+	var flags, positional []string
+	for i, a := range args {
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(a, "-") && (isFlagArg(cmd, a) || !kidPattern.MatchString(a)) {
+			flags = append(flags, a)
+			continue
+		}
+		positional = append(positional, a)
+	}
+	fs := cmd.Flags()
+	if err := fs.Parse(flags); err != nil {
+		return nil, false, cmd.FlagErrorFunc()(cmd, err)
+	}
+	if help, _ := fs.GetBool("help"); help {
+		return nil, true, nil
+	}
+	// pflag leaves a bare "-" as an argument.
+	positional = append(positional, fs.Args()...)
+	if err := cobra.ExactArgs(1)(cmd, positional); err != nil {
+		return nil, false, err
+	}
+	return positional, false, nil
+}
+
+// isFlagArg reports whether a names one of cmd's flags: --name, --name=v, or
+// a single-letter -x shorthand.
+func isFlagArg(cmd *cobra.Command, a string) bool {
+	if name, ok := strings.CutPrefix(a, "--"); ok {
+		name, _, _ = strings.Cut(name, "=")
+		return cmd.Flags().Lookup(name) != nil
+	}
+	return len(a) == 2 && cmd.Flags().ShorthandLookup(a[1:]) != nil
 }
 
 func newKeysListCmd(load deps[keysParams]) *cobra.Command {

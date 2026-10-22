@@ -5,6 +5,7 @@ import (
 	"context"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,4 +268,58 @@ func (s *KeysCmdSuite) TestServeWarnsAboutUnencryptedKeys() {
 	s.Require().NoError(withKEK.Init(s.ctx))
 	warnUnencryptedKeys(zap.New(core), withKEK)
 	s.Equal(1, logs.FilterMessageSnippet("keys encrypt").Len())
+}
+
+// dashKeypairs persists an older keypair whose kid starts with '-' (kids are
+// base64url thumbprints, so roughly one in 32 does) and a newer one.
+func (s *KeysCmdSuite) dashKeypairs() (string, keys.Keypair) {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	older, err := keys.GenerateKeypair(keys.WithRSABits(2048), keys.WithNow(func() time.Time {
+		return time.Now().UTC().Add(-time.Hour)
+	}))
+	s.Require().NoError(err)
+	older.Kid = "-" + older.Kid[1:]
+	s.Require().NoError(s.store.SaveKeypair(s.ctx, older))
+	newer, err := keys.GenerateKeypair(keys.WithRSABits(2048))
+	s.Require().NoError(err)
+	s.Require().NoError(s.store.SaveKeypair(s.ctx, newer))
+	return older.Kid, newer
+}
+
+func (s *KeysCmdSuite) TestRetireAcceptsAKidStartingWithDash() {
+	for _, args := range [][]string{
+		{"retire", "KID"},
+		{"retire", "--force", "KID"},
+		{"retire", "KID", "--force"},
+		{"retire", "--force=true", "KID"},
+		{"retire", "--", "KID"},
+	} {
+		s.Run(strings.Join(args, " "), func() {
+			s.TearDownTest()
+			s.SetupTest()
+			kid, _ := s.dashKeypairs()
+			for i, a := range args {
+				if a == "KID" {
+					args[i] = kid
+				}
+			}
+			out, err := s.keysCmd(args...)
+			s.Require().NoError(err)
+			s.Contains(out, "retired keypair: kid="+kid)
+		})
+	}
+}
+
+func (s *KeysCmdSuite) TestRetireStillRejectsUnknownFlagsAndExtraArgs() {
+	kid, newer := s.dashKeypairs()
+	_, err := s.keysCmd("retire", "--bogus", kid)
+	s.Require().ErrorContains(err, "unknown flag: --bogus")
+	_, err = s.keysCmd("retire", kid, newer.Kid)
+	s.Require().ErrorContains(err, "accepts 1 arg(s), received 2")
+}
+
+func (s *KeysCmdSuite) TestRetireHelpStillWorks() {
+	out, err := s.keysCmd("retire", "--help")
+	s.Require().NoError(err)
+	s.Contains(out, "retire <kid>")
 }

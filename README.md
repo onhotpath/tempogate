@@ -115,7 +115,7 @@ The practical consequence:
 | Temporal frontend gRPC              | only at the **token's `exp`**        |
 
 That is why every integration key must carry an `exp`. The hard kill switch
-is retiring the signing key: `tempogate keys retire -- <kid>` (or
+is retiring the signing key: `tempogate keys retire <kid>` (or
 `POST /admin/signing-keys/<kid>/retire`) stops it signing at once, and after
 `KEYS_RETIREMENT_GRACE` (default 4 h) it leaves JWKS, so every token it signed
 stops verifying at tempogate and, after its next JWKS refresh, at Temporal.
