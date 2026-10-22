@@ -8,24 +8,37 @@ name: e2e
 # images and runs temporalio/ui, temporal-frontend, postgres and headless
 # Chrome via testcontainers.
 #
-# Runs always on `main`. On pull requests it is skipped by default (the run is
-# heavy — multi-container, image pulls, a browser) and executes only when the
-# PR carries the `e2e:true` label. Adding the label triggers it via the
-# `labeled` event; it then keeps running on subsequent pushes while the label
-# is present.
+# Runs on every push to `main` except docs-only ones (paths-ignore below). On
+# pull requests it is skipped by default (the run is heavy - multi-container,
+# image pulls, a browser) and executes only when the PR carries the
+# `e2e:true` label, whatever files it touches. Adding the label triggers it
+# via the `labeled` event; it then keeps running on subsequent pushes while
+# the label is present.
 
 on:
   push:
     branches: [main]
+    # Nothing here reaches the e2e images or tests. paths-ignore applies to
+    # pushes only, so labelled PRs always run.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'Casks/**'
+      - 'charts/**'
   pull_request:
     types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
 
+# A new push to a PR supersedes its previous run. Pushes to main each get
+# their own group (run_id), so every main commit gets a full e2e run.
 concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Caches are restored on every run but written only from pushes to main, so
+# PR refs never write (or poison) a cache.
 
 jobs:
   e2e:
@@ -36,18 +49,60 @@ jobs:
     if: >-
       github.event_name == 'push' ||
       contains(github.event.pull_request.labels.*.name, 'e2e:true')
+    env:
+      SAVE_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      # Caches $GOMODCACHE + the build cache keyed on go.sum, so the e2e-tagged
-      # deps (chromedp, testcontainers, temporal api…) are fetched/compiled
-      # once and restored on every later run with an unchanged go.sum.
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      # The e2e job's own Go cache (its e2e-tagged deps - chromedp,
+      # testcontainers, the Temporal API - differ from the unit jobs').
+      - id: go
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
+          cache-name: e2e
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - id: buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The Dockerfiles' `RUN --mount=type=cache` dirs (Go module + build
+      # caches) are not part of the gha layer cache, so `go build` inside
+      # Docker used to start cold whenever its layer missed. buildkit-cache-
+      # dance injects them from an actions cache into the builder and, on
+      # main, extracts them again in its post step, which runs before
+      # actions/cache's post-step save (post steps run in reverse order). PRs
+      # restore only and skip the extraction.
+      - name: Restore Docker Go cache
+        if: env.SAVE_CACHE != 'true'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/docker-go-cache
+          key: docker-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum', 'Dockerfile', 'test/e2e/*/Dockerfile') }}-${{ github.sha }}
+          restore-keys: |
+            docker-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum', 'Dockerfile', 'test/e2e/*/Dockerfile') }}-
+            docker-go-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore and save Docker Go cache
+        if: env.SAVE_CACHE == 'true'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/docker-go-cache
+          key: docker-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum', 'Dockerfile', 'test/e2e/*/Dockerfile') }}-${{ github.sha }}
+          restore-keys: |
+            docker-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum', 'Dockerfile', 'test/e2e/*/Dockerfile') }}-
+            docker-go-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Inject Docker Go cache into BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "${{ runner.temp }}/docker-go-cache/go-mod": "/go/pkg/mod",
+              "${{ runner.temp }}/docker-go-cache/go-build": "/root/.cache/go-build"
+            }
+          scratch-dir: ${{ runner.temp }}/buildkit-cache-dance
+          skip-extraction: ${{ env.SAVE_CACHE != 'true' }}
+          utility-image: ghcr.io/containerd/busybox:1.36@sha256:7b3ccabffc97de872a30dfd234fd972a66d247c8cfc69b0550f276481852627c
 
       # Each runner is a fresh VM, so a plain `docker build` would re-pull the
       # base images and re-run `go mod download` + `go build` inside Docker
@@ -56,7 +111,7 @@ jobs:
       # are loaded locally for testcontainers, never pushed). Distinct scopes
       # keep the three images' caches from evicting each other. The expensive
       # module-download / compile layers are restored when go.* + sources are
-      # unchanged.
+      # unchanged. Only main exports layers (cache-to); PRs import only.
       - name: Build tempogate e2e image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -65,7 +120,7 @@ jobs:
           tags: tempogate:e2e
           load: true
           cache-from: type=gha,scope=e2e-tempogate
-          cache-to: type=gha,mode=max,scope=e2e-tempogate
+          cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=e2e-tempogate' || '' }}
 
       - name: Build mock-Google e2e image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -75,7 +130,7 @@ jobs:
           tags: tempogate-mockgoogle:e2e
           load: true
           cache-from: type=gha,scope=e2e-mockgoogle
-          cache-to: type=gha,mode=max,scope=e2e-mockgoogle
+          cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=e2e-mockgoogle' || '' }}
 
       - name: Build CLI-client e2e image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -85,9 +140,16 @@ jobs:
           tags: tempogate-cliclient:e2e
           load: true
           cache-from: type=gha,scope=e2e-cliclient
-          cache-to: type=gha,mode=max,scope=e2e-cliclient
+          cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=e2e-cliclient' || '' }}
 
       # Images are pre-built (and cached) above; this only runs the tests,
       # picking them up via the E2E_*_IMAGE defaults the Makefile passes.
       - name: Run SSO + CLI loopback + device-flow e2e
         run: make test-e2e-go
+
+      - name: Save Go cache
+        if: env.SAVE_CACHE == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
