@@ -268,7 +268,7 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 	// UI's internal client + signing key regardless — addDeviceUIServerEnv
 	// appends them.
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
-	stateVol := fmt.Sprintf("tempogate-e2e-state-%d", time.Now().UnixNano())
+	stateVol := stateVolume(t, "tempogate-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

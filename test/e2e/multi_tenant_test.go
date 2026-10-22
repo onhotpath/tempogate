@@ -42,7 +42,6 @@ package e2e
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -99,10 +98,10 @@ func TestMultiTenantNamespaceScoping(t *testing.T) {
 	client, conn := dialFrontend(t, st.frontendAddr)
 	defer func() { _ = conn.Close() }()
 	bootstrapCtx := withBearer(ctx, bootstrap.JWT)
-	registerNamespace(t, bootstrapCtx, client, tenantA)
-	registerNamespace(t, bootstrapCtx, client, tenantB)
-	waitForNamespace(t, bootstrapCtx, client, tenantA)
-	waitForNamespace(t, bootstrapCtx, client, tenantB)
+	registerNamespace(bootstrapCtx, t, client, tenantA)
+	registerNamespace(bootstrapCtx, t, client, tenantB)
+	waitForNamespace(bootstrapCtx, t, client, tenantA)
+	waitForNamespace(bootstrapCtx, t, client, tenantB)
 
 	t.Run("single-namespace integration key denies cross-namespace ops", func(t *testing.T) {
 		key := mintIntegrationKey(t, st.adminURL, adminCreateBody{
@@ -180,7 +179,7 @@ func requirePermissionDenied(t *testing.T, err error, msg string) {
 		"%s — got %v", msg, err)
 }
 
-func registerNamespace(t *testing.T, ctx context.Context, c workflowservice.WorkflowServiceClient, ns string) {
+func registerNamespace(ctx context.Context, t *testing.T, c workflowservice.WorkflowServiceClient, ns string) {
 	t.Helper()
 	_, err := c.RegisterNamespace(ctx, &workflowservice.RegisterNamespaceRequest{
 		Namespace: ns,
@@ -205,7 +204,7 @@ func registerNamespace(t *testing.T, ctx context.Context, c workflowservice.Work
 // authorized call on a freshly-registered namespace can race a NotFound;
 // polling DescribeNamespace until it succeeds is the cheapest way to wait
 // for the namespace to be observable on the read paths the test will hit.
-func waitForNamespace(t *testing.T, ctx context.Context, c workflowservice.WorkflowServiceClient, ns string) {
+func waitForNamespace(ctx context.Context, t *testing.T, c workflowservice.WorkflowServiceClient, ns string) {
 	t.Helper()
 	require.Eventuallyf(t, func() bool {
 		_, err := c.DescribeNamespace(ctx, &workflowservice.DescribeNamespaceRequest{Namespace: ns})
@@ -320,7 +319,7 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	// The bootstrap key is temporal-system:admin, so this stack opts in.
 	addAdminAuthEnv(ctx, t, tgEnv, true)
-	stateVol := fmt.Sprintf("tempogate-multitenant-e2e-state-%d", time.Now().UnixNano())
+	stateVol := stateVolume(t, "tempogate-multitenant-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

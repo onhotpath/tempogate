@@ -146,8 +146,7 @@ func TestStateVolumeUnderFSGroup(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = net.Remove(ctx) })
 
-	vol := "tempogate-fsgroup-e2e-state-" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
-	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", vol).Run() })
+	vol := stateVolume(t, "tempogate-fsgroup-e2e-state")
 	mounts := testcontainers.Mounts(testcontainers.VolumeMount(vol, "/state"))
 	asRoot := func(name, script string) {
 		c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

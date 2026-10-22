@@ -10,11 +10,9 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -59,10 +57,7 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 	addDeviceUIServerEnv(env, tempogateIssuer)
 
-	// Registered before the containers so it runs after they are terminated
-	// (t.Cleanup is LIFO): a volume in use cannot be removed.
-	stateVol := fmt.Sprintf("tempogate-headers-e2e-state-%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", stateVol).Run() })
+	stateVol := stateVolume(t, "tempogate-headers-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -189,7 +184,7 @@ func TestSecurityHeaders(t *testing.T) {
 			attacker := "data:text/html," + url.PathEscape(
 				`<iframe name="control" srcdoc="<p>control</p>"></iframe>`+
 					`<iframe name="victim" src="`+target+`"></iframe>`)
-			frames := framesAfterLoad(t, browserCtx, attacker)
+			frames := framesAfterLoad(browserCtx, t, attacker)
 
 			control, ok := frames["control"]
 			require.True(t, ok, "control frame missing")
@@ -216,7 +211,7 @@ func TestSecurityHeaders(t *testing.T) {
 
 // framesAfterLoad navigates to pageURL and returns its child frames by name
 // once every one has committed a document other than the initial about:blank.
-func framesAfterLoad(t *testing.T, ctx context.Context, pageURL string) map[string]*cdp.Frame {
+func framesAfterLoad(ctx context.Context, t *testing.T, pageURL string) map[string]*cdp.Frame {
 	t.Helper()
 	require.NoError(t, chromedp.Run(ctx, chromedp.Navigate(pageURL)))
 	var frames map[string]*cdp.Frame
