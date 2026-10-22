@@ -132,13 +132,15 @@ test-e2e-images: ## build the three e2e images with a BuildKit-capable docker bu
 # The top-level e2e tests are independent (each starts its own network,
 # volumes and containers) and call t.Parallel; E2E_PARALLEL caps how many run
 # at once, since several start a postgres + Temporal stack and a 4-vCPU CI
-# runner has to host them side by side. -v prints each test's duration.
+# runner has to host them side by side. -v prints each test's duration;
+# naming the one test package (not ./test/e2e/...) lets go test stream that
+# output live instead of buffering it until the package finishes.
 E2E_PARALLEL ?= 3
 
 test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 	E2E_TEMPOGATE_IMAGE=$(E2E_TEMPOGATE_IMAGE) E2E_MOCKGOOGLE_IMAGE=$(E2E_MOCKGOOGLE_IMAGE) \
 	E2E_CLICLIENT_IMAGE=$(E2E_CLICLIENT_IMAGE) \
-		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 ./test/e2e/...
+		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 ./test/e2e
 
 # CI pulls the third-party e2e images (the tests' digest-pinned imageOr
 # defaults, see scripts/e2e-images.sh) in the background while it builds the
