@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,9 @@ func startTempogateAllowingFailure(
 ) bootResult {
 	t.Helper()
 	stateVol := fmt.Sprintf("tempogate-%s-e2e-state-%d", alias, time.Now().UnixNano())
+	// Registered before the containers so it runs after they are terminated
+	// (t.Cleanup is LIFO).
+	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", stateVol).Run() })
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

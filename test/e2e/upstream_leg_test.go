@@ -40,6 +40,7 @@ func TestUpstreamLegHardening(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	root := repoRoot(t)
 
