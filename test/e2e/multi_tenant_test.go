@@ -22,14 +22,16 @@
 //     a token with `tenant-a:admin` and `tenant-b:read` authorizes admin ops
 //     on tenant-a, read ops on tenant-b, and is denied on writes to tenant-b.
 //
-// On the S1 spike: the default ClaimMapper's last-write-wins behaviour is
-// scoped to duplicate entries for the SAME namespace; different namespaces
-// accumulate independently because they index into different keys of
-// claims.Namespaces. The multi-ns assertions below codify that — if a future
-// Temporal change collapsed the array across namespaces (the hypothetical
-// "last-write-wins across the whole array" failure mode) the tenant-a admin
-// op would be denied because tenant-a's grant would be overwritten by
-// tenant-b:read. That counterfactual is what makes the test meaningful.
+// On the S1 spike: the default ClaimMapper ORs duplicate entries for the
+// SAME namespace into one role bitmask (extractPermissions in Temporal
+// v1.25.2 common/authorization/default_jwt_claim_mapper.go), and different
+// namespaces accumulate independently because they index into different
+// keys of claims.Namespaces. The multi-ns assertions below codify the
+// latter: if a future Temporal change collapsed the array across namespaces
+// (a hypothetical "last write wins across the whole array" failure mode),
+// the tenant-a admin op would be denied because tenant-a's grant would be
+// overwritten by tenant-b:read. That counterfactual is what makes the test
+// meaningful.
 //
 // The in-process minting helper (mintInProcess) sidesteps extending the
 // admin API into a multi-permission surface: the production API stays
@@ -137,7 +139,7 @@ func TestMultiTenantNamespaceScoping(t *testing.T) {
 		// two-entry permissions claim; Temporal's default ClaimMapper
 		// accumulates the entries into claims.Namespaces independently
 		// because the keys differ. Were the array collapsed across
-		// namespaces (the S1 last-write-wins counterfactual) the
+		// namespaces (the S1 "last write wins" counterfactual) the
 		// tenant-a admin assertion below would fail because tenant-a's
 		// grant would be lost when tenant-b's was applied.
 		jwtStr := mintInProcess(ctx, t, st.tempogate,

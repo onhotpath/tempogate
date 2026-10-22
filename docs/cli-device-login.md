@@ -185,8 +185,8 @@ in this release.
 ## Security notes
 
 * **The user_code is short by design.** It is meant to be human-typeable.
-  Protection against guessing comes from a short TTL (`expires_in`, default
-  5 minutes), attempt limits on the verification page (below), one
+  Protection against guessing comes from a short TTL (`expires_in`,
+  15 minutes), attempt limits on the verification page (below), one
   uniform message for every unusable code, and the human visually
   verifying the code matches before approving.
 * **User-code attempts are rate limited (RFC 8628 §5.1).** Every page that

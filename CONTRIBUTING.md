@@ -30,7 +30,7 @@ git clone git@github.com:onhotpath/tempogate.git
 cd tempogate
 make tools     # one-time: installs gci + golangci-lint + govulncheck + actionlint into ./.bin
 make test      # check + race + coverage
-make start     # runs `tempogate serve` with build-info ldflags
+make start     # go run with build-info ldflags and no subcommand (prints help)
 ```
 
 Changes to the Helm chart, the Dockerfile or the examples are also checked by the `deploy` workflow.

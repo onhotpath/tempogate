@@ -1,6 +1,8 @@
 .bin/
 dist/
 coverage.*
+# `make gen-oas` output; generated on demand, not committed.
+api/openapi*.yaml
 *.db
 .env
 .claude/worktrees/

@@ -115,7 +115,7 @@ Keep `$token` in your secret manager, then call the API with it:
 
 ```bash
 curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-  -d '{"namespace":"payments","role":"worker","owner":"svc-payments","expires_at":"2026-12-31T00:00:00Z"}' \
+  -d '{"namespace":"payments","role":"write","owner":"svc-payments","expires_at":"2026-12-31T00:00:00Z"}' \
   http://127.0.0.1:8081/admin/keys
 ```
 
@@ -331,6 +331,7 @@ Every authorization response, success or error, carries `iss` ([RFC 9207](https:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `TEMPOGATE_ISSUER` | _(empty)_ | Read by `tempogate login` / `tempogate token` to find the server. Equivalent to the `--issuer` flag. Must be `https`, or plain `http` on a loopback host, unless `--insecure` is passed. Never read by `tempogate serve`. |
+| `TEMPOGATE_LOGIN_MODE` | _(empty)_ | Set to `device` to make `tempogate login` use the [device flow](cli-device-login.md), as `--device` does. An explicit `--device` or `--device=false` flag wins. Any other value is ignored. |
 
 ## Revocation and signing-key retirement
 

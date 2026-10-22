@@ -68,7 +68,8 @@ Temporal.
 same binary is the laptop CLI. Migrations are embedded and applied by `migrate`.
 Each server subcommand builds only the dependencies it uses, when it runs:
 `serve` (and `gen-oas`) need the full OIDC configuration, while `migrate`,
-`keys` and `sessions` need just the state store (`STATE_SQLITE_PATH`) and
+`keys` and `sessions` need just the state store (`STATE_SQLITE_PATH`, plus
+`KEYS_ENCRYPTION_KEY` for `keys` when signing keys are encrypted) and
 `version` nothing.
 
 **Pluggable state, SQLite by default.** The state store (signing keypair,

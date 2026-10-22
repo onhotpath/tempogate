@@ -117,9 +117,10 @@ func (s *PermsSuite) TestDuplicateNamespaceAppliesLastWriteWins() {
 		AddNamespace("payments", RoleAdmin),
 	)
 
-	// Temporal's default ClaimMapper documents that multiple entries for
-	// one namespace collapse to the last one. Grant mirrors that so
-	// callers can layer a default and override per-namespace.
+	// Grant keeps one role per namespace (last write wins) so callers can
+	// layer a default and override per-namespace. Temporal's default
+	// ClaimMapper would instead OR duplicate entries, so Grant never emits
+	// them.
 	s.Equal([]string{"payments:admin"}, g.ToClaim())
 }
 
