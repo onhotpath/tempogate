@@ -70,8 +70,9 @@ func (s *TokenE2ESuite) SetupTest() {
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:" + e2eConfidentialSecret))
 
-	authorizer := oidc.New(store, reg, testIssuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, "example.com", oidc.WithCallbackIssuer(testIssuer))
+	binding := newTestBinding(s.T(), testIssuer)
+	authorizer := oidc.New(store, reg, binding, testIssuer, testGoogleCID, s.mg.issuer()+"/auth")
+	callback := oidc.NewCallback(store, upstream, binding, "example.com", oidc.WithCallbackIssuer(testIssuer))
 	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience)))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
@@ -116,8 +117,7 @@ func (s *TokenE2ESuite) runFlow() string {
 	internalState := toGoogle.Query().Get("state")
 	s.Require().NotEmpty(internalState)
 
-	cbResp, err := s.client.Get(s.srv.URL + "/callback/google?code=real-google-code&state=" + internalState)
-	s.Require().NoError(err)
+	cbResp := s.callback(authResp, toGoogle)
 	cbResp.Body.Close()
 	s.Require().Equal(http.StatusFound, cbResp.StatusCode)
 
@@ -127,6 +127,24 @@ func (s *TokenE2ESuite) runFlow() string {
 	code := backToClient.Query().Get("code")
 	s.Require().NotEmpty(code)
 	return code
+}
+
+// callback consents at the mock Google and lands on /callback/google with the
+// binding cookie /authorize set. The issuer is https but the test server is
+// plain http, so the cookie is carried by hand rather than by a jar.
+func (s *TokenE2ESuite) callback(authResp *http.Response, toGoogle *url.URL) *http.Response {
+	code := s.mg.approve(s.T(), toGoogle.String())
+	req, err := http.NewRequest(http.MethodGet, s.srv.URL+"/callback/google?"+url.Values{
+		"code":  {code},
+		"state": {toGoogle.Query().Get("state")},
+	}.Encode(), http.NoBody)
+	s.Require().NoError(err)
+	for _, c := range authResp.Cookies() {
+		req.AddCookie(c)
+	}
+	resp, err := s.client.Do(req)
+	s.Require().NoError(err)
+	return resp
 }
 
 func (s *TokenE2ESuite) tokenRequest(form url.Values) *http.Response {
@@ -309,8 +327,7 @@ func (s *TokenE2ESuite) runConfidentialFlow(nonce string) string {
 	internalState := toGoogle.Query().Get("state")
 	s.Require().NotEmpty(internalState)
 
-	cbResp, err := s.client.Get(s.srv.URL + "/callback/google?code=real-google-code&state=" + internalState)
-	s.Require().NoError(err)
+	cbResp := s.callback(authResp, toGoogle)
 	cbResp.Body.Close()
 	s.Require().Equal(http.StatusFound, cbResp.StatusCode)
 

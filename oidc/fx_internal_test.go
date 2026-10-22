@@ -19,6 +19,9 @@ func TestSessionSigningKeyIsDecodedOnce(t *testing.T) {
 	require.Equal(t, sessionSigningKey(raw), key)
 
 	require.NotNil(t, newSessionManager(sessionManagerParams{SigningKey: key}))
+	binding, err := newUpstreamBinding(upstreamBindingParams{SigningKey: key, Issuer: "https://tempogate.example.com"})
+	require.NoError(t, err)
+	require.NotNil(t, binding)
 }
 
 func TestSessionSigningKeyRejectsInvalidKeys(t *testing.T) {

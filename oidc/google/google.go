@@ -8,10 +8,12 @@ package google
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	coreosoidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -20,18 +22,42 @@ import (
 	"github.com/onhotpath/tempogate/oidc"
 )
 
-const scopes = "openid email"
+const (
+	scopes = "openid email"
+
+	// Discovery retry spacing. The first retry comes quickly so a blip on
+	// the first callback after boot costs one failed login, not many; the
+	// cap keeps recovery from a long outage within half a minute while a
+	// down IdP sees at most one discovery request per window.
+	discoveryInitialBackoff = time.Second
+	discoveryMaxBackoff     = 30 * time.Second
+)
 
 // Client exchanges a Google authorization code for a verified identity. The
 // OIDC provider is resolved lazily on first use: discovery is a network call
 // we must not make at fx graph-construction time.
 type Client struct {
-	oauth       *oauth2.Config
-	issuerURL   string
-	clientID    string
-	once        sync.Once
-	verifier    *coreosoidc.IDTokenVerifier
-	verifierErr error
+	oauth     *oauth2.Config
+	issuerURL string
+	clientID  string
+	now       func() time.Time
+
+	// mu guards the discovery state below and serialises discovery itself,
+	// so concurrent callbacks during an outage share one attempt instead of
+	// each dialling the IdP.
+	mu       sync.Mutex
+	verifier *coreosoidc.IDTokenVerifier
+	lastErr  error
+	retryAt  time.Time
+	backoff  time.Duration
+}
+
+// Option configures a Client.
+type Option func(*Client)
+
+// WithClock swaps the clock that spaces discovery retries. For tests.
+func WithClock(now func() time.Time) Option {
+	return func(c *Client) { c.now = now }
 }
 
 // New builds the production client. tokenEndpoint and issuerURL are injected
@@ -39,8 +65,8 @@ type Client struct {
 // production they default to Google's real endpoints via config defaults.
 // redirectURL must equal the redirect_uri sent at /authorize, or Google
 // rejects the exchange.
-func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string) *Client {
-	return &Client{
+func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string, opts ...Option) *Client {
+	c := &Client{
 		oauth: &oauth2.Config{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
@@ -54,33 +80,52 @@ func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string) *
 		},
 		issuerURL: strings.TrimRight(issuerURL, "/"),
 		clientID:  clientID,
+		now:       time.Now,
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // ExchangeAndVerify swaps a Google authorization code for an id_token,
-// verifies its signature and claims against Google's JWKS, and returns the
-// identity it asserts: the stable `sub`, the email with its `email_verified`
-// flag, and the Workspace hosted domain (`hd`, empty for consumer accounts).
-// The gates on those claims are the callback's job, not this client's.
-func (c *Client) ExchangeAndVerify(ctx context.Context, code string) (oidc.UpstreamIdentity, error) {
-	tok, err := c.oauth.Exchange(ctx, code)
-	if err != nil {
-		return oidc.UpstreamIdentity{}, fmt.Errorf("google: code exchange: %w", err)
-	}
-
-	rawID, ok := tok.Extra("id_token").(string)
-	if !ok || rawID == "" {
-		return oidc.UpstreamIdentity{}, errors.New("google: token response missing id_token")
-	}
-
+// presenting the PKCE codeVerifier, verifies its signature and claims against
+// Google's JWKS, requires its nonce to equal nonce, and returns the identity
+// it asserts: the stable `sub`, the email with its `email_verified` flag, and
+// the Workspace hosted domain (`hd`, empty for consumer accounts). The gates
+// on those claims are the callback's job, not this client's. Every failure is
+// an *oidc.UpstreamError.
+func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonce string) (oidc.UpstreamIdentity, error) {
+	// Discover first: without a verifier the code could not be checked, so
+	// there is no point redeeming it.
 	verifier, err := c.idVerifier(ctx)
 	if err != nil {
 		return oidc.UpstreamIdentity{}, err
 	}
 
+	tok, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
+	if err != nil {
+		ue := &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, Err: fmt.Errorf("google: code exchange: %w", err)}
+		var re *oauth2.RetrieveError
+		if errors.As(err, &re) {
+			ue.OAuthError = re.ErrorCode
+		}
+		return oidc.UpstreamIdentity{}, ue
+	}
+
+	rawID, ok := tok.Extra("id_token").(string)
+	if !ok || rawID == "" {
+		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, errors.New("google: token response missing id_token"))
+	}
+
 	idToken, err := verifier.Verify(ctx, rawID)
 	if err != nil {
-		return oidc.UpstreamIdentity{}, fmt.Errorf("google: verify id_token: %w", err)
+		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, fmt.Errorf("google: verify id_token: %w", err))
+	}
+	// go-oidc leaves the nonce to the caller. A missing or different nonce
+	// means the id_token was minted for some other authorization request.
+	if nonce == "" || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(nonce)) != 1 {
+		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonNonce, errors.New("google: id_token nonce does not match the request"))
 	}
 
 	var claims struct {
@@ -89,13 +134,13 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code string) (oidc.Upstr
 		HostedDomain  string `json:"hd"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		return oidc.UpstreamIdentity{}, fmt.Errorf("google: decode id_token claims: %w", err)
+		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, fmt.Errorf("google: decode id_token claims: %w", err))
 	}
 	if idToken.Subject == "" {
-		return oidc.UpstreamIdentity{}, errors.New("google: id_token has no sub claim")
+		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonClaims, errors.New("google: id_token has no sub claim"))
 	}
 	if claims.Email == "" {
-		return oidc.UpstreamIdentity{}, errors.New("google: id_token has no email claim")
+		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonClaims, errors.New("google: id_token has no email claim"))
 	}
 	return oidc.UpstreamIdentity{
 		Subject:       idToken.Subject,
@@ -105,17 +150,34 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code string) (oidc.Upstr
 	}, nil
 }
 
-// idVerifier lazily performs OIDC discovery against issuerURL and caches the
-// resulting verifier. A discovery failure is cached too: a misconfigured or
-// unreachable issuer should fail every callback the same way, not retry-storm.
+// idVerifier lazily performs OIDC discovery against issuerURL. Only success
+// is cached: a failure is remembered just until a backoff window (doubling
+// up to discoveryMaxBackoff) elapses, so a transient outage on the first
+// callback after boot heals by itself while a hard outage costs the IdP at
+// most one discovery request per window.
 func (c *Client) idVerifier(ctx context.Context) (*coreosoidc.IDTokenVerifier, error) {
-	c.once.Do(func() {
-		provider, err := coreosoidc.NewProvider(ctx, c.issuerURL)
-		if err != nil {
-			c.verifierErr = fmt.Errorf("google: discovery (%s): %w", c.issuerURL, err)
-			return
-		}
-		c.verifier = provider.Verifier(&coreosoidc.Config{ClientID: c.clientID})
-	})
-	return c.verifier, c.verifierErr
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.verifier != nil {
+		return c.verifier, nil
+	}
+	now := c.now()
+	if c.lastErr != nil && now.Before(c.retryAt) {
+		return nil, c.lastErr
+	}
+
+	provider, err := coreosoidc.NewProvider(ctx, c.issuerURL)
+	if err != nil {
+		c.backoff = min(max(2*c.backoff, discoveryInitialBackoff), discoveryMaxBackoff)
+		c.retryAt = now.Add(c.backoff)
+		c.lastErr = upstreamErr(oidc.UpstreamReasonDiscovery, fmt.Errorf("google: discovery (%s): %w", c.issuerURL, err))
+		return nil, c.lastErr
+	}
+	c.verifier = provider.Verifier(&coreosoidc.Config{ClientID: c.clientID})
+	c.lastErr, c.backoff = nil, 0
+	return c.verifier, nil
+}
+
+func upstreamErr(reason string, err error) *oidc.UpstreamError {
+	return &oidc.UpstreamError{Reason: reason, Err: err}
 }

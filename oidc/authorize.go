@@ -65,18 +65,22 @@ type authorizeInput struct {
 	Nonce               string `query:"nonce"`
 }
 
-// authorizeOutput carries only a status + Location: huma writes a 302 with no
-// body when the output struct has no Body field (see processOutputType).
+// authorizeOutput carries only a status + Location + the state-binding
+// cookie: huma writes a 302 with no body when the output struct has no Body
+// field (see processOutputType).
 type authorizeOutput struct {
-	Status   int
-	Location string `header:"Location"`
+	Status    int
+	Location  string `header:"Location"`
+	SetCookie string `header:"Set-Cookie"`
 }
 
 // Authorizer serves GET /authorize: it validates the downstream client,
-// persists a pending AuthRequest, and redirects the browser to Google.
+// persists a pending AuthRequest, binds it to the browser, and redirects the
+// browser to Google with tempogate's own PKCE challenge and nonce.
 type Authorizer struct {
 	store        AuthRequestStore
 	clients      ClientRegistry
+	binding      *UpstreamBinding
 	issuer       string
 	googleClient string
 	googleAuth   string
@@ -121,12 +125,14 @@ func WithStateGenerator(fn func() (string, error)) Option {
 func New(
 	store AuthRequestStore,
 	clients ClientRegistry,
+	binding *UpstreamBinding,
 	issuer, googleClientID, googleAuthEndpoint string,
 	opts ...Option,
 ) *Authorizer {
 	a := &Authorizer{
 		store:        store,
 		clients:      clients,
+		binding:      binding,
 		issuer:       strings.TrimRight(issuer, "/"),
 		googleClient: googleClientID,
 		googleAuth:   googleAuthEndpoint,
@@ -216,7 +222,11 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 	if err != nil {
 		return nil, fmt.Errorf("oidc: build upstream url: %w", err)
 	}
-	return &authorizeOutput{Status: http.StatusFound, Location: loc}, nil
+	return &authorizeOutput{
+		Status:    http.StatusFound,
+		Location:  loc,
+		SetCookie: a.binding.Cookie(internalState).String(),
+	}, nil
 }
 
 // check validates the parts of an authorization request that are reported
@@ -288,6 +298,9 @@ func (a *Authorizer) googleURL(internalState string) (string, error) {
 	q.Set("response_type", "code")
 	q.Set("scope", googleScope)
 	q.Set("state", internalState)
+	q.Set("code_challenge", a.binding.codeChallenge(internalState))
+	q.Set("code_challenge_method", "S256")
+	q.Set("nonce", a.binding.nonce(internalState))
 	if a.hdHint != "" {
 		q.Set("hd", a.hdHint)
 	}

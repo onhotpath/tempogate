@@ -41,11 +41,28 @@ func newClientRegistry(p clientRegistryParams) (ClientRegistry, error) {
 	return reg, nil
 }
 
+type upstreamBindingParams struct {
+	fx.In
+
+	SigningKey sessionSigningKey
+
+	Issuer string `name:"oidc_issuer"`
+}
+
+// newUpstreamBinding builds the one UpstreamBinding /authorize and
+// /callback/google share. It derives from OIDC_SESSION_SIGNING_KEY, so the
+// whole browser-facing surface (device session cookie, device bounce state,
+// upstream state binding) rests on a single operator secret.
+func newUpstreamBinding(p upstreamBindingParams) (*UpstreamBinding, error) {
+	return NewUpstreamBinding(p.Issuer, p.SigningKey)
+}
+
 type authorizeParams struct {
 	fx.In
 
 	Store   AuthRequestStore
 	Clients ClientRegistry
+	Binding *UpstreamBinding
 
 	Issuer         string `name:"oidc_issuer"`
 	GoogleClientID string `name:"google_client_id"`
@@ -56,7 +73,7 @@ type authorizeParams struct {
 // newAuthorizeRegistrar builds the /authorize endpoint over the shared
 // registry, so its PKCE/confidential decisions cannot drift from /token's.
 func newAuthorizeRegistrar(p authorizeParams) func(huma.API) {
-	a := New(p.Store, p.Clients, p.Issuer, p.GoogleClientID, p.GoogleAuth,
+	a := New(p.Store, p.Clients, p.Binding, p.Issuer, p.GoogleClientID, p.GoogleAuth,
 		WithHostedDomainHint(p.HostedDomains))
 	return a.Register
 }
@@ -66,6 +83,7 @@ type callbackParams struct {
 
 	Store    CallbackStore
 	Upstream Upstream
+	Binding  *UpstreamBinding
 	Logger   *slog.Logger
 
 	Issuer         string `name:"oidc_issuer"`
@@ -88,7 +106,11 @@ func newCallbackRegistrar(p callbackParams) func(huma.API) {
 			"op", "oidc.callback",
 		)
 	}
-	c := NewCallback(p.Store, p.Upstream, p.AllowedDomains, WithCallbackIssuer(p.Issuer), WithAllowedHostedDomains(p.HostedDomains))
+	c := NewCallback(p.Store, p.Upstream, p.Binding, p.AllowedDomains,
+		WithCallbackIssuer(p.Issuer),
+		WithAllowedHostedDomains(p.HostedDomains),
+		WithCallbackLogger(p.Logger),
+	)
 	return c.Register
 }
 
@@ -325,6 +347,7 @@ func Fx() fx.Option {
 		fx.Provide(newClientRegistry),
 		fx.Provide(newSessionSigningKey),
 		fx.Provide(newSessionManager),
+		fx.Provide(newUpstreamBinding),
 		fx.Provide(newToken),
 		fx.Provide(
 			fx.Annotate(

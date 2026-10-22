@@ -93,7 +93,7 @@ func (s *AuthorizeSuite) serverFor(store oidc.AuthRequestStore, opts ...oidc.Opt
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",cli:http://127.0.0.1/callback,tempogate-device:")
 	s.Require().NoError(err)
 
-	a := oidc.New(store, reg, testIssuer, testGoogleCID, testGoogleAuth, opts...)
+	a := oidc.New(store, reg, newTestBinding(s.T(), testIssuer), testIssuer, testGoogleCID, testGoogleAuth, opts...)
 
 	mux := http.NewServeMux()
 	a.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -137,6 +137,66 @@ func (s *AuthorizeSuite) TestValidRequestRedirectsToGoogle() {
 	s.Equal(fixedState, q.Get("state"))
 }
 
+// TestUpstreamRequestCarriesPKCEAndNonce covers the Google leg's own PKCE and
+// nonce: they are tempogate's, not the downstream client's, so a code or
+// id_token minted for another login cannot be replayed into this one.
+func (s *AuthorizeSuite) TestUpstreamRequestCarriesPKCEAndNonce() {
+	resp := s.get(s.srv, validParams())
+	defer resp.Body.Close()
+	s.Require().Equal(http.StatusFound, resp.StatusCode)
+
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	s.Require().NoError(err)
+	q := loc.Query()
+	s.Equal("S256", q.Get("code_challenge_method"))
+	s.Len(q.Get("code_challenge"), 43, "S256 challenge is base64url(SHA-256)")
+	s.NotEqual(validParams().Get("code_challenge"), q.Get("code_challenge"),
+		"the downstream client's challenge must not be forwarded upstream")
+	s.NotEmpty(q.Get("nonce"))
+	s.NotEqual(q.Get("state"), q.Get("nonce"))
+}
+
+func (s *AuthorizeSuite) TestUpstreamPKCEAndNonceDifferPerRequest() {
+	states := []string{"state-one", "state-two"}
+	var challenges, nonces []string
+	for _, st := range states {
+		srv := s.serverFor(&memAuthStore{}, oidc.WithStateGenerator(func() (string, error) { return st, nil }))
+		resp := s.get(srv, validParams())
+		_ = resp.Body.Close()
+		srv.Close()
+		loc, err := url.Parse(resp.Header.Get("Location"))
+		s.Require().NoError(err)
+		challenges = append(challenges, loc.Query().Get("code_challenge"))
+		nonces = append(nonces, loc.Query().Get("nonce"))
+	}
+	s.NotEqual(challenges[0], challenges[1])
+	s.NotEqual(nonces[0], nonces[1])
+}
+
+// TestBindsStateToBrowser covers the login-CSRF defence: /authorize hands
+// the browser that started the flow a cookie only it will present at
+// /callback/google.
+func (s *AuthorizeSuite) TestBindsStateToBrowser() {
+	resp := s.get(s.srv, validParams())
+	defer resp.Body.Close()
+	s.Require().Equal(http.StatusFound, resp.StatusCode)
+
+	want := newTestBinding(s.T(), testIssuer).Cookie(fixedState)
+	var got *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == want.Name {
+			got = c
+		}
+	}
+	s.Require().NotNil(got, "/authorize must set the state-binding cookie")
+	s.Equal(want.Value, got.Value)
+	s.True(got.HttpOnly)
+	s.True(got.Secure)
+	s.Equal("/", got.Path)
+	s.Equal(http.SameSiteLaxMode, got.SameSite)
+	s.Equal(300, got.MaxAge, "the cookie lives exactly as long as the auth request")
+}
+
 // TestHostedDomainHint covers the `hd` parameter sent to Google. It is a UX
 // hint only (Google pre-selects the Workspace account); the callback's `hd`
 // claim check is the security control.
@@ -176,7 +236,7 @@ func (s *AuthorizeSuite) TestHostedDomainHint() {
 func (s *AuthorizeSuite) TestPathIssuerRedirectURICarriesPrefix() {
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
-	a := oidc.New(s.store, reg, testIssuer+"/idp", testGoogleCID, testGoogleAuth,
+	a := oidc.New(s.store, reg, newTestBinding(s.T(), testIssuer+"/idp"), testIssuer+"/idp", testGoogleCID, testGoogleAuth,
 		oidc.WithClock(func() time.Time { return fixedNow }),
 		oidc.WithStateGenerator(func() (string, error) { return fixedState, nil }),
 	)
@@ -221,7 +281,7 @@ func (s *AuthorizeSuite) confidentialSrv() *httptest.Server {
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:ui-secret"))
 
-	a := oidc.New(s.store, reg, testIssuer, testGoogleCID, testGoogleAuth,
+	a := oidc.New(s.store, reg, newTestBinding(s.T(), testIssuer), testIssuer, testGoogleCID, testGoogleAuth,
 		oidc.WithClock(func() time.Time { return fixedNow }),
 		oidc.WithStateGenerator(func() (string, error) { return fixedState, nil }),
 	)
@@ -562,7 +622,7 @@ func (s *AuthorizeSuite) TestDefaultStateGeneratorProducesOpaqueState() {
 func (s *AuthorizeSuite) TestMalformedGoogleEndpointIsServerError() {
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
-	a := oidc.New(&memAuthStore{}, reg, testIssuer, testGoogleCID, "http://%zz/bad")
+	a := oidc.New(&memAuthStore{}, reg, newTestBinding(s.T(), testIssuer), testIssuer, testGoogleCID, "http://%zz/bad")
 
 	mux := http.NewServeMux()
 	a.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))

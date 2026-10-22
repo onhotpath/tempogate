@@ -29,8 +29,10 @@ Temporal and an OAuth2 client of Google.
 
 1. The Web UI redirects the browser to tempogate `/authorize`.
 2. tempogate federates the sign-in to Google (the authorization-code flow,
-   server-side), then applies its email-domain gate to Google's verified
-   email.
+   server-side, with tempogate's own PKCE and nonce, and the internal
+   `state` bound to the browser by a short-lived cookie), then applies its
+   email-domain gate to Google's verified email. See
+   [Google leg](configuration.md#google-leg).
 3. tempogate mints two JWTs and completes the OIDC flow back to the UI:
    a short-lived access token (`aud` = the Temporal audience, a
    `permissions` claim) and a separate ID token for the UI's login (`aud` =

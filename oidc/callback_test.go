@@ -1,12 +1,14 @@
 package oidc_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -47,6 +49,20 @@ func (m *memCallbackStore) put(ar oidc.AuthRequest) {
 	m.requests[ar.InternalState] = ar
 }
 
+func (m *memCallbackStore) pending(internalState string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.requests[internalState]
+	return ok
+}
+
+// SaveAuthRequest lets one store back both /authorize and /callback/google
+// in the round-trip tests.
+func (m *memCallbackStore) SaveAuthRequest(_ context.Context, ar oidc.AuthRequest) error {
+	m.put(ar)
+	return nil
+}
+
 func (m *memCallbackStore) ConsumeAuthRequest(_ context.Context, internalState string) (oidc.AuthRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -84,13 +100,17 @@ func (m *memCallbackStore) codeCount() int {
 }
 
 type fakeUpstream struct {
-	id      oidc.UpstreamIdentity
-	err     error
-	gotCode string
+	id          oidc.UpstreamIdentity
+	err         error
+	gotCode     string
+	gotVerifier string
+	gotNonce    string
 }
 
-func (f *fakeUpstream) ExchangeAndVerify(_ context.Context, code string) (oidc.UpstreamIdentity, error) {
+func (f *fakeUpstream) ExchangeAndVerify(_ context.Context, code, codeVerifier, nonce string) (oidc.UpstreamIdentity, error) {
 	f.gotCode = code
+	f.gotVerifier = codeVerifier
+	f.gotNonce = nonce
 	if f.err != nil {
 		return oidc.UpstreamIdentity{}, f.err
 	}
@@ -104,10 +124,12 @@ func aliceIdentity() oidc.UpstreamIdentity {
 type CallbackSuite struct {
 	suite.Suite
 
-	store  *memCallbackStore
-	up     *fakeUpstream
-	srv    *httptest.Server
-	client *http.Client
+	store   *memCallbackStore
+	up      *fakeUpstream
+	binding *oidc.UpstreamBinding
+	logs    *bytes.Buffer
+	srv     *httptest.Server
+	client  *http.Client
 }
 
 func TestCallbackSuite(t *testing.T) {
@@ -117,6 +139,8 @@ func TestCallbackSuite(t *testing.T) {
 func (s *CallbackSuite) SetupTest() {
 	s.store = newMemCallbackStore()
 	s.up = &fakeUpstream{id: aliceIdentity()}
+	s.binding = newTestBinding(s.T(), testIssuer)
+	s.logs = &bytes.Buffer{}
 	s.srv = s.serverFor(s.store, s.up)
 	s.client = &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -130,10 +154,11 @@ func (s *CallbackSuite) TearDownTest() {
 }
 
 func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up oidc.Upstream) *httptest.Server {
-	c := oidc.NewCallback(store, up, allowedDomains,
+	c := oidc.NewCallback(store, up, s.binding, allowedDomains,
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 		oidc.WithCallbackIssuer(testIssuer),
+		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(s.logs, nil))),
 	)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -154,8 +179,19 @@ func (s *CallbackSuite) pendingRequest(internalState string) oidc.AuthRequest {
 	}
 }
 
+// get plays the browser that started the flow: it presents the binding
+// cookie /authorize set for the request's state.
 func (s *CallbackSuite) get(q url.Values) *http.Response {
-	resp, err := s.client.Get(s.srv.URL + "/callback/google?" + q.Encode())
+	return s.getFrom(s.srv, q, s.binding.Cookie(q.Get("state")))
+}
+
+func (s *CallbackSuite) getFrom(srv *httptest.Server, q url.Values, cookies ...*http.Cookie) *http.Response {
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/callback/google?"+q.Encode(), http.NoBody)
+	s.Require().NoError(err)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := s.client.Do(req)
 	s.Require().NoError(err)
 	return resp
 }
@@ -269,7 +305,7 @@ func (s *CallbackSuite) TestHostedDomainGate() {
 			up := &fakeUpstream{id: oidc.UpstreamIdentity{
 				Subject: "google-sub-x", Email: tc.email, EmailVerified: true, HostedDomain: tc.hd,
 			}}
-			c := oidc.NewCallback(store, up, allowedDomains,
+			c := oidc.NewCallback(store, up, s.binding, allowedDomains,
 				oidc.WithAllowedHostedDomains(tc.hosted),
 				oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 				oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
@@ -279,8 +315,7 @@ func (s *CallbackSuite) TestHostedDomainGate() {
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
 
-			resp, err := s.client.Get(srv.URL + "/callback/google?" + callbackQuery("c", fixedState).Encode())
-			s.Require().NoError(err)
+			resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
 			defer resp.Body.Close()
 
 			if tc.admit {
@@ -449,7 +484,7 @@ func (s *CallbackSuite) TestMalformedRedirectURIIsServerError() {
 func (s *CallbackSuite) TestDefaultCodeGeneratorIsOpaque() {
 	store := newMemCallbackStore()
 	store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(store, &fakeUpstream{id: aliceIdentity()}, allowedDomains,
+	c := oidc.NewCallback(store, &fakeUpstream{id: aliceIdentity()}, s.binding, allowedDomains,
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 	) // no WithCodeGenerator: exercises crypto/rand path
 	mux := http.NewServeMux()
@@ -457,8 +492,7 @@ func (s *CallbackSuite) TestDefaultCodeGeneratorIsOpaque() {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp, err := s.client.Get(srv.URL + "/callback/google?" + callbackQuery("c", fixedState).Encode())
-	s.Require().NoError(err)
+	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
 	defer resp.Body.Close()
 	s.Require().Equal(http.StatusFound, resp.StatusCode)
 
@@ -477,4 +511,143 @@ func (s *CallbackSuite) TestConsumeErrorOtherThanNotFoundIsServerError() {
 	defer resp.Body.Close()
 
 	s.Equal(http.StatusInternalServerError, resp.StatusCode)
+}
+
+// TestStateNotBoundToBrowserIsRejected is the login-CSRF / code-injection
+// regression: a valid internal state presented by a browser that did not
+// start the flow (no binding cookie, a cookie for another state, or a forged
+// value) is refused before the state is consumed or the code exchanged.
+func (s *CallbackSuite) TestStateNotBoundToBrowserIsRejected() {
+	tampered := s.binding.Cookie(fixedState)
+	tampered.Value = s.binding.Cookie("some-other-state").Value
+	otherState := s.binding.Cookie("some-other-state")
+	otherState.Name = s.binding.Cookie(fixedState).Name
+
+	cases := map[string][]*http.Cookie{
+		"no binding cookie":          nil,
+		"cookie for another state":   {s.binding.Cookie("some-other-state")},
+		"forged value":               {tampered},
+		"another state's value":      {otherState},
+		"cookie from another server": {newTestBindingWithKey(s.T(), testIssuer, "fedcba9876543210fedcba9876543210").Cookie(fixedState)},
+	}
+	for name, cookies := range cases {
+		s.Run(name, func() {
+			s.store.put(s.pendingRequest(fixedState))
+			s.up.gotCode = ""
+
+			resp := s.getFrom(s.srv, callbackQuery("attacker-code", fixedState), cookies...)
+			defer resp.Body.Close()
+
+			s.Equal(http.StatusBadRequest, resp.StatusCode)
+			s.Equal("invalid_request", s.decodeOAuthError(resp))
+			s.Empty(resp.Header.Get("Location"))
+			s.Empty(s.up.gotCode, "the code must not be exchanged")
+			s.Zero(s.store.codeCount())
+			s.True(s.store.pending(fixedState), "an unbound request must not consume the state")
+		})
+	}
+	s.Contains(s.logs.String(), `"cause":"state_not_bound_to_browser"`)
+	s.NotContains(s.logs.String(), "attacker-code")
+}
+
+func (s *CallbackSuite) TestGoogleErrorRequiresBinding() {
+	s.store.put(s.pendingRequest(fixedState))
+
+	q := url.Values{}
+	q.Set("state", fixedState)
+	q.Set("error", "access_denied")
+	resp := s.getFrom(s.srv, q)
+	defer resp.Body.Close()
+
+	s.Equal(http.StatusBadRequest, resp.StatusCode)
+	s.Empty(resp.Header.Get("Location"))
+}
+
+func (s *CallbackSuite) TestUpstreamGetsTheRequestsVerifierAndNonce() {
+	s.store.put(s.pendingRequest(fixedState))
+
+	resp := s.get(callbackQuery("c", fixedState))
+	defer resp.Body.Close()
+	s.Require().Equal(http.StatusFound, resp.StatusCode)
+
+	s.NotEmpty(s.up.gotVerifier)
+	s.NotEmpty(s.up.gotNonce)
+	s.GreaterOrEqual(len(s.up.gotVerifier), 43, "RFC 7636 verifier minimum length")
+}
+
+func (s *CallbackSuite) TestSuccessClearsBindingCookie() {
+	s.store.put(s.pendingRequest(fixedState))
+
+	resp := s.get(callbackQuery("c", fixedState))
+	defer resp.Body.Close()
+	s.Require().Equal(http.StatusFound, resp.StatusCode)
+
+	want := s.binding.Cookie(fixedState)
+	var cleared bool
+	for _, c := range resp.Cookies() {
+		if c.Name == want.Name && c.MaxAge < 0 {
+			cleared = true
+			s.Equal(want.Path, c.Path)
+		}
+	}
+	s.True(cleared, "a completed login must drop its binding cookie")
+}
+
+// TestUpstreamFailureIsLoggedWithReason covers the operator trail for a
+// failed Google sign-in: one warn line carrying the failure category, never
+// the code or any token.
+func (s *CallbackSuite) TestUpstreamFailureIsLoggedWithReason() {
+	cases := []struct {
+		name      string
+		err       error
+		cause     string
+		oauthCode string
+	}{
+		{"nonce mismatch", &oidc.UpstreamError{Reason: oidc.UpstreamReasonNonce, Err: errors.New("nonce secret-nonce-value")}, oidc.UpstreamReasonNonce, ""},
+		{"exchange rejected", &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, OAuthError: "invalid_grant", Err: errors.New("body with secret-token")}, oidc.UpstreamReasonExchange, "invalid_grant"},
+		{"wrapped", fmt.Errorf("outer: %w", &oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("dns")}), oidc.UpstreamReasonDiscovery, ""},
+		{"unclassified", errors.New("secret-token in an unknown error"), "unknown", ""},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			s.logs.Reset()
+			s.up.err = tc.err
+			s.store.put(s.pendingRequest(fixedState))
+
+			resp := s.get(callbackQuery("google-code-secret", fixedState))
+			defer resp.Body.Close()
+			s.Require().Equal(http.StatusBadGateway, resp.StatusCode)
+
+			var line map[string]any
+			s.Require().NoError(json.Unmarshal(s.logs.Bytes(), &line), "exactly one JSON log line: %s", s.logs.String())
+			s.Equal("WARN", line["level"])
+			s.Equal(tc.cause, line["cause"])
+			if tc.oauthCode != "" {
+				s.Equal(tc.oauthCode, line["oauth_error"])
+			}
+			for _, secret := range []string{"google-code-secret", "secret-token", "secret-nonce-value"} {
+				s.NotContains(s.logs.String(), secret)
+			}
+		})
+	}
+}
+
+func (s *CallbackSuite) TestMissingSubjectIsLogged() {
+	s.up.id.Subject = ""
+	s.store.put(s.pendingRequest(fixedState))
+
+	resp := s.get(callbackQuery("c", fixedState))
+	defer resp.Body.Close()
+
+	s.Equal(http.StatusBadGateway, resp.StatusCode)
+	s.Contains(s.logs.String(), `"cause":"`+oidc.UpstreamReasonClaims+`"`)
+}
+
+// s256 is the RFC 7636 S256 transform.
+func TestUpstreamErrorUnwrapsToItsCause(t *testing.T) {
+	cause := errors.New("token endpoint unreachable")
+	err := &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, Err: cause}
+	if !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Fatalf("UpstreamError must wrap and describe its cause, got %v", err)
+	}
 }
