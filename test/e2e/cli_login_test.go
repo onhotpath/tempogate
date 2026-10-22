@@ -107,6 +107,7 @@ type cliStack struct {
 	mockBaseURL      string // mapped http://host:port for mockgoogle
 	tempogateBaseURL string // mapped http://host:port for tempogate
 	frontendAddr     string
+	tempogate        testcontainers.Container
 	client           testcontainers.Container
 	chromeWS         string
 }
@@ -215,6 +216,27 @@ func TestCLILogin(t *testing.T) {
 	again := st.runToken(ctx, t)
 	require.NotEqual(t, refreshed, again, "the rotated refresh token must renew again")
 	assertTempogateJWT(t, again)
+
+	// --- revocation: an operator ends the user's sessions with `tempogate
+	// sessions revoke`, run inside the server container against its state
+	// volume. The CLI's next refresh then fails instead of renewing.
+	code, out, err := st.tempogate.Exec(ctx,
+		[]string{"/tempogate", "sessions", "revoke", "--email", allowedEmail}, tcexec.Multiplexed())
+	require.NoError(t, err)
+	revokeOut, _ := io.ReadAll(out)
+	require.Equalf(t, 0, code, "sessions revoke: %s", revokeOut)
+	require.Contains(t, string(revokeOut), "revoked 1 session(s)")
+
+	revoked := st.readToken(ctx, t)
+	revoked.ExpiresAt = time.Now().Add(-time.Minute)
+	st.writeToken(ctx, t, revoked)
+	code, out, err = st.client.Exec(ctx,
+		[]string{"tempogate", "token", "--issuer", tempogateIssuer, "--token-file", cliTokenFile},
+		tcexec.Multiplexed())
+	require.NoError(t, err)
+	tokenOut, _ := io.ReadAll(out)
+	require.NotEqualf(t, 0, code, "a revoked session must not refresh: %s", tokenOut)
+	require.Contains(t, string(tokenOut), "invalid_grant")
 }
 
 type loginResult struct {
@@ -493,6 +515,7 @@ func setupCLIStack(ctx context.Context, t *testing.T, extraTempogateEnv ...map[s
 		mockBaseURL:      mockBase,
 		tempogateBaseURL: mappedHTTP(ctx, t, tempogate, "8000"),
 		frontendAddr:     mappedAddr(ctx, t, temporal, "7233"),
+		tempogate:        tempogate,
 		client:           clientC,
 		chromeWS:         devtoolsWS(ctx, t, clientC),
 	}

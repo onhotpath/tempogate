@@ -31,6 +31,17 @@ const deviceUIFxClients = "ui:https://app.example.com/auth,tempogate-device:,tem
 
 type FxSuite struct {
 	suite.Suite
+
+	// lifetimes feed the OIDC_*_TTL / OIDC_REFRESH_MAX_LIFETIME annotations;
+	// SetupTest resets them to the defaults so only the validation test
+	// varies them.
+	accessTTL, refreshTTL, refreshMax time.Duration
+}
+
+func (s *FxSuite) SetupTest() {
+	s.accessTTL = oidc.DefaultAccessTokenTTL
+	s.refreshTTL = oidc.DefaultRefreshTokenTTL
+	s.refreshMax = oidc.DefaultRefreshMaxLifetime
 }
 
 func TestFxSuite(t *testing.T) {
@@ -80,6 +91,9 @@ func (s *FxSuite) supplyConfigAt(issuer, basePath, clients, secrets, signingKeyB
 			fx.Annotated{Name: "oidc_allowed_domains", Target: "example.com"},
 			fx.Annotated{Name: "oidc_session_ttl", Target: 5 * time.Minute},
 			fx.Annotated{Name: "oidc_session_signing_key", Target: signingKeyB64},
+			fx.Annotated{Name: "oidc_access_token_ttl", Target: s.accessTTL},
+			fx.Annotated{Name: "oidc_refresh_token_ttl", Target: s.refreshTTL},
+			fx.Annotated{Name: "oidc_refresh_max_lifetime", Target: s.refreshMax},
 			fx.Annotated{Name: "google_client_id", Target: testGoogleCID},
 			fx.Annotated{Name: "google_auth_endpoint", Target: testGoogleAuth},
 		),
@@ -181,6 +195,22 @@ func (s *FxSuite) TestTokenDeviceCodeBranchIsWired() {
 	s.Require().NoError(json.NewDecoder(resp.Body).Decode(&oauthErr))
 	s.Equal("invalid_grant", oauthErr.Error,
 		"device-code branch must be reachable; unsupported_grant_type means the DeviceCodeStore is not wired into tokenParams")
+}
+
+// TestInvalidTokenLifetimesFailGraph: an incoherent OIDC_*_TTL /
+// OIDC_REFRESH_MAX_LIFETIME combination stops the server at startup rather
+// than minting tokens whose lifecycle contradicts itself.
+func (s *FxSuite) TestInvalidTokenLifetimesFailGraph() {
+	s.refreshTTL = 60 * 24 * time.Hour // beyond the 30d absolute default
+	var got registrarParams
+	app := fx.New(
+		s.supplyConfig(deviceUIFxClients),
+		oidc.Fx(),
+		fx.Populate(&got),
+		fx.NopLogger,
+	)
+	s.Require().Error(app.Err())
+	s.Contains(app.Err().Error(), "OIDC_REFRESH_MAX_LIFETIME")
 }
 
 func (s *FxSuite) TestMalformedClientsFailsGraph() {

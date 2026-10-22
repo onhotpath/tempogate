@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,36 +37,59 @@ const (
 	// poll. The full URN is part of the contract — clients copy it verbatim.
 	grantDeviceCode = "urn:ietf:params:oauth:grant-type:device_code"
 
-	// accessTokenTTL is the lifetime of a minted access/id token. Short
-	// enough that a leaked token has a bounded blast radius; the refresh
-	// token covers continuity.
-	accessTokenTTL = 4 * time.Hour
+	// DefaultAccessTokenTTL is the lifetime of a minted access/id token
+	// (OIDC_ACCESS_TOKEN_TTL). Short enough that a leaked token has a
+	// bounded blast radius; the refresh token covers continuity.
+	DefaultAccessTokenTTL = 4 * time.Hour
 
-	// refreshTokenTTL bounds how long a session can be silently resumed
-	// without a fresh Google round-trip.
-	refreshTokenTTL = 30 * 24 * time.Hour
+	// DefaultRefreshTokenTTL is the idle lifetime of each rotated refresh
+	// token (OIDC_REFRESH_TOKEN_TTL): a session unused for this long ends.
+	DefaultRefreshTokenTTL = 7 * 24 * time.Hour
 
-	refreshEntropyBytes = 32
+	// DefaultRefreshMaxLifetime is the absolute session lifetime counted
+	// from the original sign-in (OIDC_REFRESH_MAX_LIFETIME). Rotation never
+	// extends it, so a session is re-authenticated upstream (and re-checked
+	// against Google) at least this often.
+	DefaultRefreshMaxLifetime = 30 * 24 * time.Hour
+
+	refreshEntropyBytes  = 32
+	familyIDEntropyBytes = 16
 )
 
-// ErrRefreshNotFound is returned by ConsumeRefresh when no token matches —
-// because it was never issued, was issued to a different client, has already
-// been used (single-use; refresh is rotated on every exchange), or its row was
-// reaped. The /token handler maps this to OAuth2 invalid_grant.
-var ErrRefreshNotFound = errors.New("oidc: refresh token not found")
+var (
+	// ErrRefreshNotFound is returned by ConsumeRefresh when no live token
+	// matches: it was never issued, was issued to a different client, was
+	// revoked, or its row was reaped. The /token handler maps this to OAuth2
+	// invalid_grant.
+	ErrRefreshNotFound = errors.New("oidc: refresh token not found")
+
+	// ErrRefreshReused is returned by ConsumeRefresh when the presented token
+	// was already rotated. Together with it the store returns the consumed
+	// token's row, so the handler can revoke its family (RFC 9700 §4.14.2).
+	ErrRefreshReused = errors.New("oidc: refresh token already used")
+
+	// ErrRefreshFamilyRevoked is returned by SaveRefresh when the token's
+	// family was revoked, so a rotation racing a revocation cannot keep the
+	// chain alive.
+	ErrRefreshFamilyRevoked = errors.New("oidc: refresh token family revoked")
+)
 
 // Refresh is the opaque, single-use credential a client presents to obtain a
 // fresh access token without another Google round-trip. Token is the random
 // secret the client holds; JTI references the access token minted alongside
 // it, so an operator can correlate a refresh row with the JWT it renewed.
-// Each exchange consumes the row and mints a new one (rotation), so a
-// captured refresh token is usable at most once before it is invalidated by
-// the legitimate client's next refresh.
+// Each exchange consumes the row and mints a new one (rotation).
+//
+// FamilyID and AuthTime are fixed at sign-in and carried through every
+// rotation: FamilyID names the chain so a replay or an operator can revoke
+// all of it at once, and AuthTime anchors the absolute session lifetime.
 type Refresh struct {
 	Token     string
 	JTI       string
 	ClientID  string
 	Email     string
+	FamilyID  string
+	AuthTime  time.Time
 	CreatedAt time.Time
 	ExpiresAt time.Time
 }
@@ -82,15 +107,22 @@ type TokenStore interface {
 	// consumed-but-expired code is still returned and then rejected.
 	ConsumeAuthCode(ctx context.Context, code string) (AuthCode, error)
 
-	// SaveRefresh persists a freshly minted refresh token.
+	// SaveRefresh persists a freshly minted refresh token. It returns
+	// ErrRefreshFamilyRevoked when r's family has been revoked.
 	SaveRefresh(ctx context.Context, r Refresh) error
 
-	// ConsumeRefresh atomically loads and deletes the refresh token issued to
-	// clientID, enforcing single use so every exchange rotates the token. It
-	// returns ErrRefreshNotFound when no row matches; a token issued to
-	// another client does not match and is left in place, so a cross-client
-	// attempt cannot burn it.
-	ConsumeRefresh(ctx context.Context, token, clientID string) (Refresh, error)
+	// ConsumeRefresh atomically marks the live refresh token issued to
+	// clientID consumed at the given time, enforcing single use so every
+	// exchange rotates the token. The consumed row stays behind as a
+	// tombstone: presenting it again returns its row with ErrRefreshReused.
+	// Any other miss returns ErrRefreshNotFound; a token issued to another
+	// client does not match and is left in place, so a cross-client attempt
+	// cannot burn it.
+	ConsumeRefresh(ctx context.Context, token, clientID string, at time.Time) (Refresh, error)
+
+	// RevokeRefreshFamily revokes every token in the family, live or
+	// consumed, and reports how many live tokens it revoked.
+	RevokeRefreshFamily(ctx context.Context, familyID string, at time.Time) (int, error)
 }
 
 // TokenClients is the client registry as the /token handler needs it: look
@@ -110,12 +142,18 @@ type TokenClients interface {
 // DeviceCodeStore is wired in) redeems the RFC 8628 device-code grant the CLI
 // polls on.
 type Token struct {
-	store      TokenStore
-	devices    DeviceCodeStore
-	signer     *keys.Signer
-	clients    TokenClients
-	now        func() time.Time
-	newRefresh func() (string, error)
+	store          TokenStore
+	devices        DeviceCodeStore
+	signer         *keys.Signer
+	clients        TokenClients
+	allowedDomains map[string]struct{}
+	logger         *slog.Logger
+	now            func() time.Time
+	newRefresh     func() (string, error)
+
+	accessTTL          time.Duration
+	refreshTTL         time.Duration
+	refreshMaxLifetime time.Duration
 }
 
 type TokenOption func(*Token)
@@ -131,6 +169,56 @@ func WithRefreshGenerator(fn func() (string, error)) TokenOption {
 	return func(t *Token) { t.newRefresh = fn }
 }
 
+// WithAllowedDomains sets the email-domain allowlist (OIDC_ALLOWED_DOMAINS)
+// the refresh grant re-applies on every exchange, so removing a domain ends
+// its users' sessions at their next refresh instead of at their absolute
+// expiry. Without it no refresh is honoured, mirroring the callback, where
+// an empty allowlist admits nobody.
+func WithAllowedDomains(raw string) TokenOption {
+	return func(t *Token) { t.allowedDomains = parseDomains(raw) }
+}
+
+// WithTokenLifetimes sets the access-token TTL, the idle TTL of each rotated
+// refresh token, and the absolute session lifetime counted from sign-in.
+// Zero keeps the corresponding default; ValidateTokenLifetimes is the
+// startup check for operator-supplied values.
+func WithTokenLifetimes(access, refreshIdle, refreshMax time.Duration) TokenOption {
+	return func(t *Token) {
+		if access > 0 {
+			t.accessTTL = access
+		}
+		if refreshIdle > 0 {
+			t.refreshTTL = refreshIdle
+		}
+		if refreshMax > 0 {
+			t.refreshMaxLifetime = refreshMax
+		}
+	}
+}
+
+// WithTokenLogger sets the structured log sink for refresh-token security
+// events (reuse detection, domain revocation). Defaults to a discarding
+// logger so tests and direct constructors stay quiet.
+func WithTokenLogger(l *slog.Logger) TokenOption {
+	return func(t *Token) { t.logger = l }
+}
+
+// ValidateTokenLifetimes rejects a lifetime configuration that would make
+// the refresh-token lifecycle incoherent: every value must be positive, an
+// access token must expire before the refresh token that renews it would go
+// idle, and the idle lifetime cannot exceed the absolute one.
+func ValidateTokenLifetimes(access, refreshIdle, refreshMax time.Duration) error {
+	switch {
+	case access <= 0 || refreshIdle <= 0 || refreshMax <= 0:
+		return fmt.Errorf("oidc: OIDC_ACCESS_TOKEN_TTL (%s), OIDC_REFRESH_TOKEN_TTL (%s) and OIDC_REFRESH_MAX_LIFETIME (%s) must all be positive", access, refreshIdle, refreshMax)
+	case access >= refreshIdle:
+		return fmt.Errorf("oidc: OIDC_ACCESS_TOKEN_TTL (%s) must be shorter than OIDC_REFRESH_TOKEN_TTL (%s)", access, refreshIdle)
+	case refreshIdle > refreshMax:
+		return fmt.Errorf("oidc: OIDC_REFRESH_TOKEN_TTL (%s) must not exceed OIDC_REFRESH_MAX_LIFETIME (%s)", refreshIdle, refreshMax)
+	}
+	return nil
+}
+
 // WithDeviceCodeStore plugs the RFC 8628 device-code grant in. Without it,
 // /token rejects device_code as unsupported_grant_type; with it, the full
 // §3.5 polling state machine is exposed. Declared as a separate dependency
@@ -142,11 +230,15 @@ func WithDeviceCodeStore(s DeviceCodeStore) TokenOption {
 
 func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts ...TokenOption) *Token {
 	t := &Token{
-		store:      store,
-		signer:     signer,
-		clients:    clients,
-		now:        func() time.Time { return time.Now().UTC() },
-		newRefresh: randomRefresh,
+		store:              store,
+		signer:             signer,
+		clients:            clients,
+		logger:             slog.New(slog.DiscardHandler),
+		now:                func() time.Time { return time.Now().UTC() },
+		newRefresh:         randomRefresh,
+		accessTTL:          DefaultAccessTokenTTL,
+		refreshTTL:         DefaultRefreshTokenTTL,
+		refreshMaxLifetime: DefaultRefreshMaxLifetime,
 	}
 	for _, o := range opts {
 		o(t)
@@ -351,7 +443,7 @@ func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, aut
 	if err != nil {
 		return nil, err
 	}
-	return t.issue(ctx, r.Email, r.ClientID, r.Nonce)
+	return t.issue(ctx, r.Email, r.ClientID, r.Nonce, lineage{})
 }
 
 func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
@@ -371,32 +463,98 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 		return nil, err
 	}
 
-	rt, err := t.store.ConsumeRefresh(ctx, token, clientID)
+	now := t.now()
+	rt, err := t.store.ConsumeRefresh(ctx, token, clientID, now)
+	if errors.Is(err, ErrRefreshReused) {
+		// A rotated token came back: either the client or an attacker holds
+		// a stale copy, and the server cannot tell which, so the whole
+		// family goes (RFC 9700 §4.14.2). That includes the newer token the
+		// other party holds. A duplicate presentation that lost a race to
+		// rotate the same live token lands here too; it is a replay by
+		// definition once one presentation has won.
+		if err := t.revokeFamily(ctx, rt, now, "refresh_token_reuse",
+			"oidc: refresh token reuse detected; revoked the token family"); err != nil {
+			return nil, err
+		}
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "refresh token already used; the session has been revoked")
+	}
 	if errors.Is(err, ErrRefreshNotFound) {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown, already-used, or other client's refresh token")
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown, revoked, or other client's refresh token")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("oidc: consume refresh token: %w", err)
 	}
 
-	if t.now().After(rt.ExpiresAt) {
+	if now.After(rt.ExpiresAt) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "refresh token expired")
+	}
+	// ExpiresAt is already capped at mint time; checking the absolute
+	// lifetime here too applies a lowered OIDC_REFRESH_MAX_LIFETIME (and the
+	// migration's backfilled auth_time) to tokens minted before it.
+	if !now.Before(rt.AuthTime.Add(t.refreshMaxLifetime)) {
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "session reached its maximum lifetime; sign in again")
+	}
+	// The allowlist is re-applied on every refresh, so removing a domain
+	// ends its sessions at their next refresh rather than at their absolute
+	// expiry. The family is revoked so no sibling token outlives the
+	// decision even if the domain is added back.
+	if !emailDomainAllowed(t.allowedDomains, rt.Email) {
+		if err := t.revokeFamily(ctx, rt, now, "refresh_domain_not_allowed",
+			"oidc: refresh refused for a domain no longer allowed; revoked the token family"); err != nil {
+			return nil, err
+		}
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "email domain is no longer allowed")
 	}
 
 	// No nonce on refresh: OIDC Core binds nonce to the original
 	// authentication request, not to silently-renewed tokens, and the
 	// relying party does not re-check it on the refresh path.
-	return t.issue(ctx, rt.Email, rt.ClientID, "")
+	return t.issue(ctx, rt.Email, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
+}
+
+// revokeFamily revokes rt's family and records the security event. The
+// token value is never logged; the family id is what an operator needs to
+// correlate with `tempogate sessions`.
+func (t *Token) revokeFamily(ctx context.Context, rt Refresh, now time.Time, event, msg string) error {
+	revoked, err := t.store.RevokeRefreshFamily(ctx, rt.FamilyID, now)
+	if err != nil {
+		return fmt.Errorf("oidc: revoke refresh token family: %w", err)
+	}
+	t.logger.WarnContext(ctx, msg,
+		"event", event,
+		"family_id", rt.FamilyID,
+		"client_id", rt.ClientID,
+		"email", rt.Email,
+		"revoked_live_tokens", revoked,
+	)
+	return nil
+}
+
+// lineage is what a refresh token inherits from the sign-in that started its
+// session. The zero value means a new sign-in: issue starts a new family
+// anchored at the current time.
+type lineage struct {
+	familyID string
+	authTime time.Time
 }
 
 // issue mints the access/id token and a rotated refresh token, persisting the
 // latter before responding. It is the single place token shape and lifetimes
-// are decided, so the two grants cannot drift apart.
-func (t *Token) issue(ctx context.Context, email, clientID, nonce string) (*tokenOutput, error) {
+// are decided, so the grants cannot drift apart.
+func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l lineage) (*tokenOutput, error) {
+	now := t.now()
+	if l.familyID == "" {
+		familyID, err := randomFamilyID()
+		if err != nil {
+			return nil, fmt.Errorf("oidc: generate refresh token family: %w", err)
+		}
+		l = lineage{familyID: familyID, authTime: now}
+	}
+
 	signed, jti, err := t.signer.Mint(ctx, keys.MintRequest{
 		Subject:     email,
 		Email:       email,
-		TTL:         accessTokenTTL,
+		TTL:         t.accessTTL,
 		Permissions: flatAdminPermissions(),
 		// OIDC Core: the ID token's aud must contain the requesting client.
 		// tempogate issues one token that is both access and id token, so it
@@ -416,15 +574,26 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string) (*toke
 		return nil, fmt.Errorf("oidc: generate refresh token: %w", err)
 	}
 
-	now := t.now()
-	if err := t.store.SaveRefresh(ctx, Refresh{
+	// Rotation renews the idle window but never past the session's
+	// absolute end.
+	expiresAt := now.Add(t.refreshTTL)
+	if end := l.authTime.Add(t.refreshMaxLifetime); end.Before(expiresAt) {
+		expiresAt = end
+	}
+	err = t.store.SaveRefresh(ctx, Refresh{
 		Token:     refreshTok,
 		JTI:       jti,
 		ClientID:  clientID,
 		Email:     email,
+		FamilyID:  l.familyID,
+		AuthTime:  l.authTime,
 		CreatedAt: now,
-		ExpiresAt: now.Add(refreshTokenTTL),
-	}); err != nil {
+		ExpiresAt: expiresAt,
+	})
+	if errors.Is(err, ErrRefreshFamilyRevoked) {
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "the session has been revoked")
+	}
+	if err != nil {
 		return nil, fmt.Errorf("oidc: persist refresh token: %w", err)
 	}
 
@@ -434,7 +603,7 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string) (*toke
 		Body: tokenResponse{
 			AccessToken:  signed,
 			TokenType:    "Bearer",
-			ExpiresIn:    int(accessTokenTTL.Seconds()),
+			ExpiresIn:    int(t.accessTTL.Seconds()),
 			RefreshToken: refreshTok,
 			IDToken:      signed,
 		},
@@ -470,6 +639,16 @@ func randomRefresh() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// randomFamilyID is hex rather than base64url so it is easy to select and
+// paste from `tempogate sessions list` into `sessions revoke --family`.
+func randomFamilyID() (string, error) {
+	b := make([]byte, familyIDEntropyBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // withBasicChallenge adds the WWW-Authenticate challenge RFC 6749 §5.2

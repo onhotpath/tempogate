@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -47,6 +48,14 @@ func (s *StoreSuite) TearDownTest() {
 	}
 }
 
+// latestVersion is the highest embedded migration, so schema assertions do
+// not need editing whenever a migration lands.
+func (s *StoreSuite) latestVersion() int {
+	migs, err := loadMigrations()
+	s.Require().NoError(err)
+	return migs[len(migs)-1].version
+}
+
 func (s *StoreSuite) TestNewRejectsEmptyPath() {
 	_, err := New(WithPath(""))
 	s.Require().Error(err)
@@ -61,7 +70,7 @@ func (s *StoreSuite) TestIsCurrent() {
 
 	err = s.store.IsCurrent(s.ctx)
 	s.Require().Error(err)
-	s.Contains(err.Error(), "schema version 0, expected 9")
+	s.Contains(err.Error(), fmt.Sprintf("schema version 0, expected %d", s.latestVersion()))
 	s.Contains(err.Error(), "tempogate migrate")
 }
 
@@ -93,7 +102,7 @@ func (s *StoreSuite) TestIsCurrentOnFreshDB() {
 
 	err = fresh.IsCurrent(s.ctx)
 	s.Require().Error(err)
-	s.Contains(err.Error(), "schema version 0, expected 9")
+	s.Contains(err.Error(), fmt.Sprintf("schema version 0, expected %d", s.latestVersion()))
 }
 
 func (s *StoreSuite) TestMigrateIsIdempotent() {
@@ -103,7 +112,9 @@ func (s *StoreSuite) TestMigrateIsIdempotent() {
 	var versions int
 	row := s.store.db.QueryRowContext(s.ctx, `SELECT count(*) FROM schema_migrations`)
 	s.Require().NoError(row.Scan(&versions))
-	s.Equal(9, versions)
+	migs, err := loadMigrations()
+	s.Require().NoError(err)
+	s.Equal(len(migs), versions)
 
 	for _, want := range []string{"keypairs", "auth_requests", "auth_codes", "refresh_tokens", "integration_keys", "jti_denylist", "device_codes", "browser_sessions"} {
 		var table string
@@ -364,8 +375,10 @@ func (s *StoreSuite) refresh(token string) oidc.Refresh {
 		JTI:       "jti-" + token,
 		ClientID:  "ui",
 		Email:     "alice@example.com",
+		FamilyID:  "family-" + token,
+		AuthTime:  now.Add(-time.Hour),
 		CreatedAt: now,
-		ExpiresAt: now.Add(30 * 24 * time.Hour),
+		ExpiresAt: now.Add(7 * 24 * time.Hour),
 	}
 }
 
@@ -375,11 +388,13 @@ func (s *StoreSuite) TestSaveRefreshRoundTrip() {
 
 	var got oidc.Refresh
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT token, jti, client_id, email, created_at, expires_at
+		`SELECT token, jti, client_id, email, family_id, auth_time, created_at, expires_at
 		 FROM refresh_tokens WHERE token = ?`, r.Token)
 	s.Require().NoError(row.Scan(
-		&got.Token, &got.JTI, &got.ClientID, &got.Email, &got.CreatedAt, &got.ExpiresAt,
+		&got.Token, &got.JTI, &got.ClientID, &got.Email, &got.FamilyID, &got.AuthTime, &got.CreatedAt, &got.ExpiresAt,
 	))
+	s.Equal(r.FamilyID, got.FamilyID)
+	s.True(r.AuthTime.Equal(got.AuthTime), "authTime: want %v got %v", r.AuthTime, got.AuthTime)
 
 	s.Equal(r.Token, got.Token)
 	s.Equal(r.JTI, got.JTI)
@@ -403,25 +418,31 @@ func (s *StoreSuite) TestConsumeRefreshRoundTripAndRotation() {
 	r := s.refresh("consume-refresh-1")
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, r))
 
-	got, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID)
+	got, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID, time.Now().UTC())
 	s.Require().NoError(err)
 	s.Equal(r.Token, got.Token)
 	s.Equal(r.JTI, got.JTI)
 	s.Equal(r.ClientID, got.ClientID)
 	s.Equal(r.Email, got.Email)
+	s.Equal(r.FamilyID, got.FamilyID)
+	s.True(r.AuthTime.Equal(got.AuthTime))
 	s.True(r.CreatedAt.Equal(got.CreatedAt))
 	s.True(r.ExpiresAt.Equal(got.ExpiresAt))
 
-	_, err = s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID)
+	// The row stays behind as a tombstone, so a second presentation is
+	// recognised as reuse and returns the row for family revocation.
+	again, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID, time.Now().UTC())
 	s.Require().Error(err)
-	s.Truef(errors.Is(err, oidc.ErrRefreshNotFound),
-		"second consume should be ErrRefreshNotFound, got %v", err)
+	s.Truef(errors.Is(err, oidc.ErrRefreshReused),
+		"second consume should be ErrRefreshReused, got %v", err)
+	s.Equal(r.FamilyID, again.FamilyID)
+	s.Equal(r.Email, again.Email)
 
-	var remaining int
+	var consumed int
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT count(*) FROM refresh_tokens WHERE token = ?`, r.Token)
-	s.Require().NoError(row.Scan(&remaining))
-	s.Zero(remaining)
+		`SELECT count(*) FROM refresh_tokens WHERE token = ? AND consumed_at IS NOT NULL`, r.Token)
+	s.Require().NoError(row.Scan(&consumed))
+	s.Equal(1, consumed)
 }
 
 // TestConsumeRefreshOtherClientLeavesRow: the client binding is part of the
@@ -431,18 +452,18 @@ func (s *StoreSuite) TestConsumeRefreshOtherClientLeavesRow() {
 	r := s.refresh("bound-refresh")
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, r))
 
-	_, err := s.store.ConsumeRefresh(s.ctx, r.Token, "someone-else")
+	_, err := s.store.ConsumeRefresh(s.ctx, r.Token, "someone-else", time.Now().UTC())
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, oidc.ErrRefreshNotFound),
 		"cross-client consume should be ErrRefreshNotFound, got %v", err)
 
-	got, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID)
+	got, err := s.store.ConsumeRefresh(s.ctx, r.Token, r.ClientID, time.Now().UTC())
 	s.Require().NoError(err)
 	s.Equal(r.ClientID, got.ClientID)
 }
 
 func (s *StoreSuite) TestConsumeRefreshNotFound() {
-	_, err := s.store.ConsumeRefresh(s.ctx, "never-saved", "ui")
+	_, err := s.store.ConsumeRefresh(s.ctx, "never-saved", "ui", time.Now().UTC())
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, oidc.ErrRefreshNotFound),
 		"expected ErrRefreshNotFound, got %v", err)
@@ -490,7 +511,19 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			return s.store.SaveRefresh(s.ctx, s.refresh("closed"))
 		}},
 		{"ConsumeRefresh", func() error {
-			_, err := s.store.ConsumeRefresh(s.ctx, "closed", "ui")
+			_, err := s.store.ConsumeRefresh(s.ctx, "closed", "ui", time.Now().UTC())
+			return err
+		}},
+		{"RevokeRefreshFamily", func() error {
+			_, err := s.store.RevokeRefreshFamily(s.ctx, "closed", time.Now().UTC())
+			return err
+		}},
+		{"RevokeRefreshByEmail", func() error {
+			_, err := s.store.RevokeRefreshByEmail(s.ctx, "closed@example.com", time.Now().UTC())
+			return err
+		}},
+		{"ListRefreshSessions", func() error {
+			_, err := s.store.ListRefreshSessions(s.ctx, "", time.Now().UTC())
 			return err
 		}},
 		{"SaveDeviceCode", func() error {

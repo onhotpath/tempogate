@@ -97,6 +97,19 @@ type OIDCConfig struct {
 	// construction at startup if it is missing or the wrong length.
 	SessionSigningKey string `ferry:"session_signing_key"`
 
+	// AccessTokenTTL is the lifetime of each minted access/id token.
+	AccessTokenTTL time.Duration `ferry:"access_token_ttl"`
+
+	// RefreshTokenTTL is the idle lifetime of each rotated refresh token: a
+	// session that is not refreshed for this long ends.
+	RefreshTokenTTL time.Duration `ferry:"refresh_token_ttl"`
+
+	// RefreshMaxLifetime is the absolute session lifetime, counted from the
+	// original sign-in and never extended by rotation. Deliberately not
+	// named OIDC_SESSION_*: those keys configure the device-flow
+	// verification-page session, not the token session.
+	RefreshMaxLifetime time.Duration `ferry:"refresh_max_lifetime"`
+
 	Google GoogleConfig `ferry:"google"`
 }
 

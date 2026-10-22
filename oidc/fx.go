@@ -85,6 +85,12 @@ type tokenParams struct {
 	Devices DeviceCodeStore
 	Signer  *keys.Signer
 	Clients ClientRegistry
+	Logger  *slog.Logger
+
+	AllowedDomains     string        `name:"oidc_allowed_domains"`
+	AccessTokenTTL     time.Duration `name:"oidc_access_token_ttl"`
+	RefreshTokenTTL    time.Duration `name:"oidc_refresh_token_ttl"`
+	RefreshMaxLifetime time.Duration `name:"oidc_refresh_max_lifetime"`
 }
 
 // newToken builds the shared *Token. It is provided as its own dependency
@@ -100,9 +106,20 @@ type tokenParams struct {
 // DeviceCodeStore in unconditionally turns the RFC 8628 grant branch on
 // for every tempogate deployment — opting back out would mean removing
 // the /device_authorization registrar as well, so the consistent posture
-// is to expose the whole device flow or none of it.
-func newToken(p tokenParams) *Token {
-	return NewToken(p.Store, p.Signer, p.Clients, WithDeviceCodeStore(p.Devices))
+// is to expose the whole device flow or none of it. The token lifetimes are
+// validated here so an incoherent OIDC_*_TTL / OIDC_REFRESH_MAX_LIFETIME
+// combination stops the server at startup, and the refresh grant gets the
+// same OIDC_ALLOWED_DOMAINS the callback enforces.
+func newToken(p tokenParams) (*Token, error) {
+	if err := ValidateTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime); err != nil {
+		return nil, err
+	}
+	return NewToken(p.Store, p.Signer, p.Clients,
+		WithDeviceCodeStore(p.Devices),
+		WithAllowedDomains(p.AllowedDomains),
+		WithTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime),
+		WithTokenLogger(p.Logger),
+	), nil
 }
 
 // newTokenRegistrar exposes the shared *Token's HTTP surface as a registrar

@@ -72,7 +72,7 @@ func (s *TokenE2ESuite) SetupTest() {
 
 	authorizer := oidc.New(store, reg, testIssuer, testGoogleCID, s.mg.issuer()+"/auth")
 	callback := oidc.NewCallback(store, upstream, "example.com")
-	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store))
+	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer)))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
 
@@ -489,4 +489,41 @@ func (s *TokenE2ESuite) deviceTokenPoll(deviceCode string) *http.Response {
 	f.Set("device_code", deviceCode)
 	f.Set("client_id", "tempogate-device")
 	return s.tokenRequest(f)
+}
+
+// TestRefreshReplayRevokesFamily drives reuse detection (RFC 9700 §4.14.2)
+// through the real sqlite store: replaying a rotated refresh token revokes
+// the whole family, so the newer token stops working too.
+func (s *TokenE2ESuite) TestRefreshReplayRevokesFamily() {
+	f := url.Values{}
+	f.Set("grant_type", "authorization_code")
+	f.Set("code", s.runFlow())
+	f.Set("redirect_uri", testRedirectURI)
+	f.Set("client_id", "ui")
+	f.Set("code_verifier", pkceVerifier)
+	resp := s.tokenRequest(f)
+	defer resp.Body.Close()
+	s.Require().Equal(http.StatusOK, resp.StatusCode)
+	rt1 := s.decode(resp).RefreshToken
+
+	refresh := func(rt string) *http.Response {
+		rf := url.Values{}
+		rf.Set("grant_type", "refresh_token")
+		rf.Set("refresh_token", rt)
+		rf.Set("client_id", "ui")
+		return s.tokenRequest(rf)
+	}
+
+	rotated := refresh(rt1)
+	defer rotated.Body.Close()
+	s.Require().Equal(http.StatusOK, rotated.StatusCode)
+	rt2 := s.decode(rotated).RefreshToken
+
+	replay := refresh(rt1)
+	defer replay.Body.Close()
+	s.Equal(http.StatusBadRequest, replay.StatusCode, "the replayed token is refused")
+
+	newer := refresh(rt2)
+	defer newer.Body.Close()
+	s.Equal(http.StatusBadRequest, newer.StatusCode, "the replay revoked the newer token too")
 }

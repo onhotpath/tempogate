@@ -155,6 +155,7 @@ func (s *TokenSuite) TestGrantTypeNotAllowedIsUnauthorizedClient() {
 	refresh := func(token, clientID string) url.Values {
 		s.store.putRefresh(oidc.Refresh{
 			Token: token, ClientID: clientID, Email: "alice@example.com",
+			FamilyID: "family-" + token, AuthTime: signNow,
 			CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
 		})
 		f := url.Values{}

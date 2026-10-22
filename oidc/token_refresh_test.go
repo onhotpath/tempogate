@@ -105,6 +105,7 @@ func (s *TokenSuite) TestRejectedRefreshLeavesTokenForLegitimateClient() {
 func (s *TokenSuite) seedRefresh(token, clientID string) {
 	s.store.putRefresh(oidc.Refresh{
 		Token: token, JTI: "jti-" + token, ClientID: clientID, Email: "alice@example.com",
+		FamilyID: "family-" + token, AuthTime: signNow,
 		CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
 	})
 }

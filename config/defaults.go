@@ -28,8 +28,11 @@ func defaultConfig() *Config {
 			},
 		},
 		OIDC: OIDCConfig{
-			Issuer:     "http://127.0.0.1:8000",
-			SessionTTL: 5 * time.Minute,
+			Issuer:             "http://127.0.0.1:8000",
+			SessionTTL:         5 * time.Minute,
+			AccessTokenTTL:     4 * time.Hour,
+			RefreshTokenTTL:    7 * 24 * time.Hour,
+			RefreshMaxLifetime: 30 * 24 * time.Hour,
 			Google: GoogleConfig{
 				AuthEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
 				// #nosec G101 -- public Google token endpoint URL, not a

@@ -9,8 +9,10 @@ import (
 // DefaultDenylistTTL bounds how long a positive *or* negative denylist lookup
 // stays cached. 30 seconds matches the issue's stated tempogate-side revoke
 // lag — a freshly-revoked token verifies for at most this long on hot paths
-// like /userinfo and the refresh-token exchange before the next lookup pulls
-// the updated state from sqlite.
+// like /userinfo before the next lookup pulls the updated state from sqlite.
+// The refresh-token grant does not consult the denylist: refresh tokens are
+// opaque, and their lifecycle (absolute lifetime, domain re-check, reuse
+// detection, `tempogate sessions revoke`) lives in the oidc package.
 const DefaultDenylistTTL = 30 * time.Second
 
 // DenylistCache is the verifier's hot-path read-through cache over a
