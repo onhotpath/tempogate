@@ -75,7 +75,7 @@ Each server subcommand builds only the dependencies it uses, when it runs:
 **Pluggable state, SQLite by default.** The state store (signing keypair,
 authorization codes, refresh tokens) is an interface with two backends,
 chosen by `STATE_DRIVER`. The default is SQLite on a PersistentVolumeClaim via
-the pure-Go `modernc.org/sqlite` driver — no CGO, no external database to run
+the pure-Go `modernc.org/sqlite` driver: no CGO, no external database to run
 a small deployment. SQLite tolerates one writer, so with it the deployment is
 single-replica; the chart enforces this (`replicaCount: 1`, autoscaling off,
 `Recreate` strategy). PostgreSQL 15+ (`state/postgres`, the native `pgx`
