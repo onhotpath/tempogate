@@ -8,7 +8,10 @@
 #   3. unless BOOT=0, the `tempogate` service then boots against the migrated
 #      volume and the bundled mock IdP: /readyz answers 200 and the discovery
 #      document advertises the example's issuer.
-# The project and its volume are always removed on exit.
+# The example has no secret defaults, so its secrets are generated with the
+# example's own gen-env.sh into a temporary env file passed via --env-file
+# (any .env in the example directory is ignored). The project, its volume and
+# the env file are always removed on exit.
 #
 #   test/deploy/compose-smoke.sh         # or: make test-deploy-compose
 #
@@ -29,7 +32,13 @@ EXAMPLE_DIR="$ROOT/examples/docker-compose"
 COMPOSE_FILE="$EXAMPLE_DIR/docker-compose.yml"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: '$1' is required but not on PATH" >&2; exit 1; }; }
-need docker; need curl
+need docker; need curl; need openssl
+
+# Fresh random secrets, exactly as a user would create their .env.
+env_file="$(mktemp)"
+override="$(mktemp)"
+trap 'rm -f "$env_file" "$override"' EXIT
+"$EXAMPLE_DIR/gen-env.sh" >"$env_file"
 
 echo "==> docker compose config: every compose file under examples/"
 found=0
@@ -41,7 +50,7 @@ while IFS= read -r file; do
     # An overlay is only meaningful on top of its directory's base file.
     files=(-f "$base" -f "$file")
   fi
-  docker compose "${files[@]}" config --quiet
+  docker compose --env-file "$env_file" "${files[@]}" config --quiet
   echo "    ok ${file#"$ROOT"/}"
 done < <(find "$ROOT/examples" -type f \( -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' -o -name 'compose*.yml' -o -name 'compose*.yaml' \) | sort)
 if [ "$found" = 0 ]; then
@@ -58,8 +67,7 @@ fi
 # the smoke test does not rebuild what was just built, and tempogate's
 # published port, which is moved to an ephemeral loopback port so the test
 # never collides with something already listening on 8000.
-override="$(mktemp)"
-compose() { docker compose -p "$PROJECT" -f "$COMPOSE_FILE" -f "$override" "$@"; }
+compose() { docker compose -p "$PROJECT" --env-file "$env_file" -f "$COMPOSE_FILE" -f "$override" "$@"; }
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -68,7 +76,7 @@ cleanup() {
     compose logs --no-color --tail=50 tempogate-migrate tempogate mockoidc >&2 || true
   fi
   compose down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$override"
+  rm -f "$env_file" "$override"
   exit "$status"
 }
 trap cleanup EXIT
