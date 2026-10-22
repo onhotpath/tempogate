@@ -1,7 +1,7 @@
 # Build context is the repo root so the mock shares the module (and its jwx
 # pin) with tempogate. Built only by the e2e test via testcontainers.
 # syntax=docker/dockerfile:1.24
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.3
 
 FROM golang:${GO_VERSION}-alpine AS builder
 WORKDIR /src

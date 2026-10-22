@@ -36,7 +36,7 @@ independently of the binary — see [Helm chart releases](#helm-chart-releases).
 
 ## Before you tag
 
-1. `main` is green: `make ci` passes (fmt/vet/imports + lint + tests) and the
+1. `main` is green: `make ci` passes (fmt/vet/imports + lint + govulncheck + tests) and the
    "Lean CLI build guard" is happy.
 2. Release notes are auto-generated from commit subjects since the previous
    tag, so use Conventional Commits (`feat:`, `fix:`, …). `docs:`, `test:`,

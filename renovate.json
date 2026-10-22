@@ -3,5 +3,57 @@
   "extends": [
     "config:recommended"
   ],
-  "minimumReleaseAge": "14 days"
+  "minimumReleaseAge": "14 days",
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/__tests__/**",
+    "**/__fixtures__/**"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Go toolchain pinned as ARG GO_VERSION in Dockerfiles (must match go.mod; see make go-version-check)",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile[^/]*$/"
+      ],
+      "matchStrings": [
+        "ARG GO_VERSION=(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "test/ and examples/ are scanned only so the Go toolchain ARG stays in sync; keep their other deps unmanaged as before",
+      "matchFileNames": [
+        "test/**",
+        "examples/**"
+      ],
+      "matchDepNames": [
+        "!go"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The golang builder image tag is driven by ARG GO_VERSION (customManagers), not the dockerfile manager",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchDepNames": [
+        "golang"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Bump the go directive on patch releases too (the default treats it as a minimum and never moves it), and ship it with the Dockerfile ARGs in one PR",
+      "matchDatasources": [
+        "golang-version"
+      ],
+      "rangeStrategy": "bump",
+      "groupName": "Go toolchain"
+    }
+  ]
 }
