@@ -86,7 +86,7 @@ func TestCLITransport(t *testing.T) {
 			require.Equalf(t, after.AccessToken, jwt, "token #%d must print the one refreshed token", i)
 		}
 		require.NotEqual(t, tok.AccessToken, after.AccessToken, "the token was refreshed")
-		require.NotContains(t, containerLogs(ctx, t, st.tempogate), "refresh_token_reuse",
+		require.NotContains(t, logsThrough(ctx, t, st.tempogate, st.tempogateBaseURL), "refresh_token_reuse",
 			"no process presented an already-rotated refresh token")
 
 		// The session is intact: the rotated refresh token renews again.

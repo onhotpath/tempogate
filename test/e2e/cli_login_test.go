@@ -254,8 +254,8 @@ func TestCLILogin(t *testing.T) {
 		`{"family_id":"`+family+`"}`)
 	require.Equalf(t, http.StatusOK, code, "POST /admin/sessions/revoke: %s", body)
 	require.JSONEq(t, `{"revoked":1}`, withoutSchema(t, body))
-	require.Contains(t, containerLogs(ctx, t, st.tempogate), "revoke_sessions", "the revoke is audited")
-	require.NotContains(t, containerLogs(ctx, t, st.tempogate), live.RefreshToken, "token values never reach the log")
+	logs := waitForLogs(ctx, t, st.tempogate, "revoke_sessions") // the revoke is audited
+	require.NotContains(t, logs, live.RefreshToken, "token values never reach the log")
 
 	code, body = adminRequest(t, http.MethodGet, st.adminURL+"/admin/sessions?email="+allowedEmail, "", e2eAdminToken, "")
 	require.Equalf(t, http.StatusOK, code, "GET /admin/sessions: %s", body)

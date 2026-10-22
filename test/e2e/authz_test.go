@@ -99,7 +99,8 @@ func TestAuthzRules(t *testing.T) {
 	client, conn := dialFrontend(t, st.frontendAddr)
 	defer func() { _ = conn.Close() }()
 
-	require.Contains(t, st.tg.logs(t), `"system_grant_rules": 1`, "the startup log counts the cluster-wide rules")
+	// The startup log counts the cluster-wide rules.
+	st.tg.waitForLogs(t, `"system_grant_rules": 1`)
 
 	t.Run("bob (temporal-system:admin) registers namespaces, lists them and starts anywhere", func(t *testing.T) {
 		tok := st.login(ctx, t, "bob", "/tmp/tg-authz-bob.json")
@@ -157,9 +158,7 @@ func TestAuthzRules(t *testing.T) {
 		require.Contains(t, out, "no Temporal access is granted to this account")
 		require.False(t, st.cli.fileExists(ctx, t, "/tmp/tg-authz-carol.json"), "no token file is written")
 		require.NotContains(t, st.tg.exec(t, "sessions", "list", "--email", carolEmail), carolEmail, "no session exists")
-		logs := st.tg.logs(t)
-		require.Contains(t, logs, "google sign-in refused: no authorization rule grants this account any Temporal permissions")
-		require.Contains(t, logs, carolEmail)
+		st.tg.waitForLogs(t, "google sign-in refused: no authorization rule grants this account any Temporal permissions", carolEmail)
 	})
 
 	t.Run("carol (no rule) gets access_denied and no token from the device login", func(t *testing.T) {
@@ -213,7 +212,7 @@ func TestAuthzRules(t *testing.T) {
 		// CLI session that tried is gone.
 		require.NotContains(t, st.tg.exec(t, "sessions", "list", "--email", allowedEmail), cliClientID,
 			"the CLI session family is revoked")
-		require.Contains(t, st.tg.logs(t), "refresh_authz_denied")
+		st.tg.waitForLogs(t, "refresh_authz_denied")
 	})
 
 	t.Run("authz explain answers from the same rules", func(t *testing.T) {
@@ -236,9 +235,7 @@ func TestAuthzLegacyDefault(t *testing.T) {
 	ctx := context.Background()
 	st := setupAuthzStack(ctx, t, map[string]string{"OIDC_AUTHZ_DEFAULT_PERMISSIONS": "temporal-system:admin"})
 
-	logs := st.tg.logs(t)
-	require.Contains(t, logs, "WARN")
-	require.Contains(t, logs, "every admitted user is cluster admin")
+	st.tg.waitForLogs(t, "WARN", "every admitted user is cluster admin")
 
 	tok := st.login(ctx, t, "carol", "/tmp/tg-authz-legacy.json")
 	requirePermissions(t, tok.AccessToken, "temporal-system:admin")
