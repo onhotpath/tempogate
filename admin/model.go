@@ -117,10 +117,10 @@ func (k *IntegrationKey) Validate() error {
 
 // Grant builds the perms.Grant this key contributes to the JWT's
 // `permissions` claim. Returning a Grant rather than a single
-// "<ns>:<role>" string keeps the claim shape uniform with the OIDC
-// /token path: both callers feed perms.Grant.ToClaim() into
-// keys.MintRequest.Permissions, and perms is the only place that owns
-// the wire-format mapping.
+// "<ns>:<role>" string keeps perms the only place that owns the
+// wire-format mapping. The OIDC /token path does not use perms yet: it
+// stamps a literal "temporal-system:admin" (oidc.flatAdminPermissions),
+// which has the same shape.
 func (k *IntegrationKey) Grant() *perms.Grant {
 	return perms.New(perms.AddNamespace(k.Namespace, k.Role))
 }

@@ -27,7 +27,7 @@ We aim to:
 - Provide an initial assessment within **7 business days**.
 - Coordinate a fix and a disclosure timeline with you.
 
-If the form is not available, or you don't get a response, open a *non-sensitive* GitHub issue asking the maintainers for a private reporting channel or to check the advisory inbox.
+If you don't get a response, open a *non-sensitive* GitHub issue asking the maintainers to check the advisory inbox.
 Do not include any vulnerability details in that issue.
 
 ## Scope
@@ -35,7 +35,7 @@ Do not include any vulnerability details in that issue.
 In scope:
 
 - The `tempogate` binary and its published container images.
-- The Helm chart under `charts/` and the artifacts under `examples/`.
+- The Helm chart under `charts/` (and its published OCI artifact) and the artifacts under `examples/`.
 - CI/CD pipeline configurations in this repo.
 
 Out of scope:
