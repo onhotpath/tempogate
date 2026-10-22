@@ -83,7 +83,7 @@ func (s *StoreSuite) TestDBErrorsAreObservedByOp() {
 		{"save_integration_key", func() error { return st.SaveIntegrationKey(ctx, admin.IntegrationKey{}) }},
 		{"integration_key_by_id", func() error { _, err := st.IntegrationKeyByID(ctx, "x"); return err }},
 		{"list_integration_keys", func() error { _, err := st.ListIntegrationKeys(ctx, admin.ListFilter{}); return err }},
-		{"mark_integration_key_revoked", func() error { _, err := st.MarkIntegrationKeyRevoked(ctx, "x"); return err }},
+		{"mark_integration_key_revoked", func() error { _, err := st.MarkIntegrationKeyRevoked(ctx, "x", time.Now().UTC()); return err }},
 		{"is_current", func() error { return st.IsCurrent(ctx) }},
 	}
 	want := make([]string, 0, len(calls))
@@ -194,7 +194,7 @@ func (s *StoreSuite) TestRevokeFailingMidTransactionIsObservedAndRolledBack() {
 			obs := s.observeSuiteStore()
 			s.failWrites(tc.kind, tc.table)
 
-			_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+			_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 			s.Require().ErrorContains(err, "injected failure")
 			s.Equal([]string{"mark_integration_key_revoked"}, obs.calls())
 

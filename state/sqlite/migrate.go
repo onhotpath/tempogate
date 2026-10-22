@@ -10,15 +10,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// schemaVersionDDL has no DEFAULT on applied_at: the application owns the
+// clock (state/doc.go), so the runner binds it. Databases created before
+// that keep their unused DEFAULT CURRENT_TIMESTAMP.
 const schemaVersionDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,
-    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    applied_at TIMESTAMP NOT NULL
 )`
 
 type migration struct {
@@ -183,8 +187,8 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 		)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
-		m.version, m.name,
+		`INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
+		m.version, m.name, time.Now().UTC(),
 	); err != nil {
 		return errors.Join(
 			fmt.Errorf("sqlite: record %d_%s: %w", m.version, m.name, err),

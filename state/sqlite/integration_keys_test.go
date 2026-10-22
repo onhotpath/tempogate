@@ -182,28 +182,30 @@ func (s *StoreSuite) TestIntegrationKeyListNeverDuplicatesOrSkipsUnderConcurrent
 func (s *StoreSuite) TestMarkRevokedReturnsJTIAndStampsRevokedAt() {
 	k := s.seedKey(admin.WithNamespace("ns"), admin.WithRole(admin.RoleRead), admin.WithOwner("o"))
 
-	gotJTI, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	// Far from the wall clock and with sub-second precision, so a store
+	// stamping its own CURRENT_TIMESTAMP cannot pass.
+	at := time.Date(2001, 2, 3, 4, 5, 6, 789012000, time.UTC)
+	gotJTI, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, at)
 	s.Require().NoError(err)
 	s.Equal(k.JTI, gotJTI)
 
 	got, err := s.store.IntegrationKeyByID(s.ctx, k.ID)
 	s.Require().NoError(err)
 	s.Require().NotNil(got.RevokedAt)
-	s.False(got.RevokedAt.IsZero())
+	s.Truef(at.Equal(*got.RevokedAt), "revoked_at = %v, want the caller's %v", *got.RevokedAt, at)
 }
 
 func (s *StoreSuite) TestMarkRevokedIsIdempotent() {
 	k := s.seedKey(admin.WithNamespace("ns"), admin.WithRole(admin.RoleRead), admin.WithOwner("o"))
 
-	first, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	first, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 	s.Require().NoError(err)
 
 	row, err := s.store.IntegrationKeyByID(s.ctx, k.ID)
 	s.Require().NoError(err)
 	stampedAt := *row.RevokedAt
 
-	time.Sleep(2 * time.Millisecond)
-	second, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	second, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, stampedAt.Add(time.Hour))
 	s.Require().NoError(err)
 	s.Equal(first, second, "second call must return the same jti")
 
@@ -214,7 +216,7 @@ func (s *StoreSuite) TestMarkRevokedIsIdempotent() {
 }
 
 func (s *StoreSuite) TestMarkRevokedUnknownIDReturnsNotFound() {
-	_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, uuid.NewString())
+	_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, uuid.NewString(), time.Now().UTC())
 	s.Require().ErrorIs(err, admin.ErrIntegrationKeyNotFound)
 }
 

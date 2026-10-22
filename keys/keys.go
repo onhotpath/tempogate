@@ -49,6 +49,7 @@ type Keys struct {
 	kek     []byte
 
 	publishDelay time.Duration
+	changes      ChangeFeed
 
 	mu          sync.RWMutex
 	keypairs    []Keypair

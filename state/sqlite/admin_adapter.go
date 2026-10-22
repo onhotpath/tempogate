@@ -21,7 +21,8 @@ type adminKeyRegistry struct {
 	s *Store
 }
 
-func newAdminKeyRegistry(s *Store) admin.KeyRegistry { return &adminKeyRegistry{s: s} }
+// NewAdminKeyRegistry is the admin.KeyRegistry sqlite.Fx binds over s.
+func NewAdminKeyRegistry(s *Store) admin.KeyRegistry { return &adminKeyRegistry{s: s} }
 
 func (a *adminKeyRegistry) Save(ctx context.Context, k admin.IntegrationKey) error {
 	return a.s.SaveIntegrationKey(ctx, k)
@@ -35,8 +36,8 @@ func (a *adminKeyRegistry) List(ctx context.Context, f admin.ListFilter) ([]admi
 	return a.s.ListIntegrationKeys(ctx, f)
 }
 
-func (a *adminKeyRegistry) MarkRevoked(ctx context.Context, id string) (string, error) {
-	return a.s.MarkIntegrationKeyRevoked(ctx, id)
+func (a *adminKeyRegistry) MarkRevoked(ctx context.Context, id string, at time.Time) (string, error) {
+	return a.s.MarkIntegrationKeyRevoked(ctx, id, at)
 }
 
 // adminSessionStore adapts *Store to admin.SessionStore over the same
@@ -45,7 +46,8 @@ type adminSessionStore struct {
 	s *Store
 }
 
-func newAdminSessionStore(s *Store) admin.SessionStore { return &adminSessionStore{s: s} }
+// NewAdminSessionStore is the admin.SessionStore sqlite.Fx binds over s.
+func NewAdminSessionStore(s *Store) admin.SessionStore { return &adminSessionStore{s: s} }
 
 func (a *adminSessionStore) List(ctx context.Context, f admin.SessionFilter, now time.Time) ([]admin.Session, error) {
 	rows, err := a.s.ListRefreshSessions(ctx, RefreshSessionFilter{Email: f.Email, Subject: f.Subject}, now)

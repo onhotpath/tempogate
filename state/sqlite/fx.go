@@ -75,10 +75,10 @@ func newReaperFx(p reaperParams) (*Reaper, error) {
 
 // Fx registers the sqlite store as *Store (for direct callers like
 // cmd/serve.go) plus every consumer-side interface it satisfies
-// (keys.KeyStore, keys.DenylistChecker, oidc.AuthRequestStore,
-// oidc.BrowserSessionStore, oidc.CallbackStore, oidc.TokenStore,
-// oidc.DeviceCodeStore, api.StoreProbe), using a single underlying
-// constructor.
+// (keys.KeyStore, keys.DenylistChecker, keys.ChangeFeed,
+// oidc.AuthRequestStore, oidc.BrowserSessionStore, oidc.CallbackStore,
+// oidc.TokenStore, oidc.DeviceCodeStore, api.StoreProbe), using a single
+// underlying constructor. state/doc.go holds the contract of each.
 // admin.KeyRegistry and admin.SessionStore are provided as separate adapter
 // constructors (see admin_adapter.go) because their short method names
 // (Save/ByID/List/MarkRevoked, List/RevokeFamily/...) deliberately differ from the prefixed
@@ -95,6 +95,7 @@ func Fx() fx.Option {
 				newFx,
 				fx.As(new(keys.KeyStore)),
 				fx.As(new(keys.DenylistChecker)),
+				fx.As(new(keys.ChangeFeed)),
 				fx.As(new(oidc.AuthRequestStore)),
 				fx.As(new(oidc.BrowserSessionStore)),
 				fx.As(new(oidc.CallbackStore)),
@@ -104,7 +105,7 @@ func Fx() fx.Option {
 				fx.As(fx.Self()),
 			),
 		),
-		fx.Provide(newAdminKeyRegistry, newAdminSessionStore),
+		fx.Provide(NewAdminKeyRegistry, NewAdminSessionStore),
 		fx.Provide(newReaperFx),
 	)
 }

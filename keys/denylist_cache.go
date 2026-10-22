@@ -20,11 +20,11 @@ const DefaultDenylistTTL = 30 * time.Second
 // ("active") lookups for DefaultDenylistTTL so the steady-state cost of a
 // JWT verification is an in-memory map probe, not a sqlite round-trip.
 //
-// Cache invalidation is one of three: TTL expiry, an explicit Hydrate call
-// from the admin DELETE handler that marks a jti revoked immediately, or
-// process restart. Multi-process deployments rely on TTL alone — the cache
-// is in-process and never coordinated across instances; v1 accepts that
-// bounded staleness.
+// Cache invalidation is one of four: TTL expiry, an explicit Hydrate call
+// from the admin DELETE handler that marks a jti revoked immediately, a
+// revocation reported by the store's change feed (Follow), or process
+// restart. The feed is best-effort, so across processes the TTL is what
+// bounds staleness; v1 accepts that bound.
 //
 // Memory is bounded too: every verified jti gets an entry, so expired entries
 // are swept once per TTL and the map is capped at maxEntries. Dropping an
@@ -36,6 +36,7 @@ type DenylistCache struct {
 	ttl        time.Duration
 	maxEntries int
 	now        func() time.Time
+	changes    ChangeFeed
 
 	mu        sync.Mutex
 	entries   map[string]cacheEntry

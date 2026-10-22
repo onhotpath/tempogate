@@ -59,11 +59,10 @@ func (m *memKeyStore) RetireKeypair(context.Context, string, time.Time) (keys.Ke
 type memRegistry struct {
 	mu   sync.Mutex
 	rows map[string]admin.IntegrationKey
-	now  func() time.Time
 }
 
-func newMemRegistry(now func() time.Time) *memRegistry {
-	return &memRegistry{rows: map[string]admin.IntegrationKey{}, now: now}
+func newMemRegistry() *memRegistry {
+	return &memRegistry{rows: map[string]admin.IntegrationKey{}}
 }
 
 func (m *memRegistry) Save(_ context.Context, k admin.IntegrationKey) error {
@@ -113,7 +112,7 @@ func (m *memRegistry) List(_ context.Context, f admin.ListFilter) ([]admin.Integ
 	return out, nil
 }
 
-func (m *memRegistry) MarkRevoked(_ context.Context, id string) (string, error) {
+func (m *memRegistry) MarkRevoked(_ context.Context, id string, at time.Time) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	row, ok := m.rows[id]
@@ -121,8 +120,7 @@ func (m *memRegistry) MarkRevoked(_ context.Context, id string) (string, error) 
 		return "", fmt.Errorf("%w: %s", admin.ErrIntegrationKeyNotFound, id)
 	}
 	if row.RevokedAt == nil {
-		t := m.now()
-		row.RevokedAt = &t
+		row.RevokedAt = &at
 		m.rows[id] = row
 	}
 	return row.JTI, nil
@@ -166,7 +164,7 @@ func (s *KeysSuite) SetupTest() {
 		keys.WithIssuer(testIssuer),
 		keys.WithTokenClock(func() time.Time { return s.now.Add(time.Second) }),
 	)
-	s.registry = newMemRegistry(s.clock())
+	s.registry = newMemRegistry()
 
 	h := admin.NewKeys(s.registry, s.signer,
 		admin.WithClock(s.clock()),
@@ -821,11 +819,11 @@ func (f *failingRegistry) List(ctx context.Context, q admin.ListFilter) ([]admin
 	return f.wrapped.List(ctx, q)
 }
 
-func (f *failingRegistry) MarkRevoked(ctx context.Context, id string) (string, error) {
+func (f *failingRegistry) MarkRevoked(ctx context.Context, id string, at time.Time) (string, error) {
 	if f.markRevokedErr != nil {
 		return "", f.markRevokedErr
 	}
-	return f.wrapped.MarkRevoked(ctx, id)
+	return f.wrapped.MarkRevoked(ctx, id, at)
 }
 
 func ptr[T any](v T) *T { return &v }

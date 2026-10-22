@@ -130,8 +130,8 @@ func (r *storeRegistry) List(ctx context.Context, f admin.ListFilter) ([]admin.I
 	return r.s.ListIntegrationKeys(ctx, f)
 }
 
-func (r *storeRegistry) MarkRevoked(ctx context.Context, id string) (string, error) {
-	return r.s.MarkIntegrationKeyRevoked(ctx, id)
+func (r *storeRegistry) MarkRevoked(ctx context.Context, id string, at time.Time) (string, error) {
+	return r.s.MarkIntegrationKeyRevoked(ctx, id, at)
 }
 
 func (s *KeysIntegrationSuite) TestPostedJWTVerifiesAgainstSameJWKS() {
@@ -267,4 +267,42 @@ func (s *KeysIntegrationSuite) TestPostedJWTCarriesExpClaimWhenExpiresAtSet() {
 
 func inAnHour() *string {
 	return ptr(time.Now().UTC().Add(time.Hour).Format(time.RFC3339))
+}
+
+// TestRevokeStampsTheHandlersClock pins the app-owns-the-clock rule from
+// state/doc.go end to end: revoked_at is the admin handler's time, at full
+// precision, never the database's own clock.
+func (s *KeysIntegrationSuite) TestRevokeStampsTheHandlersClock() {
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(123456 * time.Microsecond)
+	h := admin.NewKeys(newAdminKeyRegistryViaPublicSurface(s.store), s.signer,
+		admin.WithClock(func() time.Time { return at }))
+	srv := httptest.NewServer(s.guarded(h))
+	defer srv.Close()
+
+	raw, err := json.Marshal(postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon", ExpiresAt: inAnHour()})
+	s.Require().NoError(err)
+	resp, err := authedClient.Post(srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
+	s.Require().NoError(err)
+	defer func() { _ = resp.Body.Close() }()
+	s.Require().Equal(http.StatusCreated, resp.StatusCode)
+	var minted postResp
+	s.Require().NoError(json.NewDecoder(resp.Body).Decode(&minted))
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/admin/keys/"+minted.ID, http.NoBody)
+	s.Require().NoError(err)
+	delResp, err := authedClient.Do(req)
+	s.Require().NoError(err)
+	s.Require().NoError(delResp.Body.Close())
+	s.Require().Equal(http.StatusNoContent, delResp.StatusCode)
+
+	getResp, err := authedClient.Get(srv.URL + "/admin/keys/" + minted.ID)
+	s.Require().NoError(err)
+	defer func() { _ = getResp.Body.Close() }()
+	s.Require().Equal(http.StatusOK, getResp.StatusCode)
+	var view struct {
+		RevokedAt *time.Time `json:"revoked_at"`
+	}
+	s.Require().NoError(json.NewDecoder(getResp.Body).Decode(&view))
+	s.Require().NotNil(view.RevokedAt)
+	s.Truef(at.Equal(*view.RevokedAt), "revoked_at = %v, want the handler's clock %v", *view.RevokedAt, at)
 }

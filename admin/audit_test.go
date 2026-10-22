@@ -43,7 +43,7 @@ func (s *AuditSuite) setup(extra ...admin.KeysOption) {
 	ks := keys.New(keys.WithStore(&memKeyStore{}), keys.WithGenerateOptions(keys.WithRSABits(2048)))
 	s.Require().NoError(ks.Init(context.Background()))
 	signer := keys.NewSigner(keys.WithKeys(ks), keys.WithIssuer(testIssuer))
-	s.registry = newMemRegistry(func() time.Time { return signNow })
+	s.registry = newMemRegistry()
 
 	h := admin.NewKeys(s.registry, signer, append([]admin.KeysOption{admin.WithLogger(logger)}, extra...)...)
 	g := admin.NewGuard(
@@ -175,7 +175,7 @@ func (s *AuditSuite) TestOperationsDeclareBearerSecurity() {
 	s.setup()
 	ks := keys.New(keys.WithStore(&memKeyStore{}), keys.WithGenerateOptions(keys.WithRSABits(2048)))
 	s.Require().NoError(ks.Init(context.Background()))
-	h := admin.NewKeys(newMemRegistry(time.Now), keys.NewSigner(keys.WithKeys(ks)))
+	h := admin.NewKeys(newMemRegistry(), keys.NewSigner(keys.WithKeys(ks)))
 	_, a := newGuardedAPI(admin.NewGuard(), h.Register)
 	want := []map[string][]string{{admin.SecurityScheme: {}}}
 	for path, item := range a.OpenAPI().Paths {

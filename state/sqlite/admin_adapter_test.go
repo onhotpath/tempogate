@@ -11,7 +11,7 @@ import (
 // the HTTP routes provably call the same store methods as `tempogate
 // sessions`.
 func (s *StoreSuite) TestAdminSessionStore() {
-	st := newAdminSessionStore(s.store)
+	st := NewAdminSessionStore(s.store)
 	now := time.Now().UTC()
 	s.saveFamily("fam-a", "alice@example.com", "a1")
 	s.saveFamily("fam-b", "bob@example.com", "b1")
