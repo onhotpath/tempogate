@@ -19,13 +19,13 @@ oidc:
     key: session-signing-key
 
 auth:
-  clients: tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback
+  clients: tempogate-device-ui:http://127.0.0.1/device/sso-callback
   clientSecretsSecretRef:
     name: tempogate-smoke
     key: client-secrets
 
-# Must reach the migrate Job as well as the Deployment; the script asserts it
-# in the rendered manifests.
+# Must reach the migrate initContainer as well as the serve container;
+# test/deploy/chart-assertions.sh asserts it in the rendered manifests.
 extraEnv:
   - name: STATE_SQLITE_BUSY_TIMEOUT
     value: 7s

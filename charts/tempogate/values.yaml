@@ -7,7 +7,8 @@
 # replica would corrupt state. Horizontal scaling needs a shared backend
 # (planned upstream); until then this MUST stay 1 and `autoscaling` MUST
 # stay disabled. The Deployment uses the Recreate strategy for the same
-# reason — two pods cannot hold the PVC writer at once.
+# reason: two pods cannot hold the PVC writer at once. The chart refuses
+# to render with replicaCount > 1 or autoscaling.enabled=true.
 replicaCount: 1
 
 image:
@@ -22,7 +23,9 @@ fullnameOverride: ""
 
 serviceAccount:
   create: true
-  automount: true
+  # tempogate never calls the Kubernetes API, so no token is mounted. Applied
+  # to the ServiceAccount and the pod spec.
+  automount: false
   annotations: {}
   # Generated from the fullname template when empty and create is true.
   name: ""
@@ -37,6 +40,8 @@ podSecurityContext:
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
@@ -44,6 +49,8 @@ securityContext:
   capabilities:
     drop:
       - ALL
+  seccompProfile:
+    type: RuntimeDefault
 
 service:
   type: ClusterIP
@@ -133,14 +140,11 @@ startupProbe:
   periodSeconds: 3
   failureThreshold: 20
 
-# Off by default and pinned to one replica — see the replicaCount comment
-# for why tempogate cannot be scaled horizontally yet.
+# Not supported: see the replicaCount comment for why tempogate cannot be
+# scaled horizontally yet. The chart ships no HorizontalPodAutoscaler and
+# refuses to render with enabled=true.
 autoscaling:
   enabled: false
-  minReplicas: 1
-  maxReplicas: 1
-  targetCPUUtilizationPercentage: 80
-  # targetMemoryUtilizationPercentage: 80
 
 # Persistent volume for the SQLite state store: the signing keypair, auth
 # codes, and refresh tokens. Losing it rotates signing keys and invalidates
@@ -196,9 +200,10 @@ oidc:
   # docs/cli-device-login.md. The `tempogate serve` Deployment REFUSES
   # TO BOOT if this is empty, not base64url, or does not decode to
   # exactly 32 bytes — set this before upgrading or the Deployment will
-  # crash-loop. The migrate Job does not need it: `tempogate migrate`
-  # builds only the SQLite store and never receives secrets. Supply it via
-  # an existing Secret you create out of band; generate the value once with:
+  # crash-loop. The migrate initContainer does not need it: `tempogate
+  # migrate` builds only the SQLite store and never receives secrets.
+  # Supply it via an existing Secret you create out of band; generate the
+  # value once with:
   #   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
   # The key MUST stay stable across rolling restarts: rotating it
   # invalidates every active approval session.
@@ -278,8 +283,9 @@ admin:
   # KEYS_RELOAD_INTERVAL) keep their binary defaults; override them through
   # extraEnv.
 
-# Extra environment variables appended verbatim to the Deployment container
-# and the migrate Job, e.g. [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].
+# Extra environment variables appended verbatim to the serve container and
+# the migrate initContainer, e.g.
+# [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].
 extraEnv: []
 
 # Extra volumes / mounts on the Deployment (the state PVC is wired

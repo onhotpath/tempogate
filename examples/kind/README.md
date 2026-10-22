@@ -36,7 +36,8 @@ Overrides via env: `CLUSTER`, `RELEASE`.
 `values.yaml` is a **smoke overlay**: small resource requests, the cluster's
 default StorageClass for the SQLite PVC, debug logging, and an issuer of
 `http://127.0.0.1:8000` reachable over `kubectl port-forward`. It proves the
-chart installs, the migrate Job runs, and the server serves `/healthz`.
+chart installs, the `migrate` initContainer runs, and the server serves
+`/healthz`.
 
 It does **not** wire SSO — no upstream Google client is configured, so the
 login flow is not exercised here. The full interactive SSO + CLI-token story

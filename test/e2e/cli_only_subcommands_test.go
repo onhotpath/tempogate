@@ -2,11 +2,11 @@
 
 // Acceptance proof that the real tempogate image runs its non-serve
 // subcommands with no server configuration at all: only STATE_SQLITE_PATH
-// and a writable state volume, exactly what the Helm migrate Job and the
-// docker-compose `tempogate-migrate` service provide. `serve` alone needs
-// the OIDC settings; if building the server graph ever leaks back into the
-// other subcommands, a fresh install's migrate step fails and this test
-// catches it before a deployment does.
+// and a writable state volume, exactly what the Helm chart's migrate
+// initContainer and the docker-compose `tempogate-migrate` service provide.
+// `serve` alone needs the OIDC settings; if building the server graph ever
+// leaks back into the other subcommands, a fresh install's migrate step
+// fails and this test catches it before a deployment does.
 package e2e
 
 import (

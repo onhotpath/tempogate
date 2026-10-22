@@ -39,7 +39,7 @@ curl -fsS http://127.0.0.1:8000/healthz
 
 - **Single replica, by design.** The default state store is SQLite on one
   ReadWriteOnce PVC, and SQLite allows exactly one writer. `replicaCount`
-  MUST stay `1` and `autoscaling` MUST stay disabled until a shared state
+  MUST stay `1` and `autoscaling` MUST stay disabled (the chart refuses to render otherwise) until a shared state
   backend lands upstream. The Deployment uses the `Recreate` strategy so an
   update never runs two pods against the same volume.
 - **Separate admin listener.** `service.port` serves the public OIDC/OAuth2
@@ -54,16 +54,17 @@ curl -fsS http://127.0.0.1:8000/healthz
   https deployment, `extraEnv` included, and the admin listener never
   serves them. Get the specs with `tempogate gen-oas` and
   `tempogate gen-oas --admin` instead.
-- **Schema migrations** run in a dedicated `tempogate migrate` Job
-  applied alongside the release (not a Helm hook — Helm v4's sequential
-  hook execution deadlocks a hook Job against a chart-managed
-  `WaitForFirstConsumer` PVC). The migrate pod and the serve pod share
-  the PVC; whichever the scheduler places first is the volume's first
-  consumer, so the chart needs no special StorageClass. `serve` refuses
-  to run against a stale store, so a serve pod that starts before the
-  migration finishes exits and is restarted until the schema is current
-  (seconds, on SQLite). The Job name carries the release revision so
-  `helm upgrade` always runs a fresh migration.
+- **Schema migrations** run in a `migrate` initContainer of the
+  tempogate pod, before `serve` starts, on the same volume. With one
+  replica and the `Recreate` strategy the previous pod has exited before
+  the new pod's `migrate` runs, so a migration never races a running
+  server or needs a second ReadWriteOnce attachment, on install,
+  upgrade, and rollback alike. It is not a Helm hook: a hook Job would
+  either own the chart's PVC lifecycle or race the old pod for the
+  volume. Read the migration output with
+  `kubectl logs <pod> -c migrate`. Chart releases up to 0.3.0 ran a
+  separate `<release>-migrate-<revision>` Job instead; Helm removes it on
+  the first upgrade to this version.
 - **State is release-managed.** The chart-managed PVC is removed on
   `helm uninstall` (signing keypair + refresh tokens included). To keep
   state across an uninstall, pre-create a PVC and set
@@ -111,17 +112,18 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `replicaCount` | `1` | Pods. MUST stay `1` (SQLite single-writer). |
+| `replicaCount` | `1` | Pods. MUST be `0` or `1` (SQLite single-writer); larger values fail the render. |
 | `image.repository` | `ghcr.io/onhotpath/tempogate` | Image repository. |
 | `image.tag` | `""` | Image tag; defaults to the chart `appVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Image pull secrets. |
 | `nameOverride` / `fullnameOverride` | `""` | Name overrides. |
 | `serviceAccount.create` | `true` | Create a ServiceAccount. |
+| `serviceAccount.automount` | `false` | Mount a ServiceAccount token (ServiceAccount and pod spec). tempogate never calls the Kubernetes API. |
 | `serviceAccount.name` | `""` | ServiceAccount name (generated when empty). |
 | `podAnnotations` / `podLabels` | `{}` | Extra pod metadata. |
-| `podSecurityContext` | `runAsNonRoot`, uid/gid/fsGroup `65532` | Pod security context (matches the distroless `nonroot` user). |
-| `securityContext` | drop ALL, no privilege escalation, read-only rootfs | Container security context. |
+| `podSecurityContext` | `runAsNonRoot`, uid/gid/fsGroup `65532`, `seccompProfile: RuntimeDefault` | Pod security context (matches the distroless `nonroot` user). |
+| `securityContext` | drop ALL, no privilege escalation, read-only rootfs, `seccompProfile: RuntimeDefault` | Container security context. |
 | `service.type` | `ClusterIP` | Service type. |
 | `service.port` | `8000` | The public HTTP port (OIDC + health). |
 | `service.admin.enabled` | `false` | Bind the admin listener on all pod interfaces and add a `<fullname>-admin` Service. Requires `admin.tokenSha256SecretRef`. |
@@ -135,7 +137,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `livenessProbe` | `GET /healthz` | Liveness probe. |
 | `readinessProbe` | `GET /readyz` | Readiness probe. |
 | `startupProbe` | `GET /healthz`, 20×3s | Startup probe (guards slow first boot). |
-| `autoscaling.enabled` | `false` | MUST stay disabled (single-writer). |
+| `autoscaling.enabled` | `false` | Not supported (single-writer); `true` fails the render. |
 | `persistence.enabled` | `true` | Provision a PVC for the SQLite store. |
 | `persistence.existingClaim` | `""` | Use an existing PVC instead. |
 | `persistence.storageClass` | `""` | StorageClass (`""` = cluster default, `"-"` = none). |
@@ -160,7 +162,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `admin.tokenSha256SecretRef` | `{name,key}` empty | Secret holding `ADMIN_TOKEN_SHA256` (hex SHA-256 digests of admin tokens). Unset locks the admin API. |
 | `admin.allowedHosts` | `[]` | `ADMIN_ALLOWED_HOSTS`. Empty with `service.admin.enabled` allows the admin Service DNS names on its port plus loopback names on any port. |
 | `admin.allowSystemGrants` | `false` | `ADMIN_ALLOW_SYSTEM_GRANTS`: allow cluster-wide `temporal-system` keys. |
-| `extraEnv` | `[]` | Extra env vars (Deployment and migrate Job). |
+| `extraEnv` | `[]` | Extra env vars (serve container and migrate initContainer). |
 | `volumes` / `volumeMounts` | `[]` | Extra volumes/mounts. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |
 
