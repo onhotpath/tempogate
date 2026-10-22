@@ -465,11 +465,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Summary:     "Device-flow verification: show the user_code entry form",
 		Tags:        []string{"oidc"},
 	}, func(ctx context.Context, in *deviceEnterGetInput) (*htmlOutput, error) {
-		out, err := u.handleEnterGet(ctx, in)
-		if err != nil {
-			return u.serverErrorHTML(ctx, "device-ui-enter", err), nil
-		}
-		return out, nil
+		return u.htmlOrServerError(ctx, "device-ui-enter")(u.handleEnterGet(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -481,11 +477,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Middlewares:   huma.Middlewares{withClientKey},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceEnterPostInput) (*deviceRedirectOrPage, error) {
-		out, err := u.handleEnterPost(ctx, in)
-		if err != nil {
-			return u.serverErrorPage(ctx, "device-ui-submit", err), nil
-		}
-		return out, nil
+		return u.pageOrServerError(ctx, "device-ui-submit")(u.handleEnterPost(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -496,11 +488,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:          []string{"oidc"},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceSSOCallbackInput) (*deviceRedirectOrPage, error) {
-		out, err := u.handleSSOCallback(ctx, in)
-		if err != nil {
-			return u.serverErrorPage(ctx, "device-ui-sso-callback", err), nil
-		}
-		return out, nil
+		return u.pageOrServerError(ctx, "device-ui-sso-callback")(u.handleSSOCallback(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -511,11 +499,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceConfirmInput) (*deviceRedirectOrPage, error) {
-		out, err := u.handleConfirm(ctx, in)
-		if err != nil {
-			return u.serverErrorPage(ctx, "device-ui-confirm", err), nil
-		}
-		return out, nil
+		return u.pageOrServerError(ctx, "device-ui-confirm")(u.handleConfirm(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -526,11 +510,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
-		out, err := u.handleDecision(ctx, in, true)
-		if err != nil {
-			return u.serverErrorHTML(ctx, "device-ui-approve", err), nil
-		}
-		return out, nil
+		return u.htmlOrServerError(ctx, "device-ui-approve")(u.handleDecision(ctx, in, true))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -541,11 +521,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
-		out, err := u.handleDecision(ctx, in, false)
-		if err != nil {
-			return u.serverErrorHTML(ctx, "device-ui-deny", err), nil
-		}
-		return out, nil
+		return u.htmlOrServerError(ctx, "device-ui-deny")(u.handleDecision(ctx, in, false))
 	})
 }
 
@@ -1083,15 +1059,32 @@ func (u *DeviceUI) errorHTMLPage(reason string) *htmlOutput {
 	return u.htmlPage(body)
 }
 
-// serverErrorPage and serverErrorHTML turn an unexpected handler error into
-// the HTML error page at 500. Left to Huma, the error would reach the browser
+// htmlOrServerError and pageOrServerError pass a handler's result through,
+// or turn its unexpected error into the 500 error page (see serverErrorHTML).
+// They are curried so a registration reads u.htmlOrServerError(ctx, op)(u.handle(...)).
+func (u *DeviceUI) htmlOrServerError(ctx context.Context, op string) func(*htmlOutput, error) (*htmlOutput, error) {
+	return func(out *htmlOutput, err error) (*htmlOutput, error) {
+		if err != nil {
+			return u.serverErrorHTML(ctx, op, err), nil
+		}
+		return out, nil
+	}
+}
+
+func (u *DeviceUI) pageOrServerError(ctx context.Context, op string) func(*deviceRedirectOrPage, error) (*deviceRedirectOrPage, error) {
+	return func(out *deviceRedirectOrPage, err error) (*deviceRedirectOrPage, error) {
+		if err != nil {
+			return u.redirectOrPage(u.serverErrorHTML(ctx, op, err)), nil
+		}
+		return out, nil
+	}
+}
+
+// serverErrorHTML turns an unexpected handler error into the HTML error page
+// at 500. Left to Huma, the error would reach the browser
 // as a JSON problem document, which the verification page cannot render. The
 // cause is logged under the request id the page shows, so a user's report
 // can be matched to the log line without the page exposing internals.
-func (u *DeviceUI) serverErrorPage(ctx context.Context, op string, err error) *deviceRedirectOrPage {
-	return u.redirectOrPage(u.serverErrorHTML(ctx, op, err))
-}
-
 func (u *DeviceUI) serverErrorHTML(ctx context.Context, op string, err error) *htmlOutput {
 	id := requestid.FromContext(ctx)
 	u.logger.ErrorContext(ctx, "device-ui request failed",

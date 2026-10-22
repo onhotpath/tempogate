@@ -12,13 +12,13 @@ import (
 	"github.com/onhotpath/tempogate/buildinfo"
 )
 
-// ClientSafeError is implemented by error types whose body is written for the
-// client and never carries internal detail, such as the RFC 6749 error shape
-// with a fixed description. A 5xx of such a type keeps its body (the request
-// id is still in the X-Request-Id header) and is logged like any other.
+// ClientSafeError is implemented by error types whose body may be written for
+// the client, such as the RFC 6749 error shape with a fixed description. A
+// 5xx whose ClientSafe reports true keeps its body (the request id is still
+// in the X-Request-Id header) and is logged like any other.
 type ClientSafeError interface {
 	error
-	ClientSafe()
+	ClientSafe() bool
 }
 
 // sanitizeServerErrors rewrites every 5xx error body to a generic message
@@ -49,7 +49,7 @@ func sanitizeServerErrors(logger *zap.Logger) huma.Transformer {
 			zap.String("error", errorDetail(se)),
 		)
 
-		if _, ok := v.(ClientSafeError); ok {
+		if cs, ok := v.(ClientSafeError); ok && cs.ClientSafe() {
 			return v, nil
 		}
 		return &huma.ErrorModel{

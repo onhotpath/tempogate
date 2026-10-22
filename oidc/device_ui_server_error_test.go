@@ -54,10 +54,28 @@ func (s *DeviceUISuite) TestServerErrorsRenderHTMLWithRequestID() {
 				return r
 			},
 		},
+		{
+			name:  "deny flip",
+			setup: func() { s.store.denyErr = storeErr },
+			req: func(cookie string) *http.Request {
+				r := s.post("/device/deny", url.Values{"csrf_token": {deviceUITestSID}, "user_code": {deviceUITestUserDisplay}})
+				r.Header.Set("Cookie", cookie)
+				return r
+			},
+		},
+		{
+			name:  "sso callback session issue",
+			setup: func() { s.bsStore.saveErr = storeErr },
+			req: func(string) *http.Request {
+				state := s.signedBounceState(deviceUITestUserCanonical, deviceUITestStateNonce, deviceUINow.Add(time.Minute).Unix())
+				return s.req(http.MethodGet, "/device/sso-callback?code=auth-code&state="+url.QueryEscape(state))
+			},
+		},
 	}
+	reset := func() { s.store.lookupErr, s.store.approveErr, s.store.denyErr, s.bsStore.saveErr = nil, nil, nil, nil }
 	for _, tc := range cases {
 		s.Run(tc.name, func() {
-			s.store.lookupErr, s.store.approveErr = nil, nil
+			reset()
 			cookie := s.seedSession()
 			tc.setup()
 
@@ -92,7 +110,7 @@ func (s *DeviceUISuite) TestServerErrorsRenderHTMLWithRequestID() {
 			assertNoSecretLeak(s.T(), logs.Bytes(), []string{deviceUITestSID, cookie})
 		})
 	}
-	s.store.lookupErr, s.store.approveErr = nil, nil
+	reset()
 }
 
 func (s *DeviceUISuite) deviceUIServerWithRequestIDs(logs *bytes.Buffer) *httptest.Server {

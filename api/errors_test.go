@@ -115,9 +115,9 @@ type oauthGatewayError struct {
 	Code string `json:"error"`
 }
 
-func (oauthGatewayError) Error() string  { return "upstream_error: " + leakyDetail }
-func (oauthGatewayError) GetStatus() int { return http.StatusBadGateway }
-func (oauthGatewayError) ClientSafe()    {}
+func (oauthGatewayError) Error() string    { return "upstream_error: " + leakyDetail }
+func (oauthGatewayError) GetStatus() int   { return http.StatusBadGateway }
+func (oauthGatewayError) ClientSafe() bool { return true }
 
 // TestClientSafeServerErrorKeepsItsBody pins the opt-out: a 5xx type that
 // declares its body client-safe (the OAuth error shape) is not rewritten, but
