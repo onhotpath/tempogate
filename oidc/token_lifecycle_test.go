@@ -44,6 +44,10 @@ type RefreshLifecycleSuite struct {
 	srv     *httptest.Server
 	client  *http.Client
 
+	// defaultLifetimes serves /token without WithTokenLifetimes, so the
+	// package defaults apply.
+	defaultLifetimes bool
+
 	mu  sync.Mutex
 	now time.Time
 	seq int
@@ -66,6 +70,7 @@ func (s *RefreshLifecycleSuite) SetupTest() {
 	s.store = newMemTokenStore()
 	s.now = signNow
 	s.seq = 0
+	s.defaultLifetimes = false
 	s.serve("example.com")
 }
 
@@ -80,13 +85,16 @@ func (s *RefreshLifecycleSuite) serve(allowedDomains string) {
 		s.srv.Close()
 	}
 	s.logs = &bytes.Buffer{}
-	tok := oidc.NewToken(s.store, s.signer, s.clients,
+	opts := []oidc.TokenOption{
 		oidc.WithTokenClock(s.clock),
 		oidc.WithRefreshGenerator(s.nextRefresh),
 		oidc.WithAllowedDomains(allowedDomains),
-		oidc.WithTokenLifetimes(lcAccessTTL, lcRefreshTTL, lcMaxLife),
 		oidc.WithTokenLogger(slog.New(slog.NewJSONHandler(s.logs, nil))),
-	)
+	}
+	if !s.defaultLifetimes {
+		opts = append(opts, oidc.WithTokenLifetimes(lcAccessTTL, lcRefreshTTL, lcMaxLife))
+	}
+	tok := oidc.NewToken(s.store, s.signer, s.clients, opts...)
 	mux := http.NewServeMux()
 	tok.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
 	s.srv = httptest.NewServer(mux)
@@ -251,6 +259,34 @@ func (s *RefreshLifecycleSuite) TestAbsoluteLifetimeEnforcedAtRefresh() {
 		CreatedAt: signNow.Add(-time.Hour), ExpiresAt: signNow.Add(29 * 24 * time.Hour),
 	})
 	s.requireInvalidGrant("legacy")
+}
+
+// TestUpgradeToSevenDayDefaultEndsOlderSessions: sessions minted while the
+// default absolute lifetime was 30 days carry stored expiries up to 7 days
+// ahead. After the upgrade, one signed in more than 7 days ago is refused at
+// its next refresh; a younger one rotates, capped at sign-in + 7 days.
+func (s *RefreshLifecycleSuite) TestUpgradeToSevenDayDefaultEndsOlderSessions() {
+	s.Require().Equal(7*24*time.Hour, oidc.DefaultRefreshMaxLifetime)
+	s.defaultLifetimes = true
+	s.serve("example.com")
+
+	day := 24 * time.Hour
+	legacy := func(token string, signedIn time.Duration) {
+		s.store.putRefresh(oidc.Refresh{
+			Token: token, JTI: "jti-" + token, ClientID: "ui", Subject: "google-sub-alice", Email: "alice@example.com",
+			FamilyID: "family-" + token, AuthTime: signNow.Add(-signedIn),
+			// Last refreshed a day ago under the old defaults: 7-day idle
+			// expiry, well inside sign-in + 30 days.
+			CreatedAt: signNow.Add(-day), ExpiresAt: signNow.Add(6 * day),
+		})
+	}
+	legacy("eight-days", 8*day)
+	legacy("six-days", 6*day)
+
+	s.requireInvalidGrant("eight-days")
+	s.mustRefresh("six-days")
+	s.True(s.store.lastRefresh().ExpiresAt.Equal(signNow.Add(day)),
+		"the rotated token ends at sign-in + 7 days (got %s)", s.store.lastRefresh().ExpiresAt)
 }
 
 // TestRemovedDomainEndsSessionAndRevokesFamily: an operator removes a domain

@@ -62,7 +62,7 @@ func defaultConfig() *Config {
 			// configured), so the default changes nothing for existing setups.
 			AccessTokenAudience: "temporal",
 			RefreshTokenTTL:     7 * 24 * time.Hour,
-			RefreshMaxLifetime:  30 * 24 * time.Hour,
+			RefreshMaxLifetime:  7 * 24 * time.Hour,
 			Google: GoogleConfig{
 				AuthEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
 				// #nosec G101 -- public Google token endpoint URL, not a
