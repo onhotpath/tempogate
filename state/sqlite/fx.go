@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/fx"
@@ -42,6 +43,32 @@ func newFx(p Params) (*Store, error) {
 	return s, nil
 }
 
+type reaperParams struct {
+	fx.In
+
+	Store  *Store
+	Logger *zap.Logger `optional:"true"`
+
+	Interval           time.Duration `name:"state_reaper_interval"`
+	RefreshMaxLifetime time.Duration `name:"oidc_refresh_max_lifetime"`
+}
+
+// newReaperFx builds the expired-state reaper. It is only constructed here;
+// `serve` runs it, so one-shot subcommands (migrate, keys) never sweep.
+func newReaperFx(p reaperParams) (*Reaper, error) {
+	if p.Interval < 0 {
+		return nil, fmt.Errorf("sqlite: STATE_REAPER_INTERVAL must not be negative, got %s", p.Interval)
+	}
+	opts := []ReaperOption{
+		WithReaperInterval(p.Interval),
+		WithReaperRefreshMaxLifetime(p.RefreshMaxLifetime),
+	}
+	if p.Logger != nil {
+		opts = append(opts, WithReaperLogger(p.Logger.Named("reaper")))
+	}
+	return NewReaper(p.Store, opts...), nil
+}
+
 // Fx registers the sqlite store as *Store (for direct callers like
 // cmd/serve.go) plus every consumer-side interface it satisfies
 // (keys.KeyStore, keys.DenylistChecker, oidc.AuthRequestStore,
@@ -72,5 +99,6 @@ func Fx() fx.Option {
 			),
 		),
 		fx.Provide(newAdminKeyRegistry),
+		fx.Provide(newReaperFx),
 	)
 }

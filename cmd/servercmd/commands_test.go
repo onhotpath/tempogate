@@ -32,6 +32,7 @@ func TestFxWiresServerSubcommands(t *testing.T) {
 			zap.NewNop,
 			func() *sqlite.Store { return store },
 			func() *keys.Keys { return keys.New(keys.WithStore(store)) },
+			func() *sqlite.Reaper { return sqlite.NewReaper(store) },
 			api.NewReadiness,
 			func(r *api.Readiness) *api.Servers { return api.New(r) },
 			fx.Annotate(

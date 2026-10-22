@@ -166,6 +166,13 @@ func (h *DeviceAuthorization) handle(ctx context.Context, in *deviceAuthorizatio
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "malformed form body")
 	}
 
+	if err := checkParamLengths(
+		paramCap{"client_id", form.Get("client_id"), maxClientIDLen},
+		paramCap{"scope", form.Get("scope"), maxScopeLen},
+	); err != nil {
+		return nil, err
+	}
+
 	clientID := form.Get("client_id")
 	if clientID == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "client_id is required")

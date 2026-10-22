@@ -22,9 +22,9 @@ import (
 // against the consumer-side sentinel without importing state/sqlite.
 var ErrDuplicateDeviceCode = fmt.Errorf("%w: sqlite duplicate", oidc.ErrDuplicateDeviceCode)
 
-// ErrDeviceCodeNotFound is returned by a lookup or consume that finds no row
-// — because the row was never written, was already consumed, or was reaped
-// by a sweeper. The /token handler maps this to OAuth2 invalid_grant. The
+// ErrDeviceCodeNotFound is returned by a lookup or consume that finds no row,
+// because the row was never written, was already consumed, or was deleted
+// by the expiry reaper (reaper.go). The /token handler maps this to OAuth2 invalid_grant. The
 // chain is rooted at oidc.ErrDeviceCodeNotFound for the same consumer-side
 // errors.Is reasons as ErrDuplicateDeviceCode.
 var ErrDeviceCodeNotFound = fmt.Errorf("%w: sqlite", oidc.ErrDeviceCodeNotFound)

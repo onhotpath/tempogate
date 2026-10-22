@@ -261,13 +261,51 @@ func newDeviceUIRegistrar(p deviceUIParams) (func(huma.API), error) {
 	return ui.Register, nil
 }
 
+type rateLimiterParams struct {
+	fx.In
+
+	TrustedProxies      string `name:"http_trusted_proxies"`
+	Authorize           int    `name:"http_rate_limit_authorize"`
+	DeviceAuthorization int    `name:"http_rate_limit_device_authorization"`
+	DeviceVerification  int    `name:"http_rate_limit_device_verification"`
+	Token               int    `name:"http_rate_limit_token"`
+}
+
+// newRateLimitMiddleware builds the per-client rate limiter for the public
+// endpoints. A negative limit or a malformed HTTP_TRUSTED_PROXIES entry
+// fails startup rather than silently trusting or throttling the wrong
+// clients.
+func newRateLimitMiddleware(p rateLimiterParams) (func(huma.Context, func(huma.Context)), error) {
+	limits := RateLimits{
+		Authorize:           p.Authorize,
+		DeviceAuthorization: p.DeviceAuthorization,
+		DeviceVerification:  p.DeviceVerification,
+		Token:               p.Token,
+	}
+	if err := limits.Validate(); err != nil {
+		return nil, err
+	}
+	proxies, err := ParseTrustedProxies(p.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	return NewRateLimiter(WithRateLimits(limits), WithTrustedProxies(proxies)).Middleware, nil
+}
+
 // Fx contributes the /authorize, /callback/google, /token, /userinfo,
 // /device_authorization and /device* registrars into the shared
 // "api_registrars" group the api package collects. The store, upstream,
 // signer and verifier dependencies are satisfied by state/sqlite,
-// oidc/google and keys via fx.As / fx.Provide.
+// oidc/google and keys via fx.As / fx.Provide. The rate limiter goes into
+// the "api_middlewares" group, which api installs on the same surface.
 func Fx() fx.Option {
 	return fx.Options(
+		fx.Provide(
+			fx.Annotate(
+				newRateLimitMiddleware,
+				fx.ResultTags(`group:"api_middlewares"`),
+			),
+		),
 		fx.Provide(newClientRegistry),
 		fx.Provide(newSessionManager),
 		fx.Provide(newToken),

@@ -625,6 +625,7 @@ func (s *StoreSuite) TestFxComposition() {
 
 	var (
 		injected      *Store
+		reaper        *Reaper
 		asDeviceStr   oidc.DeviceCodeStore
 		asBrowserSess oidc.BrowserSessionStore
 	)
@@ -632,7 +633,7 @@ func (s *StoreSuite) TestFxComposition() {
 		config.Fx(),
 		tlog.Fx(),
 		Fx(),
-		fx.Populate(&injected, &asDeviceStr, &asBrowserSess),
+		fx.Populate(&injected, &reaper, &asDeviceStr, &asBrowserSess),
 	)
 	a.RequireStart()
 	defer a.RequireStop()
@@ -649,4 +650,15 @@ func (s *StoreSuite) TestFxComposition() {
 	// *Store; a refactor that drops the binding would silently break
 	// SessionManager graph construction in production.
 	s.Require().NotNil(asBrowserSess)
+	s.Require().NotNil(reaper)
+	s.Equal(defaultReapInterval, reaper.interval, "STATE_REAPER_INTERVAL default reaches the reaper")
+	s.Equal(30*24*time.Hour, reaper.refreshMaxLifetime, "OIDC_REFRESH_MAX_LIFETIME reaches the reaper")
+}
+
+func (s *StoreSuite) TestFxRejectsNegativeReaperInterval() {
+	s.T().Setenv("STATE_SQLITE_PATH", filepath.Join(s.T().TempDir(), "fx.db"))
+	s.T().Setenv("STATE_REAPER_INTERVAL", "-1m")
+	app := fx.New(fx.NopLogger, config.Fx(), tlog.Fx(), Fx(), fx.Invoke(func(*Reaper) {}))
+	s.Require().Error(app.Err())
+	s.Contains(app.Err().Error(), "STATE_REAPER_INTERVAL")
 }

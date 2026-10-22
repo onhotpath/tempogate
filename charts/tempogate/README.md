@@ -99,6 +99,7 @@ auth:
 | `service.type` | `ClusterIP` | Service type. |
 | `service.port` | `8000` | The single HTTP port (public + health). |
 | `listenAddress` | `0.0.0.0` | `HTTP_LISTENER` bind host (must not be loopback in-cluster). |
+| `trustedProxies` | `[]` | `HTTP_TRUSTED_PROXIES`: CIDRs of the proxies (e.g. the ingress controller) whose `X-Forwarded-For` is believed for per-client rate limits. Empty: every client behind the ingress shares one budget. See [docs/configuration.md](../../docs/configuration.md#abuse-controls). |
 | `ingress.enabled` | `false` | Enable Ingress. |
 | `ingress.className` / `hosts` / `tls` | _(see values.yaml)_ | Ingress wiring. |
 | `httpRoute.enabled` | `false` | Gateway API HTTPRoute (alternative to Ingress). |

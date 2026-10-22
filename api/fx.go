@@ -27,6 +27,10 @@ type serversParams struct {
 	// the /admin/keys handler this way so there is no path from the public
 	// surface to admin handlers.
 	AdminRegistrars []func(huma.API) `group:"admin_registrars"`
+
+	// Middlewares wrap the public OIDC operations (oidc contributes its
+	// per-client rate limiter this way).
+	Middlewares []func(huma.Context, func(huma.Context)) `group:"api_middlewares"`
 }
 
 func newServers(p serversParams) *Servers {
@@ -40,6 +44,9 @@ func newServers(p serversParams) *Servers {
 	}
 	for _, r := range p.AdminRegistrars {
 		opts = append(opts, WithAdminRegistrar(r))
+	}
+	for _, m := range p.Middlewares {
+		opts = append(opts, WithMiddleware(m))
 	}
 	return New(p.Readiness, opts...)
 }

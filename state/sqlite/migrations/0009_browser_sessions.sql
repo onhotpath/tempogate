@@ -3,7 +3,8 @@
 -- HttpOnly cookie scoped to the verification pages; the cookie's signature
 -- protects integrity, this row binds it to the authenticated email and an
 -- absolute expiry. TTL enforcement is the handler's concern (it owns the
--- clock); the row survives until consume / forced revocation / expiry sweep.
+-- clock); the row survives until consume / forced revocation, or until the
+-- reaper `serve` runs (reaper.go) deletes it after expiry.
 CREATE TABLE browser_sessions (
     sid         TEXT PRIMARY KEY,
     email       TEXT NOT NULL,

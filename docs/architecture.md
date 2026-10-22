@@ -91,6 +91,12 @@ again is recognised as reuse and revokes the whole family (RFC 9700
 revoke`. The jti denylist used for integration keys plays no part here: it
 covers JWTs, and refresh tokens are opaque rows.
 
+**Bounded anonymous input.** The OIDC endpoints are reachable without credentials and some write a row per request.
+So request parameters have length caps, the endpoints that write state or check credentials are rate-limited per client address (trusting `X-Forwarded-For` only from configured proxies), and `serve` runs a reaper that deletes expired rows.
+A flood can neither fill the state volume nor outlive its expiry.
+Refresh tokens are reaped a whole family at a time, once no token in it can be used, so the tombstones reuse detection relies on are never removed early.
+See [docs/configuration.md](configuration.md#abuse-controls).
+
 **Migration is a separate step.** `serve` refuses to run against a stale
 schema. In Kubernetes a dedicated `migrate` Job runs alongside the release
 (not a Helm hook — a hook Job mounting the chart's own first-consumer PVC

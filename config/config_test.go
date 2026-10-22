@@ -13,6 +13,8 @@ type ConfigSuite struct {
 	suite.Suite
 }
 
+var defaultRateLimits = RateLimitConfig{Authorize: 30, DeviceAuthorization: 10, DeviceVerification: 20, Token: 60}
+
 func TestConfigSuite(t *testing.T) {
 	suite.Run(t, new(ConfigSuite))
 }
@@ -32,6 +34,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -45,6 +48,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -73,6 +77,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(0, 0, 0, 0),
 						Port: 9000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -86,6 +91,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -115,6 +121,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -128,6 +135,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -155,6 +163,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -168,6 +177,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -197,6 +207,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -210,6 +221,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    8,
 						BusyTimeout: 2 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -237,6 +249,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -250,6 +263,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "https://tempogate.internal.example.com",
@@ -279,6 +293,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -292,6 +307,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -321,6 +337,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -334,6 +351,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:                    "http://127.0.0.1:8000",
@@ -365,6 +383,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -378,6 +397,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -408,6 +428,7 @@ func (s *ConfigSuite) TestNew() {
 						IP:   net.IPv4(127, 0, 0, 1),
 						Port: 8000,
 					},
+					RateLimit: defaultRateLimits,
 				},
 				Admin: AdminConfig{
 					Listener: Listener{
@@ -421,6 +442,7 @@ func (s *ConfigSuite) TestNew() {
 						MaxConns:    1,
 						BusyTimeout: 5 * time.Second,
 					},
+					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
 					Issuer:             "http://127.0.0.1:8000",
@@ -483,4 +505,31 @@ func (s *ConfigSuite) TestFxProjectsKeysEncryptionKey() {
 	s.Require().NoError(app.Err())
 	s.Equal("a2V5", got.Key)
 	s.Equal("/run/secrets/kek", got.File)
+}
+
+func (s *ConfigSuite) TestAbuseControlsFromEnv() {
+	s.T().Setenv("HTTP_TRUSTED_PROXIES", "10.0.0.0/8,192.0.2.7")
+	s.T().Setenv("HTTP_RATE_LIMIT_AUTHORIZE", "100")
+	s.T().Setenv("HTTP_RATE_LIMIT_DEVICE_AUTHORIZATION", "0")
+	s.T().Setenv("HTTP_RATE_LIMIT_DEVICE_VERIFICATION", "7")
+	s.T().Setenv("HTTP_RATE_LIMIT_TOKEN", "600")
+	s.T().Setenv("STATE_REAPER_INTERVAL", "30s")
+
+	var got struct {
+		fx.In
+		TrustedProxies string        `name:"http_trusted_proxies"`
+		Authorize      int           `name:"http_rate_limit_authorize"`
+		DeviceAuthz    int           `name:"http_rate_limit_device_authorization"`
+		DeviceVerify   int           `name:"http_rate_limit_device_verification"`
+		Token          int           `name:"http_rate_limit_token"`
+		ReaperInterval time.Duration `name:"state_reaper_interval"`
+	}
+	app := fx.New(fx.NopLogger, Fx(), fx.Populate(&got))
+	s.Require().NoError(app.Err())
+	s.Equal("10.0.0.0/8,192.0.2.7", got.TrustedProxies)
+	s.Equal(100, got.Authorize)
+	s.Zero(got.DeviceAuthz, "0 disables one endpoint's limit")
+	s.Equal(7, got.DeviceVerify)
+	s.Equal(600, got.Token)
+	s.Equal(30*time.Second, got.ReaperInterval)
 }

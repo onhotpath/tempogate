@@ -34,8 +34,11 @@ type apiConfig struct {
 	// separate http.Handler from the public surface and meant for binding
 	// to a private listener.
 	adminRegistrars []func(huma.API)
-	basePath        string
-	docs            bool
+	// middlewares wrap every operation on the public OIDC API; feature
+	// packages use them for cross-cutting request policy (rate limits).
+	middlewares []func(huma.Context, func(huma.Context))
+	basePath    string
+	docs        bool
 }
 
 type Option func(*apiConfig)
@@ -59,6 +62,13 @@ func WithRegistrar(fn func(huma.API)) Option {
 // and never appear in the public surface's mux or OpenAPI spec.
 func WithAdminRegistrar(fn func(huma.API)) Option {
 	return func(c *apiConfig) { c.adminRegistrars = append(c.adminRegistrars, fn) }
+}
+
+// WithMiddleware adds a Huma middleware to the public OIDC API. Huma binds
+// middlewares when an operation is registered, so these are installed
+// before any registrar runs, whatever order the options arrive in.
+func WithMiddleware(fn func(huma.Context, func(huma.Context))) Option {
+	return func(c *apiConfig) { c.middlewares = append(c.middlewares, fn) }
 }
 
 // WithBasePath mounts the OIDC surface under a URL path prefix — the path
@@ -105,6 +115,7 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 	// Root mode: one adapter, health + OIDC all at root.
 	if cfg.basePath == "" {
 		a := humago.NewWithPrefix(mux, "", cfg.humaConfig("tempogate"))
+		a.UseMiddleware(cfg.middlewares...)
 		registerHealth(a, readiness)
 		for _, fn := range cfg.registrars {
 			fn(a)
@@ -122,6 +133,7 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 	registerHealth(healthAPI, readiness)
 
 	oidcAPI := humago.NewWithPrefix(mux, cfg.basePath, cfg.humaConfig("tempogate"))
+	oidcAPI.UseMiddleware(cfg.middlewares...)
 	for _, fn := range cfg.registrars {
 		fn(oidcAPI)
 	}

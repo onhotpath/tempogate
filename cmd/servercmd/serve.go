@@ -31,6 +31,7 @@ type serveParams struct {
 
 	Logger        *zap.Logger
 	Store         *sqlite.Store
+	Reaper        *sqlite.Reaper
 	Keys          *keys.Keys
 	Servers       *api.Servers
 	Readiness     *api.Readiness
@@ -77,6 +78,10 @@ func newServeCmd(p serveParams) *cobra.Command {
 
 			return xrun.All(
 				xrun.NoTimeout,
+				// Started only once the schema is known current, and
+				// stopped with the listeners: a sweep in flight is
+				// cancelled through ctx.
+				xrun.ComponentFunc(p.Reaper.Run),
 				httpServer(httpServerOptions{
 					server: &http.Server{
 						Addr:              publicAddr,

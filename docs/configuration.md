@@ -29,6 +29,36 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `HTTP_LISTENER` | `127.0.0.1:8000` | `host:port` for the single public listener (OIDC/OAuth2 + `/healthz` + `/readyz`). The loopback default is unreachable through a container/Service — set `0.0.0.0:8000` in-cluster. |
+| `HTTP_TRUSTED_PROXIES` | _(empty)_ | Comma-separated CIDRs or addresses of reverse proxies in front of tempogate. Only for a connection from one of these is the client address taken from `X-Forwarded-For`. See [Abuse controls](#abuse-controls). |
+| `HTTP_RATE_LIMIT_AUTHORIZE` | `30` | Requests per minute per client address to `GET /authorize`. `0` disables. |
+| `HTTP_RATE_LIMIT_DEVICE_AUTHORIZATION` | `10` | Requests per minute per client address to `POST /device_authorization`. `0` disables. |
+| `HTTP_RATE_LIMIT_DEVICE_VERIFICATION` | `20` | Requests per minute per client address to `POST /device` (the user_code form). `0` disables. |
+| `HTTP_RATE_LIMIT_TOKEN` | `60` | Requests per minute per client address to `POST /token`. `0` disables. |
+
+### Abuse controls
+
+The public endpoints accept anonymous requests, and `/authorize` and `/device_authorization` write a row per request, so tempogate bounds both the size and the rate of what an unauthenticated caller can send.
+
+**Parameter caps.**
+Oversized parameters are refused with `400 invalid_request` before anything is stored:
+`state` and `nonce` at most 512 bytes, `scope` at most 1 KiB, `client_id` at most 256 bytes, `redirect_uri` at most 2 KiB, and `code_challenge` exactly 43 base64url characters (an S256 challenge).
+At `/token`, `code`, `refresh_token`, `device_code` and `code_verifier` are capped at 1 KiB, a generous ceiling over the 43-character values tempogate issues.
+
+**Rate limits.**
+Each `HTTP_RATE_LIMIT_*` endpoint allows a burst of that many requests per client address, refilling evenly over a minute.
+IPv6 clients are counted per /64.
+A request over the budget gets `429 Too Many Requests` with `Retry-After` (seconds until one more request is allowed) and, on the OAuth endpoints, an RFC 6749 error body `{"error": "temporarily_unavailable", ...}`.
+The budgets live in process memory: they reset on restart, and each replica would count separately.
+A fronting proxy or WAF may rate-limit instead; set the matching limit to `0` to leave it to the proxy.
+The Temporal Web UI calls `/token` from its server for every user's sign-in and refresh, so all UI users share the UI server's `/token` budget: raise `HTTP_RATE_LIMIT_TOKEN` if many users sign in at once.
+
+**Client address behind a proxy.**
+By default the client address is the TCP peer.
+Behind an ingress or load balancer every request then comes from the proxy, so all clients share one budget and one noisy client can lock everyone out.
+Set `HTTP_TRUSTED_PROXIES` to the proxies' addresses (for a Kubernetes ingress controller, typically the pod CIDR) to fix this.
+For a connection from a trusted proxy, tempogate walks `X-Forwarded-For` from the right and uses the first address that is not itself a trusted proxy: entries further left were written by the client and are ignored.
+A connection from any other address is its own client, whatever `X-Forwarded-For` it sends.
+Never list a range that clients can connect from directly, or they can choose their own budget.
 
 ### API documentation
 
@@ -43,6 +73,7 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 | `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. See below for how its contents are protected. |
 | `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise; horizontal scaling needs a shared backend (not yet available). |
 | `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before erroring. |
+| `STATE_REAPER_INTERVAL` | `5m` | Go duration; how often `serve` deletes expired state (see below). `0` disables the reaper. |
 
 The database file and its `-wal` / `-shm` companions are created (and on every start, reset to) mode `0600`, whatever the umask.
 A missing state directory is created `0700`.
@@ -51,6 +82,11 @@ An existing directory, such as a mounted volume, is left as it is; tempogate log
 Refresh tokens (including consumed ones), authorization codes, device codes and verification-page session ids are stored only as their SHA-256, so a copy of the database (a backup, a volume snapshot) holds nothing a client could present.
 The device flow's `user_code` is the exception: it is short enough that its hash would be reversed by trying every code, and approving it needs a signed-in browser session anyway.
 Upgrading to migration `0012` deletes the existing rows of those tables, because SQLite cannot compute the hashes: every user signs in once more after the upgrade.
+
+`serve` deletes expired rows every `STATE_REAPER_INTERVAL`, starting at boot: pending authorization requests, authorization codes, device codes and verification-page sessions once they expire, and denylisted integration-key ids an hour after the key's `expires_at` (keys without one stay denylisted).
+Refresh tokens go a whole session (family) at a time, and only once every token in it is dead: the session is past `OIDC_REFRESH_MAX_LIFETIME`, or every token has expired and was rotated or revoked.
+Until then rotated tokens are kept, so presenting one is still detected as reuse.
+Rows are deleted in batches so a large sweep does not hold up sign-ins; counts are logged at `debug`, failures at `warn`.
 
 ### Signing-key encryption
 

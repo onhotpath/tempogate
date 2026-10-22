@@ -7,8 +7,9 @@
 --             a replay or an operator can revoke the whole chain at once.
 -- consumed_at set when the token is rotated, instead of deleting the row; the
 --             tombstone is what lets a replay be recognised. Tombstones are
---             kept until the family's absolute expiry (a reaper is a
---             follow-up; until then they accumulate like other expired rows).
+--             kept until the whole family is dead (past its absolute
+--             expiry, or every row expired and consumed or revoked); the
+--             reaper `serve` runs (reaper.go) then deletes the family.
 -- revoked_at  set on every row of a revoked family, live or consumed, so a
 --             rotation racing the revocation cannot persist its child.
 --
