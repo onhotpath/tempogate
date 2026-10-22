@@ -458,7 +458,7 @@ func auditOutcome(err error) string {
 	switch {
 	case err == nil:
 		return "success"
-	case errors.Is(err, ErrIntegrationKeyNotFound):
+	case errors.Is(err, ErrIntegrationKeyNotFound), errors.Is(err, ErrSessionNotFound):
 		return "not_found"
 	case errors.As(err, &se) && se.GetStatus() == http.StatusForbidden:
 		return "denied"

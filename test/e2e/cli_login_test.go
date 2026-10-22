@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -110,6 +111,7 @@ var jwtPattern = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0
 type cliStack struct {
 	mockBaseURL      string // mapped http://host:port for mockgoogle
 	tempogateBaseURL string // mapped http://host:port for tempogate
+	adminURL         string // mapped http://host:port for the admin listener; empty without withAdminAPI
 	frontendAddr     string
 	tempogate        testcontainers.Container
 	client           testcontainers.Container
@@ -122,7 +124,7 @@ func TestCLILogin(t *testing.T) {
 	}
 	t.Parallel()
 	ctx := context.Background()
-	st := setupCLIStack(ctx, t)
+	st := setupCLIStack(ctx, t, withAdminAPI(ctx, t))
 
 	// Identity the mock asserts: a Workspace user of example.com, which is
 	// both tempogate's allowed email domain and its allowed hosted domain.
@@ -224,26 +226,77 @@ func TestCLILogin(t *testing.T) {
 	require.NotEqual(t, refreshed, again, "the rotated refresh token must renew again")
 	assertTempogateJWT(t, again)
 
-	// --- revocation: an operator ends the user's sessions with `tempogate
-	// sessions revoke`, run inside the server container against its state
-	// volume. The CLI's next refresh then fails instead of renewing.
-	code, out, err := st.tempogate.Exec(ctx,
-		[]string{"/tempogate", "sessions", "revoke", "--email", allowedEmail}, tcexec.Multiplexed())
-	require.NoError(t, err)
-	revokeOut, _ := io.ReadAll(out)
-	require.Equalf(t, 0, code, "sessions revoke: %s", revokeOut)
-	require.Contains(t, string(revokeOut), "revoked 1 session(s)")
+	// --- revocation: an operator ends the session through the admin API
+	// (`tempogate sessions revoke` is the in-container twin, covered by
+	// TestRefreshLifecycle). The CLI's next refresh then fails instead of
+	// renewing, while the access token already issued keeps working until
+	// its exp: neither tempogate nor Temporal consults sessions for it.
+	live := st.readToken(ctx, t)
+	family := adminSessionFamily(t, st.adminURL, allowedEmail)
+	code, body := adminRequest(t, http.MethodPost, st.adminURL+"/admin/sessions/revoke", "", "",
+		`{"family_id":"`+family+`"}`)
+	require.Equalf(t, http.StatusUnauthorized, code, "revoking sessions needs the admin token: %s", body)
+	code, body = adminRequest(t, http.MethodPost, st.adminURL+"/admin/sessions/revoke", "", e2eAdminToken,
+		`{"family_id":"`+family+`"}`)
+	require.Equalf(t, http.StatusOK, code, "POST /admin/sessions/revoke: %s", body)
+	require.JSONEq(t, `{"revoked":1}`, withoutSchema(t, body))
+	require.Contains(t, containerLogs(ctx, t, st.tempogate), "revoke_sessions", "the revoke is audited")
+	require.NotContains(t, containerLogs(ctx, t, st.tempogate), live.RefreshToken, "token values never reach the log")
 
-	revoked := st.readToken(ctx, t)
-	revoked.ExpiresAt = time.Now().Add(-time.Minute)
-	st.writeToken(ctx, t, revoked)
-	code, out, err = st.client.Exec(ctx,
+	code, body = adminRequest(t, http.MethodGet, st.adminURL+"/admin/sessions?email="+allowedEmail, "", e2eAdminToken, "")
+	require.Equalf(t, http.StatusOK, code, "GET /admin/sessions: %s", body)
+	require.JSONEq(t, `{"items":[]}`, withoutSchema(t, body), "the revoked session is no longer listed")
+
+	require.Equal(t, http.StatusOK, userinfoStatus(t, st.tempogateBaseURL, live.AccessToken),
+		"the access token keeps working at /userinfo until it expires")
+	_, err = client.ListNamespaces(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+live.AccessToken),
+		&workflowservice.ListNamespacesRequest{PageSize: 10})
+	require.NoError(t, err, "and at Temporal, which honours only exp and JWKS")
+
+	live.ExpiresAt = time.Now().Add(-time.Minute)
+	st.writeToken(ctx, t, live)
+	code, out, err := st.client.Exec(ctx,
 		[]string{"tempogate", "token", insecureFlag, "--issuer", tempogateIssuer, "--token-file", cliTokenFile},
 		tcexec.Multiplexed())
 	require.NoError(t, err)
 	tokenOut, _ := io.ReadAll(out)
 	require.NotEqualf(t, 0, code, "a revoked session must not refresh: %s", tokenOut)
 	require.Contains(t, string(tokenOut), "invalid_grant")
+
+	code, body = adminRequest(t, http.MethodPost, st.adminURL+"/admin/sessions/revoke", "", e2eAdminToken,
+		`{"family_id":"no-such-family"}`)
+	require.Equalf(t, http.StatusNotFound, code, "an unknown family is 404, like an unknown key: %s", body)
+}
+
+// adminSessionFamily returns the family id of email's only live session, as
+// listed by GET /admin/sessions.
+func adminSessionFamily(t *testing.T, adminURL, email string) string {
+	t.Helper()
+	code, body := adminRequest(t, http.MethodGet, adminURL+"/admin/sessions?email="+email, "", e2eAdminToken, "")
+	require.Equalf(t, http.StatusOK, code, "GET /admin/sessions: %s", body)
+	var list struct {
+		Items []struct {
+			FamilyID string `json:"family_id"`
+			Email    string `json:"email"`
+			Subject  string `json:"subject"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(body, &list))
+	require.Lenf(t, list.Items, 1, "one sign-in, one session: %s", body)
+	require.Equal(t, email, list.Items[0].Email)
+	require.Equal(t, allowedSub, list.Items[0].Subject)
+	return list.Items[0].FamilyID
+}
+
+// withoutSchema drops Huma's $schema link so a body compares verbatim.
+func withoutSchema(t *testing.T, body []byte) string {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(body, &m))
+	delete(m, "$schema")
+	b, err := json.Marshal(m)
+	require.NoError(t, err)
+	return string(b)
 }
 
 type loginResult struct {
@@ -362,6 +415,7 @@ func (s *cliStack) runTokenFrom(ctx context.Context, t *testing.T, path string) 
 type cliStackConfig struct {
 	env       map[string]string
 	imageUser bool
+	adminAPI  bool
 }
 
 type cliStackOption func(*cliStackConfig)
@@ -372,6 +426,18 @@ func withTempogateEnv(env map[string]string) cliStackOption {
 		for k, v := range env {
 			c.env[k] = v
 		}
+	}
+}
+
+// withAdminAPI binds the admin listener on all interfaces, publishes it and
+// arms the guard with e2eAdminToken.
+func withAdminAPI(ctx context.Context, t *testing.T) cliStackOption {
+	t.Helper()
+	env := map[string]string{"ADMIN_LISTENER": "0.0.0.0:8081"}
+	addAdminAuthEnv(ctx, t, env, false)
+	return func(c *cliStackConfig) {
+		withTempogateEnv(env)(c)
+		c.adminAPI = true
 	}
 }
 
@@ -444,6 +510,10 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		user, stateMount = "", "/var/lib/tempogate"
 		tgEnv["STATE_SQLITE_PATH"] = stateMount + "/state.db"
 	}
+	ports := []string{"8000/tcp"}
+	if cfg.adminAPI {
+		ports = append(ports, "8081/tcp")
+	}
 	stateVol := stateVolume(t, "tempogate-cli-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
@@ -470,7 +540,7 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 			Env:            tgEnv,
 			User:           user,
 			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, testcontainers.ContainerMountTarget(stateMount))),
-			ExposedPorts:   []string{"8000/tcp"},
+			ExposedPorts:   ports,
 			Networks:       []string{netName},
 			NetworkAliases: alias("tempogate"),
 			WaitingFor:     wait.ForHTTP("/readyz").WithPort("8000/tcp").WithStartupTimeout(2 * time.Minute),
@@ -550,8 +620,13 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 	require.NoError(t, err, "cliclient")
 	track(ctx, t, "cliclient", clientC)
 
+	var adminURL string
+	if cfg.adminAPI {
+		adminURL = mappedHTTP(ctx, t, tempogate, "8081")
+	}
 	return &cliStack{
 		mockBaseURL:      mockBase,
+		adminURL:         adminURL,
 		tempogateBaseURL: mappedHTTP(ctx, t, tempogate, "8000"),
 		frontendAddr:     mappedAddr(ctx, t, temporal, "7233"),
 		tempogate:        tempogate,

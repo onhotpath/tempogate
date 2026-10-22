@@ -79,9 +79,9 @@ func newReaperFx(p reaperParams) (*Reaper, error) {
 // oidc.BrowserSessionStore, oidc.CallbackStore, oidc.TokenStore,
 // oidc.DeviceCodeStore, api.StoreProbe), using a single underlying
 // constructor.
-// admin.KeyRegistry is provided as a separate adapter constructor (see
-// admin_adapter.go) because its short method names
-// (Save/ByID/List/MarkRevoked) deliberately differ from the prefixed
+// admin.KeyRegistry and admin.SessionStore are provided as separate adapter
+// constructors (see admin_adapter.go) because their short method names
+// (Save/ByID/List/MarkRevoked, List/RevokeFamily/...) deliberately differ from the prefixed
 // methods on *Store (SaveIntegrationKey, ...) to allow multiple consumers
 // to share short names without colliding on the same struct.
 //
@@ -104,7 +104,7 @@ func Fx() fx.Option {
 				fx.As(fx.Self()),
 			),
 		),
-		fx.Provide(newAdminKeyRegistry),
+		fx.Provide(newAdminKeyRegistry, newAdminSessionStore),
 		fx.Provide(newReaperFx),
 	)
 }

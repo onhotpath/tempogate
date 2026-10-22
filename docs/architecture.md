@@ -96,8 +96,9 @@ older than `OIDC_REFRESH_MAX_LIFETIME` from sign-in, or when the email's
 domain has left `OIDC_ALLOWED_DOMAINS` (which also revokes the family).
 Rotated tokens are kept as tombstones rather than deleted, so presenting one
 again is recognised as reuse and revokes the whole family (RFC 9700
-§4.14.2). Operators revoke by email or family with `tempogate sessions
-revoke`. The jti denylist used for integration keys plays no part here: it
+§4.14.2). Operators revoke by email, Google subject or family with
+`tempogate sessions revoke` or its admin-API twin, `POST
+/admin/sessions/revoke`. The jti denylist used for integration keys plays no part here: it
 covers JWTs, and refresh tokens are opaque rows.
 
 **Bounded anonymous input.** The OIDC endpoints are reachable without credentials and some write a row per request.
@@ -128,11 +129,12 @@ access (`temporal-system:admin`) — the value Temporal's default ClaimMapper
 needs for cluster APIs. Group- or role-derived per-namespace scoping is
 planned; the JWT shape and the `permissions` claim are already in place for it.
 
-**Authenticated admin API.** Integration keys are minted and revoked on a
-separate admin listener whose routes require a bearer admin token (configured
-only as its SHA-256), reject unexpected `Host` headers to defeat DNS rebinding,
-refuse cluster-wide `temporal-system` grants unless explicitly allowed, and log
-every mint and revoke. See [docs/configuration.md](configuration.md#admin-api).
+**Authenticated admin API.** Integration keys are minted and revoked, signing
+keys retired and refresh-token sessions listed and revoked on a separate admin
+listener whose routes require a bearer admin token (configured only as its
+SHA-256), reject unexpected `Host` headers to defeat DNS rebinding, refuse
+cluster-wide `temporal-system` grants unless explicitly allowed, and log every
+mint and revoke. See [docs/configuration.md](configuration.md#admin-api).
 
 **Revocation is honest about Temporal.** Temporal verifies a token against
 the JWKS and its `exp`, never against tempogate's state, so the `jti`

@@ -4,8 +4,8 @@
 // tempogate image: rotation keeps working within limits, replaying a rotated
 // token revokes the newer one too, removing a domain from
 // OIDC_ALLOWED_DOMAINS (and restarting on the same state volume) ends the
-// domain's sessions, `tempogate sessions revoke` run inside the container
-// ends a session, and OIDC_REFRESH_MAX_LIFETIME is an absolute cap that
+// domain's sessions, `tempogate sessions revoke` (--email, --family,
+// --subject) run inside the container ends sessions, and OIDC_REFRESH_MAX_LIFETIME is an absolute cap that
 // rotation cannot extend. Before the fix every one of the negative steps
 // below refreshed successfully.
 //
@@ -119,6 +119,16 @@ func TestRefreshLifecycle(t *testing.T) {
 		require.Contains(t, tg.exec(t, "sessions", "revoke", "--family", families[0][1]), "revoked 1 session(s)")
 		requireInvalidGrant(t, refresh(rt), "the revoked family")
 		r.refreshOK(refresh(other), cliClientID)
+	})
+
+	t.Run("sessions revoke --subject ends every session of that account", func(t *testing.T) {
+		r.t = t
+		rt := r.cliRefreshToken(mockBase)
+		require.Contains(t, tg.exec(t, "sessions", "list", "--subject", allowedSub), allowedEmail)
+
+		require.Contains(t, tg.exec(t, "sessions", "revoke", "--subject", allowedSub), "revoked")
+		requireInvalidGrant(t, refresh(rt), "a session of the revoked subject")
+		require.NotRegexp(t, familyIDPattern, tg.exec(t, "sessions", "list"), "no session of the only test account is left")
 	})
 
 	t.Run("removing the domain from the allowlist ends the session", func(t *testing.T) {

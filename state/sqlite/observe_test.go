@@ -61,7 +61,8 @@ func (s *StoreSuite) TestDBErrorsAreObservedByOp() {
 		{"consume_refresh", func() error { _, err := st.ConsumeRefresh(ctx, "x", "ui", now); return err }},
 		{"revoke_refresh", func() error { _, err := st.RevokeRefreshFamily(ctx, "family", now); return err }},
 		{"revoke_refresh", func() error { _, err := st.RevokeRefreshByEmail(ctx, "a@example.com", now); return err }},
-		{"list_refresh_sessions", func() error { _, err := st.ListRefreshSessions(ctx, "", now); return err }},
+		{"revoke_refresh", func() error { _, err := st.RevokeRefreshBySubject(ctx, "sub", now); return err }},
+		{"list_refresh_sessions", func() error { _, err := st.ListRefreshSessions(ctx, RefreshSessionFilter{}, now); return err }},
 		{"save_browser_session", func() error { return st.SaveBrowserSession(ctx, oidc.BrowserSession{}) }},
 		{"lookup_browser_session", func() error { _, err := st.LookupBrowserSession(ctx, "x"); return err }},
 		{"delete_browser_session", func() error { return st.DeleteBrowserSession(ctx, "x") }},
@@ -276,7 +277,7 @@ func (s *StoreSuite) TestUnreadableListingsAreObserved() {
 
 	_, err := s.store.ListIntegrationKeys(s.ctx, admin.ListFilter{})
 	s.Require().Error(err)
-	_, err = s.store.ListRefreshSessions(s.ctx, "", now)
+	_, err = s.store.ListRefreshSessions(s.ctx, RefreshSessionFilter{}, now)
 	s.Require().Error(err)
 
 	s.Equal([]string{"list_integration_keys", "list_refresh_sessions"}, obs.calls())

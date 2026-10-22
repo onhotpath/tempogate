@@ -142,8 +142,8 @@ Every refresh is governed by:
 - **Domain re-check**: `OIDC_ALLOWED_DOMAINS` is re-applied on every refresh. Removing a domain ends its users' sessions at their next refresh.
 - **Reuse detection** ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)): presenting an already-rotated refresh token revokes the whole session, including the newer token, and logs a `refresh_token_reuse` warning with the session's family id, client and email (never the token).
   Two concurrent refreshes of the same token count as reuse too, so the loser's session ends and it signs in again.
-- **Operator revocation**: `tempogate sessions list [--email <e>]` shows live sessions (never token values); `tempogate sessions revoke --email <e>` ends every session of a user and `--family <id>` ends one.
-  Run them where the state volume is mounted, e.g. `kubectl exec deploy/tempogate -- /tempogate sessions revoke --email alice@example.com`.
+- **Operator revocation**: `tempogate sessions list [--email <e>] [--subject <sub>]` shows live sessions (never token values); `tempogate sessions revoke --email <e>` or `--subject <sub>` ends every session of a user and `--family <id>` ends one.
+  Run them where the state volume is mounted, e.g. `kubectl exec deploy/tempogate -- /tempogate sessions revoke --email alice@example.com`, or call the admin API's `GET /admin/sessions` and `POST /admin/sessions/revoke` (`{"email": ...}`, `{"subject": ...}` or `{"family_id": ...}`) with the admin token instead.
 
 Revocation stops refreshes; access tokens already issued stay valid at the Temporal frontend until they expire (`OIDC_ACCESS_TOKEN_TTL`, default 4 hours).
 Lower it if you need a shorter revoke lag.

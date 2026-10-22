@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"time"
 
 	"github.com/onhotpath/tempogate/admin"
 )
@@ -36,4 +37,36 @@ func (a *adminKeyRegistry) List(ctx context.Context, f admin.ListFilter) ([]admi
 
 func (a *adminKeyRegistry) MarkRevoked(ctx context.Context, id string) (string, error) {
 	return a.s.MarkIntegrationKeyRevoked(ctx, id)
+}
+
+// adminSessionStore adapts *Store to admin.SessionStore over the same
+// methods `tempogate sessions` calls, so both surfaces revoke identically.
+type adminSessionStore struct {
+	s *Store
+}
+
+func newAdminSessionStore(s *Store) admin.SessionStore { return &adminSessionStore{s: s} }
+
+func (a *adminSessionStore) List(ctx context.Context, f admin.SessionFilter, now time.Time) ([]admin.Session, error) {
+	rows, err := a.s.ListRefreshSessions(ctx, RefreshSessionFilter{Email: f.Email, Subject: f.Subject}, now)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]admin.Session, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, admin.Session(r))
+	}
+	return out, nil
+}
+
+func (a *adminSessionStore) RevokeFamily(ctx context.Context, familyID string, at time.Time) (int, error) {
+	return a.s.RevokeRefreshFamily(ctx, familyID, at)
+}
+
+func (a *adminSessionStore) RevokeEmail(ctx context.Context, email string, at time.Time) (int, error) {
+	return a.s.RevokeRefreshByEmail(ctx, email, at)
+}
+
+func (a *adminSessionStore) RevokeSubject(ctx context.Context, subject string, at time.Time) (int, error) {
+	return a.s.RevokeRefreshBySubject(ctx, subject, at)
 }

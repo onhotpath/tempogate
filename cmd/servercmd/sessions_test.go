@@ -100,6 +100,11 @@ func (s *SessionsCmdSuite) TestListShowsSessionsButNeverTokens() {
 	s.Require().NoError(err)
 	s.Contains(out, "fam-b")
 	s.NotContains(out, "fam-a")
+
+	out, err = s.run("list", "--subject", "google-sub-fam-a")
+	s.Require().NoError(err)
+	s.Contains(out, "fam-a")
+	s.NotContains(out, "fam-b")
 }
 
 func (s *SessionsCmdSuite) TestRevokeByEmail() {
@@ -128,12 +133,34 @@ func (s *SessionsCmdSuite) TestRevokeByFamily() {
 	s.True(s.live("a2"))
 }
 
+func (s *SessionsCmdSuite) TestRevokeBySubject() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	s.seed("a1", "fam-a", "alice@example.com")
+	s.seed("b1", "fam-b", "bob@example.com")
+
+	out, err := s.run("revoke", "--subject", "google-sub-fam-a")
+	s.Require().NoError(err)
+	s.Contains(out, "revoked 1 session(s)")
+	s.False(s.live("a1"))
+	s.True(s.live("b1"))
+}
+
+func (s *SessionsCmdSuite) TestRevokeUnknownFamilyFails() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	_, err := s.run("revoke", "--family", "no-such-family")
+	s.Require().Error(err, "a mistyped family id must not report success")
+	s.Contains(err.Error(), "session not found")
+}
+
 func (s *SessionsCmdSuite) TestRevokeNeedsExactlyOneSelector() {
 	s.Require().NoError(s.store.Migrate(s.ctx))
 	_, err := s.run("revoke")
 	s.Require().Error(err)
 
 	_, err = s.run("revoke", "--email", "a@example.com", "--family", "f")
+	s.Require().Error(err)
+
+	_, err = s.run("revoke", "--email", "a@example.com", "--subject", "s")
 	s.Require().Error(err)
 
 	_, err = s.run("revoke", "--email", "")

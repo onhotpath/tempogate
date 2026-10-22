@@ -91,7 +91,7 @@ Never list a range that clients can connect from directly, or they can choose th
 
 ### Admin API
 
-The admin API (`/admin/keys` for integration keys, `/admin/signing-keys` for [signing-key retirement](#revocation-and-signing-key-retirement), plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
+The admin API (`/admin/keys` for integration keys, `/admin/signing-keys` for [signing-key retirement](#revocation-and-signing-key-retirement), `/admin/sessions` for [refresh-token sessions](#refresh-token-sessions), plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
 Every `/admin/*` route except `/admin/healthz` requires `Authorization: Bearer <admin token>`.
 The same listener serves Prometheus [`GET /metrics`](#metrics), outside `/admin/*` and without the token.
 Only the token's SHA-256 digest is configured, so the token itself never sits in env, yaml, or a ConfigMap.
@@ -121,6 +121,7 @@ curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
 
 Every mint and revoke is logged as one `admin audit` line (`action`, `outcome`, `id`, `jti`, `namespace`, `role`, `owner`, `caller`, `remote_addr`).
 Every signing-key retirement is logged the same way with `action=retire_signing_key`, the `kid` and `force`.
+Every session revoke is logged with `action=revoke_sessions`, the selector (`email`, `subject` or `family_id`) and `revoked`, the number of live sessions it ended.
 Rejected requests are logged as `admin request rejected` at warn level with a `reason`.
 `caller` is the first 8 hex characters of the matched digest, so you can tell rotated tokens apart without logging them.
 
@@ -292,13 +293,27 @@ Token values are never logged.
 Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
 
 ```bash
-tempogate sessions list [--email alice@example.com]   # family id, client, email, Google subject, sign-in, last rotation, expiry
+tempogate sessions list [--email alice@example.com] [--subject <sub>]   # family id, client, email, Google subject, sign-in, last rotation, expiry
 tempogate sessions revoke --email alice@example.com   # every session of a user
-tempogate sessions revoke --family <family-id>        # one session
+tempogate sessions revoke --subject <google-sub>      # every session of a Google account, whatever its email
+tempogate sessions revoke --family <family-id>        # one session; fails if no such session exists
 ```
 
 In Kubernetes, run them in the serving pod, e.g. `kubectl exec deploy/tempogate -- /tempogate sessions revoke --email alice@example.com`.
-Revocation stops refreshes immediately; access tokens already issued remain valid until they expire (`OIDC_ACCESS_TOKEN_TTL`).
+
+The [admin API](#admin-api) offers the same operations over HTTP, so you need not exec into the pod:
+
+```bash
+curl -H "Authorization: Bearer $token" 'http://127.0.0.1:8081/admin/sessions?email=alice@example.com'   # also ?subject=
+curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com"}' http://127.0.0.1:8081/admin/sessions/revoke   # or {"subject":...} or {"family_id":...}
+```
+
+`GET /admin/sessions` returns `{"items": [...]}` with `family_id`, `client_id`, `email`, `subject`, `auth_time`, `last_rotation_at` and `expires_at`; it never returns a token or its hash.
+`POST /admin/sessions/revoke` takes exactly one of `email`, `subject` or `family_id` (anything else is 400) and answers `{"revoked": <n>}`, the number of live sessions it ended.
+Revoking is idempotent: a selector that matches nothing live answers 0, except a `family_id` that never existed, which answers 404 like an unknown integration key.
+
+Revocation stops refreshes immediately; access tokens already issued remain valid, at tempogate's `/userinfo` and at Temporal, until they expire (`OIDC_ACCESS_TOKEN_TTL`).
 The integration-key jti denylist is not consulted for refresh tokens.
 
 Redeeming an authorization code twice is refused, and the session the first redemption started is revoked ([RFC 6749 §4.1.2](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2)), logged as `auth_code_reuse`.
@@ -458,7 +473,7 @@ That makes the admin listener's bind the access control: keep it on loopback or 
 | `tempogate_logins_total` | counter | `result` (`success`, `failure`), `reason` | Completed Google sign-in callbacks. `reason` is `none` on success, else one of `missing_state`, `state_not_bound` (the callback came from another browser than the one that started the sign-in), `unknown_state`, `expired_request`, `upstream_denied`, `missing_code`, `upstream_error`, `email_unverified`, `domain_not_allowed`, `hosted_domain_not_allowed` (the `hd` claim failed [Workspace mode](#hosted-domain-workspace-mode)), `internal`. |
 | `tempogate_tokens_issued_total` | counter | `grant` (`authorization_code`, `refresh_token`, `device_code`) | Tokens minted by `/token`. |
 | `tempogate_token_errors_total` | counter | `grant` (as above, or `other`), `error` | Failed `/token` requests by OAuth2 error code (`invalid_request`, `invalid_grant`, `invalid_client`, `unauthorized_client`, `unsupported_grant_type`, `authorization_pending`, `slow_down`, `access_denied`, `expired_token`) or `server_error` for a 500. `invalid_client` is a confidential client that failed to authenticate. Device-flow polling counts `authorization_pending` on every poll. Requests the rate limiter rejects never reach `/token` and are counted in `tempogate_rate_limited_total` instead. |
-| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, or a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`. The refused request is also counted as `invalid_grant`. Revocations by `tempogate sessions revoke` run in another process and are not counted. |
+| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, or a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`. The refused request is also counted as `invalid_grant`. Operator revocations (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) are not counted; the admin API's [audit log](#admin-api) records the latter. |
 | `tempogate_rate_limited_total` | counter | `endpoint` (`authorize`, `device_authorization`, `device_verification`, `token`) | Requests answered `429` by the per-client [rate limits](#abuse-controls). The client address is never a label. |
 | `tempogate_upstream_request_duration_seconds` | histogram | `op` (`discovery`, `code_exchange`, `verify_id_token`) | Latency of calls to Google, failed calls included. `verify_id_token` includes the JWKS fetch on a key-cache miss. `discovery` runs on first use and again on each retry after a failure; a failure served from inside the retry backoff is not a call and is not counted. |
 | `tempogate_upstream_errors_total` | counter | `op` | Failed calls to Google. |

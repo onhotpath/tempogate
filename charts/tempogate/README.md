@@ -44,8 +44,9 @@ curl -fsS http://127.0.0.1:8000/healthz
   update never runs two pods against the same volume.
 - **Separate admin listener.** `service.port` serves the public OIDC/OAuth2
   surface together with `/healthz` and `/readyz`. The admin API
-  (`/admin/keys`) has its own listener, on the pod's loopback by default
-  (reach it with `kubectl port-forward`). `service.admin.enabled=true` binds
+  (`/admin/keys`, `/admin/signing-keys`, `/admin/sessions`) has its own
+  listener, on the pod's loopback by default (reach it with `kubectl
+  port-forward`). `service.admin.enabled=true` binds
   it on all pod interfaces behind a separate `<fullname>-admin` Service that
   no Ingress/HTTPRoute targets, and requires `admin.tokenSha256SecretRef`.
 - **No API docs.** The OpenAPI document and docs page (`API_DOCS_ENABLED`)
