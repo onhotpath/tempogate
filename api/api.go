@@ -35,9 +35,17 @@ type apiConfig struct {
 	// to a private listener.
 	adminRegistrars []func(huma.API)
 	basePath        string
+	docs            bool
 }
 
 type Option func(*apiConfig)
+
+// WithDocs serves the OpenAPI document, the docs page and the JSON schemas
+// on both surfaces. Off by default. gen-oas is unaffected either way: it
+// reads Surface.API.OpenAPI() in-process, which never depends on the routes.
+func WithDocs(enabled bool) Option {
+	return func(c *apiConfig) { c.docs = enabled }
+}
 
 // WithRegistrar contributes a Huma registrar to the public surface. The OIDC
 // feature uses this; the registered routes move under the OIDC base path when
@@ -96,12 +104,12 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 
 	// Root mode: one adapter, health + OIDC all at root.
 	if cfg.basePath == "" {
-		a := humago.NewWithPrefix(mux, "", huma.DefaultConfig("tempogate", buildinfo.Version()))
+		a := humago.NewWithPrefix(mux, "", cfg.humaConfig("tempogate"))
 		registerHealth(a, readiness)
 		for _, fn := range cfg.registrars {
 			fn(a)
 		}
-		return &Surface{API: a, Handler: mux, Prefix: ""}
+		return &Surface{API: a, Handler: withSecurityHeaders(mux), Prefix: ""}
 	}
 
 	// Base-path mode: a minimal health adapter at the root (no OpenAPI/docs
@@ -109,26 +117,43 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 	// basePath so the discovery document, the iss claim, and the served
 	// routes stay in lockstep with no proxy StripPrefix.
 	healthCfg := huma.DefaultConfig("tempogate", buildinfo.Version())
-	healthCfg.OpenAPIPath = ""
-	healthCfg.DocsPath = ""
-	healthCfg.SchemasPath = ""
+	withoutDocs(&healthCfg)
 	healthAPI := humago.NewWithPrefix(mux, "", healthCfg)
 	registerHealth(healthAPI, readiness)
 
-	oidcAPI := humago.NewWithPrefix(mux, cfg.basePath, huma.DefaultConfig("tempogate", buildinfo.Version()))
+	oidcAPI := humago.NewWithPrefix(mux, cfg.basePath, cfg.humaConfig("tempogate"))
 	for _, fn := range cfg.registrars {
 		fn(oidcAPI)
 	}
 
-	return &Surface{API: oidcAPI, Handler: mux, Prefix: cfg.basePath}
+	return &Surface{API: oidcAPI, Handler: withSecurityHeaders(mux), Prefix: cfg.basePath}
 }
 
 func newAdmin(cfg *apiConfig) *Surface {
 	mux := http.NewServeMux()
-	a := humago.NewWithPrefix(mux, "", huma.DefaultConfig("tempogate-admin", buildinfo.Version()))
+	a := humago.NewWithPrefix(mux, "", cfg.humaConfig("tempogate-admin"))
 	registerAdminHealth(a)
 	for _, fn := range cfg.adminRegistrars {
 		fn(a)
 	}
-	return &Surface{API: a, Handler: mux, Prefix: ""}
+	return &Surface{API: a, Handler: withSecurityHeaders(mux), Prefix: ""}
+}
+
+func (c *apiConfig) humaConfig(title string) huma.Config {
+	hc := huma.DefaultConfig(title, buildinfo.Version())
+	if !c.docs {
+		withoutDocs(&hc)
+	}
+	return hc
+}
+
+// withoutDocs drops the routes that describe the API. It also drops Huma's
+// create hooks, whose only entry is the schema-link transformer: it stamps
+// a "$schema" URL into every response body that would point at the
+// now-missing schemas route.
+func withoutDocs(hc *huma.Config) {
+	hc.OpenAPIPath = ""
+	hc.DocsPath = ""
+	hc.SchemasPath = ""
+	hc.CreateHooks = nil
 }

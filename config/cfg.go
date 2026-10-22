@@ -8,6 +8,7 @@ type Config struct {
 	Log   LogConfig   `ferry:"log"`
 	HTTP  HTTPConfig  `ferry:"http"`
 	Admin AdminConfig `ferry:"admin"`
+	API   APIConfig   `ferry:"api"`
 	State StateConfig `ferry:"state"`
 	OIDC  OIDCConfig  `ferry:"oidc"`
 }
@@ -27,6 +28,15 @@ type HTTPConfig struct {
 // the pod's service IP unless explicitly opted into a cluster-internal bind).
 type AdminConfig struct {
 	Listener Listener `ferry:"listener"`
+}
+
+// APIConfig controls what the Huma APIs expose beyond their operations.
+type APIConfig struct {
+	// DocsEnabled serves the OpenAPI document, the docs page and the JSON
+	// schemas on both listeners. Off by default: they are an
+	// unauthenticated map of every endpoint, and the docs page needs a
+	// looser CSP to load its renderer from a CDN.
+	DocsEnabled bool `ferry:"docs_enabled"`
 }
 
 type StateConfig struct {

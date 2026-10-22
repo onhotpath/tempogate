@@ -9,13 +9,24 @@ import (
 	"github.com/onhotpath/tempogate/buildinfo"
 )
 
+// healthBody is the public liveness answer. It carries no build version:
+// the public listener is reachable by anyone, and the version only helps an
+// attacker match the deployment to known issues.
 type healthBody struct {
-	Status  string `json:"status" example:"ok" doc:"Liveness status"`
-	Version string `json:"version" example:"dev" doc:"Build version of the running binary"`
+	Status string `json:"status" example:"ok" doc:"Liveness status"`
 }
 
 type healthOutput struct {
 	Body healthBody
+}
+
+type adminHealthBody struct {
+	Status  string `json:"status" example:"ok" doc:"Liveness status"`
+	Version string `json:"version" example:"dev" doc:"Build version of the running binary"`
+}
+
+type adminHealthOutput struct {
+	Body adminHealthBody
 }
 
 type readyBody struct {
@@ -38,8 +49,8 @@ func registerAdminHealth(api huma.API) {
 		Path:        "/admin/healthz",
 		Summary:     "Admin liveness probe",
 		Tags:        []string{"admin"},
-	}, func(_ context.Context, _ *struct{}) (*healthOutput, error) {
-		return &healthOutput{Body: healthBody{
+	}, func(_ context.Context, _ *struct{}) (*adminHealthOutput, error) {
+		return &adminHealthOutput{Body: adminHealthBody{
 			Status:  "ok",
 			Version: buildinfo.Version(),
 		}}, nil
@@ -54,10 +65,7 @@ func registerHealth(api huma.API, readiness *Readiness) {
 		Summary:     "Liveness probe",
 		Tags:        []string{"health"},
 	}, func(_ context.Context, _ *struct{}) (*healthOutput, error) {
-		return &healthOutput{Body: healthBody{
-			Status:  "ok",
-			Version: buildinfo.Version(),
-		}}, nil
+		return &healthOutput{Body: healthBody{Status: "ok"}}, nil
 	})
 
 	huma.Register(api, huma.Operation{

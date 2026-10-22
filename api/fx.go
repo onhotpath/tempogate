@@ -14,6 +14,7 @@ type serversParams struct {
 	Keys         JWKSSource
 	OIDCIssuer   string `name:"oidc_issuer"`
 	OIDCBasePath string `name:"oidc_base_path"`
+	DocsEnabled  bool   `name:"api_docs_enabled"`
 
 	// Registrars are contributed by feature packages (e.g. oidc) into the
 	// shared group so they can append Huma operations without api importing
@@ -31,6 +32,7 @@ type serversParams struct {
 func newServers(p serversParams) *Servers {
 	opts := []Option{
 		WithBasePath(p.OIDCBasePath),
+		WithDocs(p.DocsEnabled),
 		WithWellKnown(p.Keys, p.OIDCIssuer),
 	}
 	for _, r := range p.Registrars {

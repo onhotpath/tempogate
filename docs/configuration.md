@@ -30,6 +30,12 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 | --- | --- | --- |
 | `HTTP_LISTENER` | `127.0.0.1:8000` | `host:port` for the single public listener (OIDC/OAuth2 + `/healthz` + `/readyz`). The loopback default is unreachable through a container/Service — set `0.0.0.0:8000` in-cluster. |
 
+### API documentation
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `API_DOCS_ENABLED` | `false` | Serves the OpenAPI document (`/openapi.json`, `/openapi.yaml`), the docs page (`/docs`) and the JSON schemas (`/schemas/*`) on both listeners, under the OIDC base path on the public one. Off, they return `404` and response bodies carry no `$schema` link. `tempogate gen-oas` emits the specs either way. |
+
 ### State store (SQLite)
 
 | Variable | Default | Notes |
@@ -116,6 +122,29 @@ Two consequences:
   `/idp/device`, so the proxy must preserve the path as-is.
 
 A root issuer (no path) behaves exactly as a path-less deployment always has.
+
+## Security headers
+
+Every response from both listeners carries:
+
+| Header | Value |
+| --- | --- |
+| `Content-Security-Policy` | `default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` |
+
+A few pages replace the defaults with their own, and all of them keep `frame-ancestors 'none'`:
+
+- The device verification pages send their own CSP, which allows their inline stylesheet by hash and, on the code entry page, adds the upstream IdP's origin to `form-action`. They also send `Referrer-Policy: same-origin`, because under `no-referrer` the browser sends `Origin: null` on the Approve/Deny POST and the origin check rejects it.
+- With `API_DOCS_ENABLED=true`, `/docs` sends Huma's own CSP, which allows the renderer script and stylesheet it loads from `unpkg.com`.
+
+tempogate does not send `Strict-Transport-Security`.
+TLS terminates at your proxy or ingress, which knows whether the hostname is HTTPS-only, so set HSTS there.
+Keep the headers above intact at the proxy: the anti-framing protection for the device approval page depends on them.
+
+The public `/healthz` answers `{"status":"ok"}` only.
+The build version is on the admin listener's `/admin/healthz` and from `tempogate version`.
 
 ## See also
 

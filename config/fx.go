@@ -17,6 +17,7 @@ type Result struct {
 	LogLevel              log.Level
 	HTTPListener          Listener      `name:"http"`
 	AdminListener         Listener      `name:"admin"`
+	APIDocsEnabled        bool          `name:"api_docs_enabled"`
 	SqlitePath            string        `name:"sqlite_path"`
 	SqliteMaxConns        int           `name:"sqlite_max_conns"`
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
@@ -43,6 +44,7 @@ func Fx() fx.Option {
 				LogLevel:              log.Level(cfg.Log.Level),
 				HTTPListener:          cfg.HTTP.Listener,
 				AdminListener:         cfg.Admin.Listener,
+				APIDocsEnabled:        cfg.API.DocsEnabled,
 				SqlitePath:            cfg.State.Sqlite.Path,
 				SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
 				SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,
