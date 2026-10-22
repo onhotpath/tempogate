@@ -96,8 +96,8 @@ func TestRefreshLifecycle(t *testing.T) {
 
 		requireInvalidGrant(t, refresh(rt1), "the replayed token")
 		requireInvalidGrant(t, refresh(rt2), "the newer token after a replay")
-		require.Contains(t, tg.logs(t), "refresh_token_reuse", "the replay is logged as a security event")
-		require.NotContains(t, tg.logs(t), rt1, "token values never reach the log")
+		logs := tg.waitForLogs(t, "refresh_token_reuse")
+		require.NotContains(t, logs, rt1, "token values never reach the log")
 	})
 
 	t.Run("sessions revoke --email ends every session of that user", func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestRefreshLifecycle(t *testing.T) {
 		r.base = tg.base
 
 		requireInvalidGrant(t, refresh(rt), "a session whose domain was removed")
-		require.Contains(t, tg.logs(t), "refresh_domain_not_allowed")
+		tg.waitForLogs(t, "refresh_domain_not_allowed")
 	})
 
 	t.Run("OIDC_REFRESH_MAX_LIFETIME is an absolute cap", func(t *testing.T) {
@@ -245,7 +245,7 @@ func (tg *restartableTempogate) exec(t *testing.T, args ...string) string {
 	return string(b)
 }
 
-func (tg *restartableTempogate) logs(t *testing.T) string {
+func (tg *restartableTempogate) waitForLogs(t *testing.T, want ...string) string {
 	t.Helper()
-	return containerLogs(tg.ctx, t, tg.serve)
+	return waitForLogs(tg.ctx, t, tg.serve, want...)
 }

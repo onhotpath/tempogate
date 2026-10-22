@@ -85,8 +85,7 @@ func TestUpstreamLegHardening(t *testing.T) {
 			browser := b.newBrowser(t)
 			return browser.get(t, browser.consent(t)).status == http.StatusFound
 		}, 20*time.Second, 500*time.Millisecond, "logins must recover once discovery is back, without a restart")
-		require.Contains(t, containerLogs(ctx, t, tg.serve), "discovery_unavailable",
-			"the failed login must leave its reason in the logs")
+		waitForLogs(ctx, t, tg.serve, "discovery_unavailable")
 	})
 
 	t.Run("upstream authorize request carries S256 PKCE and a nonce", func(t *testing.T) {
@@ -128,8 +127,7 @@ func TestUpstreamLegHardening(t *testing.T) {
 		require.Equal(t, http.StatusFound, resp.status)
 		require.True(t, strings.HasPrefix(resp.location, upstreamLegLoopback+"?"), resp.location)
 
-		logs := containerLogs(ctx, t, tg.serve)
-		require.Contains(t, logs, "state_not_bound_to_browser")
+		logs := waitForLogs(ctx, t, tg.serve, "state_not_bound_to_browser")
 		require.NotContains(t, logs, attackerCode, "the upstream code must never be logged")
 	})
 
@@ -144,8 +142,7 @@ func TestUpstreamLegHardening(t *testing.T) {
 		require.Empty(t, resp.location, "no code may be minted from an id_token for another login")
 		require.Contains(t, resp.body, "upstream_error")
 
-		logs := containerLogs(ctx, t, tg.serve)
-		require.Contains(t, logs, "nonce_mismatch")
+		logs := waitForLogs(ctx, t, tg.serve, "nonce_mismatch")
 		u, err := url.Parse(callbackURL)
 		require.NoError(t, err)
 		require.NotContains(t, logs, u.Query().Get("code"), "the upstream code must never be logged")
@@ -171,8 +168,7 @@ func TestUpstreamLegHardening(t *testing.T) {
 		require.Less(t, took, 20*time.Second, "the callback must not wait on Google past the upstream timeout")
 		require.GreaterOrEqual(t, took, 9*time.Second, "the call is given its full budget before failing")
 
-		logs := containerLogs(ctx, t, tg.serve)
-		require.Contains(t, logs, "code_exchange_failed")
+		logs := waitForLogs(ctx, t, tg.serve, "code_exchange_failed")
 		require.Regexp(t, `"timeout": ?true`, logs, "the log must say the call timed out")
 	})
 

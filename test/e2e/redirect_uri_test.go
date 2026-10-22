@@ -243,16 +243,6 @@ func startTempogateAllowingFailure(
 	return bootResult{}
 }
 
-func containerLogs(ctx context.Context, t *testing.T, c testcontainers.Container) string {
-	t.Helper()
-	rc, err := c.Logs(ctx)
-	require.NoError(t, err)
-	defer func() { _ = rc.Close() }()
-	b, err := io.ReadAll(rc)
-	require.NoError(t, err)
-	return string(b)
-}
-
 // driveCodeFlow plays the victim's browser through /authorize, the mock
 // Google consent and /callback/google, using the attacker's own PKCE
 // challenge. It returns /authorize's status and, if the flow got that far,

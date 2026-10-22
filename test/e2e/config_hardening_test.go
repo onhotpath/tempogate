@@ -112,7 +112,7 @@ func TestServeRefusesPlainHTTPIssuer(t *testing.T) {
 	env["OIDC_ALLOW_INSECURE_ISSUER"] = "true"
 	base, c := startServing(ctx, t, "tempogate", req("serve"))
 	require.Equal(t, tempogateIssuer, discoveredIssuer(t, base, ""))
-	require.Contains(t, containerLogs(ctx, t, c), "insecure OIDC issuer allowed")
+	waitForLogs(ctx, t, c, "insecure OIDC issuer allowed")
 }
 
 // TestServeRefusesWithoutAuthorization is the deny-by-default upgrade

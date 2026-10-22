@@ -168,7 +168,7 @@ func TestDoSLimits(t *testing.T) {
 				"the ended family and the expired code are deleted within 2 minutes; still have %v", c)
 			time.Sleep(3 * time.Second)
 		}
-		assert.Contains(t, tg.logs(t), "reaped expired state")
+		tg.waitForLogs(t, "reaped expired state")
 	})
 
 	t.Run("a burst past the per-address limit gets 429", func(t *testing.T) {
