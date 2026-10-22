@@ -45,7 +45,7 @@ in *Testing* you must add each user under *Test users*.
 > account: anyone can create a consumer Google account for an address
 > they receive mail at. With it set, tempogate requires Google's `hd`
 > claim to match. See
-> [Hosted domain (Workspace mode)](../docs/configuration.md#hosted-domain-workspace-mode).
+> [Hosted domain (Workspace mode)](../docs/authorization.md#hosted-domain-workspace-mode).
 
 ## 3. Create an OAuth client ID
 

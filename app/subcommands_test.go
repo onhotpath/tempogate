@@ -163,7 +163,7 @@ func (s *SubcommandsSuite) TestServeRefusesWithoutAuthorization() {
 	s.Equal(1, code)
 	s.Contains(logs, "no authorization configured")
 	s.Contains(logs, "OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin")
-	s.Contains(logs, "docs/configuration.md#upgrading-to-deny-by-default-authorization")
+	s.Contains(logs, "docs/upgrading.md#upgrading-to-deny-by-default-authorization")
 }
 
 // TestAuthzExplainNeedsOnlyTheRules runs the real command graph: explain

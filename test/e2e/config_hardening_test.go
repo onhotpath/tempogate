@@ -143,7 +143,7 @@ func TestServeRefusesWithoutAuthorization(t *testing.T) {
 	require.NotEqualf(t, 0, code, "serve must refuse to start; logs:\n%s", logs)
 	require.Contains(t, logs, "no authorization configured")
 	require.Contains(t, logs, "OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin")
-	require.Contains(t, logs, "docs/configuration.md#upgrading-to-deny-by-default-authorization")
+	require.Contains(t, logs, "docs/upgrading.md#upgrading-to-deny-by-default-authorization")
 }
 
 func TestConfigFlagSelectsMountedFile(t *testing.T) {

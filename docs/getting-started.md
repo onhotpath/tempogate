@@ -89,7 +89,7 @@ service and restart it; an allowed identity that no rule matches is refused
 at sign-in with `access_denied`. A namespace-scoped user does not see the
 namespace dropdown fill (only a `temporal-system` grant lists namespaces); they
 open their namespace by URL, e.g. `http://temporal-ui:8080/namespaces/default/workflows`.
-See [Authorization](configuration.md#authorization).
+See [Authorization](authorization.md#authorization).
 
 ## 3. Get a CLI token
 
@@ -141,7 +141,7 @@ tctl --address tempogate:7233 \
 ## 4. Integration keys
 
 Keys for unattended workers are minted by an operator through the admin API (`POST /admin/keys`) on tempogate's separate admin listener.
-Every key carries an `expires_at` of at most `ADMIN_KEYS_MAX_TTL` (90 days by default); revoking one stops it at tempogate but not at Temporal, which honours only `exp` and the JWKS (see [revocation and signing-key retirement](configuration.md#revocation-and-signing-key-retirement)).
+Every key carries an `expires_at` of at most `ADMIN_KEYS_MAX_TTL` (90 days by default); revoking one stops it at tempogate but not at Temporal, which honours only `exp` and the JWKS (see [revocation and signing-key retirement](operations.md#revocation-and-signing-key-retirement)).
 The admin API requires a bearer admin token configured as `ADMIN_TOKEN_SHA256`, and stays locked (401) without one; this example does not configure it, so nothing here depends on it.
 To enable it, follow [Admin API in docs/configuration.md](configuration.md#admin-api).
 The chart exposes the listener through an optional `service.admin` block, disabled by default (see the [chart README](../charts/tempogate/README.md)).

@@ -178,7 +178,7 @@ keys:
   # Once a key is encrypted the Deployment refuses to boot without this
   # value. Keys stored before it was set keep working; encrypt them with
   #   kubectl exec deploy/<release>-tempogate -- /tempogate keys encrypt
-  # See docs/configuration.md#signing-key-encryption.
+  # See docs/hardening.md#signing-key-encryption.
   encryptionKeySecretRef:
     name: ""
     key: ""
@@ -264,7 +264,7 @@ auth:
       issuerUrl: ""
 
 # Which Temporal permissions each signed-in person's access token carries
-# (see docs/configuration.md#authorization). Deny by default: a person no rule
+# (see docs/authorization.md#authorization). Deny by default: a person no rule
 # matches gets defaultPermissions, and with none of those no token at all.
 # tempogate refuses to start when both are empty.
 authz:
