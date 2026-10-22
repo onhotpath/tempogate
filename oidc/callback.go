@@ -239,9 +239,8 @@ func (c *Callback) complete(ctx context.Context, conn Connector, in *callbackInp
 	if c.now().After(ar.ExpiresAt) {
 		return nil, reasonExpiredRequest, oauthErr(http.StatusBadRequest, "invalid_request", "auth request expired")
 	}
-	// Defence in depth behind the binding check. A store without the
-	// connector_id column (before migration 0015) hands back an empty id.
-	if ar.ConnectorID != "" && ar.ConnectorID != id {
+	// Defence in depth behind the binding check.
+	if ar.ConnectorID != id {
 		return nil, reasonConnectorMismatch, oauthErr(http.StatusBadRequest, "invalid_request", "state was issued for another sign-in method")
 	}
 
@@ -302,6 +301,7 @@ func (c *Callback) complete(ctx context.Context, conn Connector, in *callbackInp
 		Code:                code,
 		ClientID:            ar.ClientID,
 		RedirectURI:         ar.RedirectURI,
+		ConnectorID:         id,
 		Subject:             identity.Subject,
 		Email:               identity.Email,
 		Scope:               ar.Scope,

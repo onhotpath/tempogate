@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/lestrrat-go/jwx/v4/jwt"
 
 	"github.com/onhotpath/tempogate/keys"
 )
@@ -15,9 +16,13 @@ import (
 const bearerPrefix = "Bearer "
 
 // emailClaim is the OIDC-standard end-user identifier tempogate stamps on
-// human tokens (mirrors the keys package's claim name; duplicated as a
-// literal so oidc does not reach into keys' unexported constants).
-const emailClaim = "email"
+// human tokens, and idpClaim the connector the person signed in through
+// (mirroring the keys package's claim names; duplicated as literals so oidc
+// does not reach into keys' unexported constants).
+const (
+	emailClaim = "email"
+	idpClaim   = "idp"
+)
 
 // UserInfo serves GET /userinfo: the OIDC UserInfo endpoint, a protected
 // resource (OIDC Core §5.3). Temporal Web UI's OIDC client calls it after the
@@ -42,6 +47,7 @@ type userInfoInput struct {
 
 type userInfoBody struct {
 	Sub           string `json:"sub"`
+	IDP           string `json:"idp,omitempty"`
 	Email         string `json:"email"`
 	EmailVerified bool   `json:"email_verified"`
 	Name          string `json:"name"`
@@ -76,19 +82,17 @@ func (u *UserInfo) handle(ctx context.Context, in *userInfoInput) (*userInfoOutp
 
 	sub, _ := tok.Subject()
 	if sub == "" {
-		// Every tempogate-minted human token sets sub = the upstream
-		// (Google) subject; one without a subject is not a user we can
-		// describe.
+		// Every tempogate-minted human token sets sub =
+		// <connector>:<upstream subject>; one without a subject is not a
+		// user we can describe.
 		return nil, huma.Error401Unauthorized("token has no subject")
 	}
 
-	email := ""
-	if v, ok := tok.Field(emailClaim); ok {
-		email, _ = v.(string)
-	}
+	email, idp := stringClaim(tok, emailClaim), stringClaim(tok, idpClaim)
 
 	return &userInfoOutput{Body: userInfoBody{
 		Sub:   sub,
+		IDP:   idp,
 		Email: email,
 		// tempogate only mints a token after Google asserted email_verified
 		// and the domain gate passed (see callback). A valid tempogate JWT
@@ -97,6 +101,13 @@ func (u *UserInfo) handle(ctx context.Context, in *userInfoInput) (*userInfoOutp
 		EmailVerified: true,
 		Name:          displayName(email, sub),
 	}}, nil
+}
+
+// stringClaim is the claim's value, or "" when it is absent or not a string.
+func stringClaim(tok jwt.Token, name string) string {
+	v, _ := tok.Field(name)
+	s, _ := v.(string)
+	return s
 }
 
 // bearerToken extracts the credential from an "Authorization: Bearer <jwt>"

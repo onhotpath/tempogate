@@ -114,6 +114,16 @@
 // device codes and verification-page session ids are stored only as their
 // SHA-256, so a copy of the database holds nothing a client could present.
 //
+// # Identities
+//
+// A person is the pair (connector id, upstream subject): every row that
+// carries an identity (auth requests carry only the connector) stores both
+// verbatim, and SessionStore filters and revokes by both, never by the
+// subject alone, because the same upstream subject at two connectors is two
+// people. The token's `<connector>:<subject>` form is composed by oidc and
+// never stored. A connector id is plain text: connectors live in
+// configuration, so a backend has no enum or foreign key to keep in step.
+//
 // # Change notifications
 //
 // keys.ChangeFeed lets a store tell this process that keypairs changed or a

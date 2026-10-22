@@ -74,8 +74,9 @@ func (s *UserInfoSuite) decodeBody(resp *http.Response) map[string]any {
 
 func (s *UserInfoSuite) TestValidBearerReturnsClaims() {
 	tok := s.mint(keys.MintRequest{
-		Subject: "alice@example.com",
+		Subject: "google:alice-sub",
 		Email:   "alice@example.com",
+		IDP:     "google",
 		TTL:     time.Hour,
 	})
 
@@ -84,7 +85,8 @@ func (s *UserInfoSuite) TestValidBearerReturnsClaims() {
 
 	s.Require().Equal(http.StatusOK, resp.StatusCode)
 	body := s.decodeBody(resp)
-	s.Equal("alice@example.com", body["sub"])
+	s.Equal("google:alice-sub", body["sub"])
+	s.Equal("google", body["idp"], "/userinfo echoes the connector the user signed in through")
 	s.Equal("alice@example.com", body["email"])
 	s.Equal(true, body["email_verified"])
 	s.Equal("alice", body["name"], "name is the email local-part in v1")
@@ -108,6 +110,7 @@ func (s *UserInfoSuite) TestNameFallsBackToSubWhenNoEmailClaim() {
 	s.Require().Equal(http.StatusOK, resp.StatusCode)
 	body := s.decodeBody(resp)
 	s.Equal("service-account-7", body["sub"])
+	s.NotContains(body, "idp", "an integration key names no identity provider")
 	s.Equal("", body["email"])
 	s.Equal("service-account-7", body["name"])
 }

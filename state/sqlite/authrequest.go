@@ -20,10 +20,10 @@ var ErrDuplicateInternalState = errors.New("sqlite: auth request with this inter
 func (s *Store) SaveAuthRequest(ctx context.Context, ar oidc.AuthRequest) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO auth_requests
-		   (internal_state, client_id, redirect_uri, scope, client_state,
+		   (internal_state, connector_id, client_id, redirect_uri, scope, client_state,
 		    code_challenge, code_challenge_method, nonce, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ar.InternalState, ar.ClientID, ar.RedirectURI, ar.Scope, ar.ClientState,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ar.InternalState, ar.ConnectorID, ar.ClientID, ar.RedirectURI, ar.Scope, ar.ClientState,
 		ar.CodeChallenge, ar.CodeChallengeMethod, ar.Nonce, ar.CreatedAt, ar.ExpiresAt,
 	)
 	if err != nil {
@@ -45,11 +45,11 @@ func (s *Store) ConsumeAuthRequest(ctx context.Context, internalState string) (o
 	var ar oidc.AuthRequest
 	err := s.db.QueryRowContext(ctx,
 		`DELETE FROM auth_requests WHERE internal_state = ?
-		 RETURNING internal_state, client_id, redirect_uri, scope, client_state,
+		 RETURNING internal_state, connector_id, client_id, redirect_uri, scope, client_state,
 		           code_challenge, code_challenge_method, nonce, created_at, expires_at`,
 		internalState,
 	).Scan(
-		&ar.InternalState, &ar.ClientID, &ar.RedirectURI, &ar.Scope, &ar.ClientState,
+		&ar.InternalState, &ar.ConnectorID, &ar.ClientID, &ar.RedirectURI, &ar.Scope, &ar.ClientState,
 		&ar.CodeChallenge, &ar.CodeChallengeMethod, &ar.Nonce, &ar.CreatedAt, &ar.ExpiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

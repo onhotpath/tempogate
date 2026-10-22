@@ -290,15 +290,17 @@ func adminSessionFamily(t *testing.T, adminURL, email string) string {
 	require.Equalf(t, http.StatusOK, code, "GET /admin/sessions: %s", body)
 	var list struct {
 		Items []struct {
-			FamilyID string `json:"family_id"`
-			Email    string `json:"email"`
-			Subject  string `json:"subject"`
+			FamilyID  string `json:"family_id"`
+			Email     string `json:"email"`
+			Subject   string `json:"subject"`
+			Connector string `json:"connector"`
 		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(body, &list))
 	require.Lenf(t, list.Items, 1, "one sign-in, one session: %s", body)
 	require.Equal(t, email, list.Items[0].Email)
-	require.Equal(t, allowedSub, list.Items[0].Subject)
+	require.Equal(t, allowedTokenSub, list.Items[0].Subject, "sessions are listed by the token's sub")
+	require.Equal(t, "google", list.Items[0].Connector)
 	return list.Items[0].FamilyID
 }
 
@@ -325,7 +327,10 @@ func assertTempogateJWT(t *testing.T, raw string) {
 	iss, _ := parsed.Issuer()
 	require.Equal(t, tempogateIssuer, iss)
 	sub, _ := parsed.Subject()
-	require.Equal(t, allowedSub, sub, "sub must be Google's stable account id, not the email")
+	require.Equal(t, allowedTokenSub, sub, "sub must be the connector and Google's stable account id, not the email")
+	idp, ok := parsed.Field("idp")
+	require.True(t, ok, "the token names the connector the user signed in through")
+	require.Equal(t, "google", idp)
 	email, ok := parsed.Field("email")
 	require.True(t, ok, "email stays a claim")
 	require.Equal(t, allowedEmail, email)

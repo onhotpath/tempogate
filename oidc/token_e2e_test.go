@@ -73,7 +73,8 @@ func (s *TokenE2ESuite) SetupTest() {
 	conns := googleConnectorsAt(s.T(), s.mg.issuer(), upstream, "")
 	authorizer := oidc.New(store, reg, binding, conns, testIssuer)
 	callback := oidc.NewCallback(store, conns, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll), oidc.WithCallbackIssuer(testIssuer))
-	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
+	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"),
+		oidc.WithConnectors(conns))
 	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience)))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
 
@@ -217,7 +218,18 @@ func (s *TokenE2ESuite) TestFullFlowMintsJWTVerifiableAgainstPublishedJWKS() {
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
-	s.Equal("google-sub-123", sub, "sub is the upstream Google sub, not the email")
+	s.Equal("google:google-sub-123", sub, "sub is the connector and the upstream Google sub, not the email")
+	idp, ok := tok.Field("idp")
+	s.Require().True(ok)
+	s.Equal("google", idp)
+
+	idTok, err := jwt.Parse([]byte(body.IDToken), jwt.WithKeySet(s.jwksSet()), jwt.WithIssuer(testIssuer), jwt.WithAudience("ui"))
+	s.Require().NoError(err)
+	idSub, _ := idTok.Subject()
+	s.Equal(sub, idSub)
+	idIDP, ok := idTok.Field("idp")
+	s.Require().True(ok)
+	s.Equal("google", idIDP)
 
 	perms, ok := tok.Field("permissions")
 	s.Require().True(ok)
@@ -241,12 +253,14 @@ func (s *TokenE2ESuite) TestFullFlowMintsJWTVerifiableAgainstPublishedJWKS() {
 
 	var ui struct {
 		Sub           string `json:"sub"`
+		IDP           string `json:"idp"`
 		Email         string `json:"email"`
 		EmailVerified bool   `json:"email_verified"`
 		Name          string `json:"name"`
 	}
 	s.Require().NoError(json.NewDecoder(uiResp.Body).Decode(&ui))
-	s.Equal("google-sub-123", ui.Sub)
+	s.Equal("google:google-sub-123", ui.Sub)
+	s.Equal("google", ui.IDP)
 	s.Equal("alice@example.com", ui.Email)
 	s.True(ui.EmailVerified)
 	s.Equal("alice", ui.Name)
@@ -429,7 +443,7 @@ func (s *TokenE2ESuite) TestDeviceCodeFlowMintsJWTVerifiableAgainstPublishedJWKS
 	// here we want the success path uncluttered by interval-window timing.
 	canonical := strings.ReplaceAll(da.UserCode, "-", "")
 	s.Require().NoError(s.store.ApproveDeviceCode(context.Background(), canonical,
-		oidc.Identity{Subject: "google-sub-123", Email: "alice@example.com"}, time.Now().UTC()))
+		oidc.Identity{ConnectorID: "google", Subject: "google-sub-123", Email: "alice@example.com"}, time.Now().UTC()))
 
 	// Approved poll: the row is consumed and a fresh JWT comes back.
 	resp := s.deviceTokenPoll(da.DeviceCode)
@@ -450,7 +464,7 @@ func (s *TokenE2ESuite) TestDeviceCodeFlowMintsJWTVerifiableAgainstPublishedJWKS
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
-	s.Equal("google-sub-123", sub, "sub is the upstream Google sub, not the email")
+	s.Equal("google:google-sub-123", sub, "sub is the connector and the upstream Google sub, not the email")
 	clientID, _ := tok.Field("client_id")
 	s.Equal("tempogate-device", clientID)
 	perms, _ := tok.Field("permissions")

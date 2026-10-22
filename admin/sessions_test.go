@@ -29,6 +29,7 @@ type sessionResp struct {
 	ClientID       string `json:"client_id"`
 	Email          string `json:"email"`
 	Subject        string `json:"subject"`
+	Connector      string `json:"connector"`
 	AuthTime       string `json:"auth_time"`
 	LastRotationAt string `json:"last_rotation_at"`
 	ExpiresAt      string `json:"expires_at"`
@@ -69,11 +70,16 @@ func (s *SessionsSuite) SetupTest() {
 	s.T().Cleanup(s.srv.Close)
 }
 
-// seed stores one live refresh token, i.e. one session.
+// seed stores one live refresh token, i.e. one session, of a Google
+// sign-in.
 func (s *SessionsSuite) seed(token, family, subject, email string) {
+	s.seedAt("google", token, family, subject, email)
+}
+
+func (s *SessionsSuite) seedAt(connectorID, token, family, subject, email string) {
 	now := time.Now().UTC()
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, oidc.Refresh{
-		Token: token, JTI: "jti-" + token, ClientID: "tempogate-cli", Subject: subject, Email: email,
+		Token: token, JTI: "jti-" + token, ClientID: "tempogate-cli", ConnectorID: connectorID, Subject: subject, Email: email,
 		FamilyID: family, AuthTime: now.Add(-time.Hour), CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}))
 }
@@ -183,14 +189,15 @@ func (s *SessionsSuite) TestListShowsSessionsButNeverTokens() {
 	for k := range generic.Items[0] {
 		keys = append(keys, k)
 	}
-	s.ElementsMatch([]string{"family_id", "client_id", "email", "subject", "auth_time", "last_rotation_at", "expires_at"}, keys,
+	s.ElementsMatch([]string{"family_id", "client_id", "email", "subject", "connector", "auth_time", "last_rotation_at", "expires_at"}, keys,
 		"the view is an allowlist of metadata, no token or hash field")
 
 	items := s.list(nil)
 	s.Equal("fam-a", items[0].FamilyID)
 	s.Equal("tempogate-cli", items[0].ClientID)
 	s.Equal("alice@example.com", items[0].Email)
-	s.Equal("sub-a", items[0].Subject)
+	s.Equal("google:sub-a", items[0].Subject, "the subject is shown as the token's sub")
+	s.Equal("google", items[0].Connector)
 	for _, ts := range []string{items[0].AuthTime, items[0].LastRotationAt, items[0].ExpiresAt} {
 		_, err := time.Parse(time.RFC3339, ts)
 		s.NoError(err)
@@ -200,10 +207,11 @@ func (s *SessionsSuite) TestListShowsSessionsButNeverTokens() {
 	s.Require().Len(byEmail, 1)
 	s.Equal("fam-b", byEmail[0].FamilyID)
 
-	bySubject := s.list(url.Values{"subject": {"sub-a"}})
+	bySubject := s.list(url.Values{"subject": {"google:sub-a"}})
 	s.Require().Len(bySubject, 1)
 	s.Equal("fam-a", bySubject[0].FamilyID)
-	s.Empty(s.list(url.Values{"subject": {"SUB-A"}}), "a subject is matched exactly")
+	s.Empty(s.list(url.Values{"subject": {"google:SUB-A"}}), "a subject is matched exactly")
+	s.Empty(s.list(url.Values{"subject": {"okta:sub-a"}}), "the same upstream sub at another connector is another person")
 
 	s.Empty(s.audit(), "listing is read-only and not audited, like listing keys")
 }
@@ -245,14 +253,32 @@ func (s *SessionsSuite) TestRevokeBySubject() {
 	s.seed("a2", "fam-a2", "sub-a", "alice-renamed@example.com")
 	s.seed("b1", "fam-b", "sub-b", "bob@example.com")
 
-	s.Equal(2, s.revoked(`{"subject":"sub-a"}`))
+	s.seedAt("okta", "o1", "fam-o", "sub-a", "alice@example.com")
+
+	s.Equal(2, s.revoked(`{"subject":"google:sub-a"}`))
 	s.False(s.live("a1"))
 	s.False(s.live("a2"))
 	s.True(s.live("b1"))
+	s.True(s.live("o1"), "the same upstream sub at another connector is another person")
 
 	e := s.audit()[0]
-	s.Equal("sub-a", e["subject"])
+	s.Equal("google:sub-a", e["subject"])
 	s.EqualValues(2, e["revoked"])
+}
+
+// TestSubjectMustBeTheTokenForm: a bare upstream sub names no connector, so
+// it is refused rather than matching nothing and reporting success.
+func (s *SessionsSuite) TestSubjectMustBeTheTokenForm() {
+	s.seed("a1", "fam-a1", "sub-a", "alice@example.com")
+	for _, sub := range []string{"sub-a", "google:", ":sub-a", "Google:sub-a"} {
+		status, b := s.revoke(`{"subject":"` + sub + `"}`)
+		s.Equal(http.StatusBadRequest, status, "%s: %s", sub, b)
+		s.Contains(string(b), "<connector>:<upstream sub>")
+
+		status, b = s.do(authedClient, http.MethodGet, admin.SessionsPath+"?"+url.Values{"subject": {sub}}.Encode(), "")
+		s.Equal(http.StatusBadRequest, status, "%s: %s", sub, b)
+	}
+	s.True(s.live("a1"))
 }
 
 func (s *SessionsSuite) TestRevokeByFamily() {
@@ -331,7 +357,7 @@ func stripSchema(t *testing.T, raw []byte) string {
 type storeSessions struct{ s *sqlite.Store }
 
 func (a *storeSessions) List(ctx context.Context, f admin.SessionFilter, now time.Time) ([]admin.Session, error) {
-	rows, err := a.s.ListRefreshSessions(ctx, sqlite.RefreshSessionFilter{Email: f.Email, Subject: f.Subject}, now)
+	rows, err := a.s.ListRefreshSessions(ctx, sqlite.RefreshSessionFilter{Email: f.Email, ConnectorID: f.ConnectorID, Subject: f.Subject}, now)
 	if err != nil {
 		return nil, err
 	}
@@ -350,6 +376,6 @@ func (a *storeSessions) RevokeEmail(ctx context.Context, email string, at time.T
 	return a.s.RevokeRefreshByEmail(ctx, email, at)
 }
 
-func (a *storeSessions) RevokeSubject(ctx context.Context, subject string, at time.Time) (int, error) {
-	return a.s.RevokeRefreshBySubject(ctx, subject, at)
+func (a *storeSessions) RevokeSubject(ctx context.Context, connectorID, subject string, at time.Time) (int, error) {
+	return a.s.RevokeRefreshBySubject(ctx, connectorID, subject, at)
 }

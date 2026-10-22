@@ -180,11 +180,12 @@ func (m *SessionManager) IssueCookie(ctx context.Context, id Identity) (string, 
 
 	now := m.now()
 	bs := BrowserSession{
-		SID:       sid,
-		Subject:   id.Subject,
-		Email:     id.Email,
-		CreatedAt: now,
-		ExpiresAt: now.Add(m.ttl),
+		SID:         sid,
+		ConnectorID: id.ConnectorID,
+		Subject:     id.Subject,
+		Email:       id.Email,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(m.ttl),
 	}
 	if err := m.store.SaveBrowserSession(ctx, bs); err != nil {
 		return "", nil, fmt.Errorf("oidc: persist browser session: %w", err)

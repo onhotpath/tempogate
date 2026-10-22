@@ -18,15 +18,16 @@ const raceIterations = 50
 
 func refresh(token, family string) oidc.Refresh {
 	return oidc.Refresh{
-		Token:     token,
-		JTI:       "jti-" + token,
-		ClientID:  "ui",
-		Subject:   "sub-alice",
-		Email:     "alice@example.com",
-		FamilyID:  family,
-		AuthTime:  t0,
-		CreatedAt: t0,
-		ExpiresAt: t0.Add(24 * time.Hour),
+		Token:       token,
+		JTI:         "jti-" + token,
+		ClientID:    "ui",
+		ConnectorID: "google",
+		Subject:     "sub-alice",
+		Email:       "alice@example.com",
+		FamilyID:    family,
+		AuthTime:    t0,
+		CreatedAt:   t0,
+		ExpiresAt:   t0.Add(24 * time.Hour),
 	}
 }
 
@@ -229,6 +230,7 @@ func sessionCases() []testCase {
 
 			first := got[0]
 			require.Equal(t, "ui", first.ClientID)
+			require.Equal(t, "google", first.ConnectorID)
 			require.Equal(t, "sub-alice", first.Subject)
 			require.Equal(t, "alice@example.com", first.Email)
 			requireTime(t, t0, first.AuthTime, "session auth_time")
@@ -324,16 +326,42 @@ func sessionCases() []testCase {
 		}},
 		{"Sessions/RevokeSubjectIsExact", func(t *testing.T, b Backend) {
 			seed(t, b)
-			n, err := b.Sessions.RevokeSubject(t.Context(), "SUB-ALICE", now)
+			n, err := b.Sessions.RevokeSubject(t.Context(), "google", "SUB-ALICE", now)
 			require.NoError(t, err)
 			require.Zero(t, n)
 
-			n, err = b.Sessions.RevokeSubject(t.Context(), "sub-alice", now)
+			n, err = b.Sessions.RevokeSubject(t.Context(), "google", "sub-alice", now)
 			require.NoError(t, err)
 			require.Equal(t, 2, n)
 			got, err := b.Sessions.List(t.Context(), admin.SessionFilter{}, now)
 			require.NoError(t, err)
 			require.Equal(t, []string{"fam-bob"}, families(got))
+		}},
+		{"Sessions/SubjectIsScopedByConnector", func(t *testing.T, b Backend) {
+			// The same upstream subject at two connectors is two people.
+			google := refresh("google-1", "fam-google")
+			okta := refresh("okta-1", "fam-okta")
+			okta.ConnectorID = "okta"
+			saveRefresh(t, b.Store, google, okta)
+
+			got, err := b.Store.ConsumeRefresh(t.Context(), "okta-1", "ui", t0)
+			require.NoError(t, err)
+			requireRefresh(t, okta, got)
+			okta2 := refresh("okta-2", "fam-okta")
+			okta2.ConnectorID = "okta"
+			saveRefresh(t, b.Store, okta2)
+
+			list, err := b.Sessions.List(t.Context(), admin.SessionFilter{ConnectorID: "okta", Subject: "sub-alice"}, t0)
+			require.NoError(t, err)
+			require.Equal(t, []string{"fam-okta"}, families(list))
+			require.Equal(t, "okta", list[0].ConnectorID)
+
+			n, err := b.Sessions.RevokeSubject(t.Context(), "google", "sub-alice", t0)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			list, err = b.Sessions.List(t.Context(), admin.SessionFilter{}, t0)
+			require.NoError(t, err)
+			require.Equal(t, []string{"fam-okta"}, families(list))
 		}},
 	}
 }

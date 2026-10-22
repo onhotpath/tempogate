@@ -91,6 +91,7 @@ func (s *RefreshLifecycleSuite) serve(allowedDomains string) {
 		oidc.WithRefreshGenerator(s.nextRefresh),
 		oidc.WithAllowedDomains(allowedDomains),
 		oidc.WithTokenLogger(slog.New(slog.NewJSONHandler(s.logs, nil))),
+		oidc.WithConnectors(googleConnectors(s.T(), nil, "")),
 	}
 	if !s.defaultLifetimes {
 		opts = append(opts, oidc.WithTokenLifetimes(lcAccessTTL, lcRefreshTTL, lcMaxLife))
@@ -126,7 +127,7 @@ func (s *RefreshLifecycleSuite) nextRefresh() (string, error) {
 func (s *RefreshLifecycleSuite) login(email string) string {
 	code := fmt.Sprintf("code-%d", s.store.refreshCount())
 	s.store.putCode(oidc.AuthCode{
-		Code: code, ClientID: "ui", RedirectURI: testRedirectURI, Subject: "google-sub-" + email, Email: email,
+		Code: code, ClientID: "ui", RedirectURI: testRedirectURI, ConnectorID: "google", Subject: "google-sub-" + email, Email: email,
 		CodeChallenge: pkceChallenge, CodeChallengeMethod: "S256",
 		CreatedAt: s.clock(), ExpiresAt: s.clock().Add(time.Minute),
 	})
@@ -255,7 +256,7 @@ func (s *RefreshLifecycleSuite) TestIdleLifetimeExpiresUnusedSession() {
 // ahead, but the session is past auth_time + the current max lifetime.
 func (s *RefreshLifecycleSuite) TestAbsoluteLifetimeEnforcedAtRefresh() {
 	s.store.putRefresh(oidc.Refresh{
-		Token: "legacy", JTI: "jti-legacy", ClientID: "ui", Subject: "google-sub-alice", Email: "alice@example.com",
+		Token: "legacy", JTI: "jti-legacy", ClientID: "ui", ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com",
 		FamilyID: "legacy-family", AuthTime: signNow.Add(-lcMaxLife),
 		CreatedAt: signNow.Add(-time.Hour), ExpiresAt: signNow.Add(29 * 24 * time.Hour),
 	})
@@ -274,7 +275,7 @@ func (s *RefreshLifecycleSuite) TestUpgradeToSevenDayDefaultEndsOlderSessions() 
 	day := 24 * time.Hour
 	legacy := func(token string, signedIn time.Duration) {
 		s.store.putRefresh(oidc.Refresh{
-			Token: token, JTI: "jti-" + token, ClientID: "ui", Subject: "google-sub-alice", Email: "alice@example.com",
+			Token: token, JTI: "jti-" + token, ClientID: "ui", ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com",
 			FamilyID: "family-" + token, AuthTime: signNow.Add(-signedIn),
 			// Last refreshed a day ago under the old defaults: 7-day idle
 			// expiry, well inside sign-in + 30 days.
@@ -411,7 +412,7 @@ func TestValidateTokenLifetimes(t *testing.T) {
 func TestRefreshWithoutAllowlistFailsClosed(t *testing.T) {
 	store := newMemTokenStore()
 	store.putRefresh(oidc.Refresh{
-		Token: "rt", ClientID: "ui", Subject: "google-sub-alice", Email: "alice@example.com", FamilyID: "f",
+		Token: "rt", ClientID: "ui", ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com", FamilyID: "f",
 		AuthTime: signNow, CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
 	})
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)

@@ -41,7 +41,7 @@ const (
 
 var deviceUINow = time.Unix(1700000000, 0).UTC()
 
-var deviceUITestIdentity = oidc.Identity{Subject: deviceUITestSubject, Email: deviceUITestEmail}
+var deviceUITestIdentity = oidc.Identity{ConnectorID: "google", Subject: deviceUITestSubject, Email: deviceUITestEmail}
 
 // statefulDeviceCodeStore is a richer in-memory store than memDeviceCodeStore:
 // the device-ui tests need a live LookupDeviceCodeByUserCode and a flipping
@@ -279,11 +279,12 @@ func (s *DeviceUISuite) TearDownTest() {
 // would produce: base64url(sid).base64url(HMAC-SHA256(key, sid)).
 func (s *DeviceUISuite) seedSession() string {
 	s.Require().NoError(s.bsStore.SaveBrowserSession(context.Background(), oidc.BrowserSession{
-		SID:       deviceUITestSID,
-		Subject:   deviceUITestSubject,
-		Email:     deviceUITestEmail,
-		CreatedAt: deviceUINow,
-		ExpiresAt: deviceUINow.Add(5 * time.Minute),
+		SID:         deviceUITestSID,
+		ConnectorID: "google",
+		Subject:     deviceUITestSubject,
+		Email:       deviceUITestEmail,
+		CreatedAt:   deviceUINow,
+		ExpiresAt:   deviceUINow.Add(5 * time.Minute),
 	}))
 	rec := httptest.NewRecorder()
 	_, cookie, err := s.sessions.IssueCookie(context.Background(), deviceUITestIdentity)
@@ -1538,6 +1539,7 @@ func TestSSOCallbackCompletesWhenIssuerHostIsUnreachable(t *testing.T) {
 		Code:        authCode,
 		ClientID:    "tempogate-device-ui",
 		RedirectURI: unreachableIssuer + callbackPath,
+		ConnectorID: "google",
 		Subject:     "google-sub-unreachable",
 		Email:       email,
 		Scope:       "openid email",

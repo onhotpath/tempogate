@@ -21,7 +21,7 @@ func deviceCode(code, userCode string) oidc.DeviceCode {
 	}
 }
 
-var alice = oidc.Identity{Subject: "sub-alice", Email: "alice@example.com"}
+var alice = oidc.Identity{ConnectorID: "google", Subject: "sub-alice", Email: "alice@example.com"}
 
 func lookupDevice(t *testing.T, s Store, code string) oidc.DeviceCode {
 	t.Helper()
@@ -120,6 +120,7 @@ func deviceCodeCases() []testCase {
 			got := lookupDevice(t, b.Store, "dc-1")
 			requireTimePtr(t, at, got.ApprovedAt, "approved_at")
 			require.Nil(t, got.DeniedAt)
+			require.Equal(t, alice.ConnectorID, got.ConnectorID)
 			require.Equal(t, alice.Subject, got.Subject)
 			require.Equal(t, alice.Email, got.Email)
 
@@ -169,6 +170,26 @@ func deviceCodeCases() []testCase {
 			}
 			got := lookupDevice(t, b.Store, "dc-1")
 			require.True(t, (got.ApprovedAt == nil) != (got.DeniedAt == nil), "exactly one decision is recorded")
+		}},
+		{"DeviceCode/RoundTripsAnyConnector", func(t *testing.T, b Backend) {
+			saved := deviceCode("dc-1", "ABCDEFGH")
+			saved.ConnectorID = "okta"
+			saved.Subject = "sub-preset"
+			saved.Email = "preset@example.com"
+			require.NoError(t, b.Store.SaveDeviceCode(t.Context(), saved))
+			require.Equal(t, "okta", lookupDevice(t, b.Store, "dc-1").ConnectorID)
+			require.NoError(t, b.Store.SaveDeviceCode(t.Context(), deviceCode("dc-2", "IJKLMNOP")))
+			require.Empty(t, lookupDevice(t, b.Store, "dc-2").ConnectorID, "no connector before approval")
+
+			bob := oidc.Identity{ConnectorID: "okta", Subject: "sub-bob", Email: "bob@example.com"}
+			require.NoError(t, b.Store.ApproveDeviceCode(t.Context(), "IJKLMNOP", bob, t0))
+			byUser, err := b.Store.LookupDeviceCodeByUserCode(t.Context(), "IJKLMNOP")
+			require.NoError(t, err)
+			require.Equal(t, "okta", byUser.ConnectorID)
+			got, err := b.Store.ConsumeDeviceCode(t.Context(), "dc-2")
+			require.NoError(t, err)
+			require.Equal(t, bob.ConnectorID, got.ConnectorID)
+			require.Equal(t, bob.Subject, got.Subject)
 		}},
 		{"DeviceCode/ConsumeIsSingleUse", func(t *testing.T, b Backend) {
 			require.NoError(t, b.Store.SaveDeviceCode(t.Context(), deviceCode("dc-1", "ABCDEFGH")))

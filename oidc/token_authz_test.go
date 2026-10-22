@@ -54,15 +54,16 @@ func (s *TokenSuite) TestCodeGrantWithNoPermissionsIsInvalidGrantAndMintsNothing
 
 func (s *TokenSuite) seedAliceRefresh() url.Values {
 	s.store.putRefresh(oidc.Refresh{
-		Token:     "old-refresh",
-		JTI:       "old-jti",
-		ClientID:  "ui",
-		Subject:   "google-sub-alice",
-		Email:     "alice@example.com",
-		FamilyID:  "fam-1",
-		AuthTime:  signNow,
-		CreatedAt: signNow,
-		ExpiresAt: signNow.Add(7 * 24 * time.Hour),
+		Token:       "old-refresh",
+		JTI:         "old-jti",
+		ClientID:    "ui",
+		ConnectorID: "google",
+		Subject:     "google-sub-alice",
+		Email:       "alice@example.com",
+		FamilyID:    "fam-1",
+		AuthTime:    signNow,
+		CreatedAt:   signNow,
+		ExpiresAt:   signNow.Add(7 * 24 * time.Hour),
 	})
 	f := url.Values{}
 	f.Set("grant_type", "refresh_token")

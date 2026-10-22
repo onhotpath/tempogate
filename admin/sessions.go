@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/internal/clock"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 const (
@@ -67,7 +68,8 @@ type sessionView struct {
 	FamilyID       string    `json:"family_id" doc:"the session id; pass it to revoke as family_id"`
 	ClientID       string    `json:"client_id"`
 	Email          string    `json:"email"`
-	Subject        string    `json:"subject" doc:"the Google account's stable sub"`
+	Subject        string    `json:"subject" doc:"the token sub, <connector>:<upstream sub>, e.g. google:1234"`
+	Connector      string    `json:"connector" doc:"the connector the user signed in through, e.g. google"`
 	AuthTime       time.Time `json:"auth_time" doc:"when the user signed in; the session ends OIDC_REFRESH_MAX_LIFETIME later"`
 	LastRotationAt time.Time `json:"last_rotation_at" doc:"when the live refresh token was minted"`
 	ExpiresAt      time.Time `json:"expires_at" doc:"when the live refresh token expires unless rotated"`
@@ -75,7 +77,7 @@ type sessionView struct {
 
 type sessionListInput struct {
 	Email   string `query:"email" doc:"only sessions of this email (case-insensitive)"`
-	Subject string `query:"subject" doc:"only sessions of this Google subject (exact)"`
+	Subject string `query:"subject" doc:"only sessions of this token sub, <connector>:<upstream sub> (exact)"`
 }
 
 type sessionListOutput struct {
@@ -88,7 +90,7 @@ type sessionListOutput struct {
 // Validation runs in the handler so every selector mistake is the same 400.
 type sessionRevokeBody struct {
 	Email    string `json:"email,omitempty" doc:"revoke every session of this email (case-insensitive)"`
-	Subject  string `json:"subject,omitempty" doc:"revoke every session of this Google subject (exact)"`
+	Subject  string `json:"subject,omitempty" doc:"revoke every session of this token sub, <connector>:<upstream sub> (exact)"`
 	FamilyID string `json:"family_id,omitempty" doc:"revoke the session with this family id; 404 if no such session ever existed"`
 }
 
@@ -125,7 +127,14 @@ func (h *Sessions) Register(api huma.API) {
 }
 
 func (h *Sessions) list(ctx context.Context, in *sessionListInput) (*sessionListOutput, error) {
-	rows, err := h.store.List(ctx, SessionFilter{Email: in.Email, Subject: in.Subject}, h.now())
+	f := SessionFilter{Email: in.Email}
+	if in.Subject != "" {
+		var err error
+		if f.ConnectorID, f.Subject, err = parseSubject(in.Subject); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := h.store.List(ctx, f, h.now())
 	if err != nil {
 		return nil, fmt.Errorf("admin: list sessions: %w", err)
 	}
@@ -136,7 +145,8 @@ func (h *Sessions) list(ctx context.Context, in *sessionListInput) (*sessionList
 			FamilyID:       r.FamilyID,
 			ClientID:       r.ClientID,
 			Email:          r.Email,
-			Subject:        r.Subject,
+			Subject:        oidc.TokenSubject(r.ConnectorID, r.Subject),
+			Connector:      r.ConnectorID,
 			AuthTime:       r.AuthTime,
 			LastRotationAt: r.RotatedAt,
 			ExpiresAt:      r.ExpiresAt,
@@ -179,10 +189,23 @@ func (h *Sessions) revokeBy(ctx context.Context, b sessionRevokeBody) (int, erro
 	case b.Email != "":
 		return h.store.RevokeEmail(ctx, b.Email, now)
 	case b.Subject != "":
-		return h.store.RevokeSubject(ctx, b.Subject, now)
+		connectorID, subject, err := parseSubject(b.Subject)
+		if err != nil {
+			return 0, err
+		}
+		return h.store.RevokeSubject(ctx, connectorID, subject, now)
 	default:
 		return h.store.RevokeFamily(ctx, b.FamilyID, now)
 	}
+}
+
+// parseSubject splits the token form operators copy from a token's sub.
+func parseSubject(sub string) (connectorID, subject string, err error) {
+	connectorID, subject, err = oidc.ParseTokenSubject(sub)
+	if err != nil {
+		return "", "", huma.Error400BadRequest("subject must be a token sub, <connector>:<upstream sub> (e.g. google:1234)")
+	}
+	return connectorID, subject, nil
 }
 
 // audit writes one line per revoke attempt that passed the guard: the

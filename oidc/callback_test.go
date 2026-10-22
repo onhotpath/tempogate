@@ -182,6 +182,7 @@ func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up google.Exchanger)
 func (s *CallbackSuite) pendingRequest(internalState string) oidc.AuthRequest {
 	return oidc.AuthRequest{
 		InternalState:       internalState,
+		ConnectorID:         "google",
 		ClientID:            "ui",
 		RedirectURI:         testRedirectURI,
 		Scope:               "openid email",
@@ -252,6 +253,7 @@ func (s *CallbackSuite) TestHappyPathRedirectsWithMintedCode() {
 	s.Equal(testRedirectURI, ac.RedirectURI)
 	s.Equal("alice@example.com", ac.Email)
 	s.Equal("google-sub-alice", ac.Subject, "the code carries Google's stable sub, not the email")
+	s.Equal("google", ac.ConnectorID)
 	s.Equal("openid email", ac.Scope)
 	s.Equal("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", ac.CodeChallenge)
 	s.Equal("S256", ac.CodeChallengeMethod)

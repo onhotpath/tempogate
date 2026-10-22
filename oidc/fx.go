@@ -119,14 +119,15 @@ func newCallbackRegistrar(p callbackParams) func(huma.API) {
 type tokenParams struct {
 	fx.In
 
-	Store    TokenStore
-	Devices  DeviceCodeStore
-	Signer   *keys.Signer
-	Clients  ClientRegistry
-	Logger   *slog.Logger
-	Resolver PermissionResolver
-	Tokens   TokenObserver `optional:"true"`
-	Authz    AuthzObserver `optional:"true"`
+	Store      TokenStore
+	Devices    DeviceCodeStore
+	Signer     *keys.Signer
+	Clients    ClientRegistry
+	Connectors *Connectors
+	Logger     *slog.Logger
+	Resolver   PermissionResolver
+	Tokens     TokenObserver `optional:"true"`
+	Authz      AuthzObserver `optional:"true"`
 
 	AllowedDomains     string        `name:"oidc_allowed_domains"`
 	AccessTokenTTL     time.Duration `name:"oidc_access_token_ttl"`
@@ -150,13 +151,15 @@ type tokenParams struct {
 // is to expose the whole device flow or none of it. The token lifetimes are
 // validated here so an incoherent OIDC_*_TTL / OIDC_REFRESH_MAX_LIFETIME
 // combination stops the server at startup, and the refresh grant gets the
-// same OIDC_ALLOWED_DOMAINS the callback enforces.
+// same OIDC_ALLOWED_DOMAINS the callback enforces and the configured
+// connectors, so a session from a removed connector cannot be refreshed.
 func newToken(p tokenParams) (*Token, error) {
 	if err := ValidateTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime); err != nil {
 		return nil, err
 	}
 	return NewToken(p.Store, p.Signer, p.Clients,
 		WithDeviceCodeStore(p.Devices),
+		WithConnectors(p.Connectors),
 		WithAllowedDomains(p.AllowedDomains),
 		WithTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime),
 		WithTokenLogger(p.Logger),

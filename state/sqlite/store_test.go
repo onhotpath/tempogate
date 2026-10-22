@@ -383,15 +383,16 @@ func (s *StoreSuite) TestConsumeAuthCodeNotFound() {
 func (s *StoreSuite) refresh(token string) oidc.Refresh {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return oidc.Refresh{
-		Token:     token,
-		JTI:       "jti-" + token,
-		ClientID:  "ui",
-		Subject:   "google-sub-alice",
-		Email:     "alice@example.com",
-		FamilyID:  "family-" + token,
-		AuthTime:  now.Add(-time.Hour),
-		CreatedAt: now,
-		ExpiresAt: now.Add(7 * 24 * time.Hour),
+		Token:       token,
+		JTI:         "jti-" + token,
+		ClientID:    "ui",
+		ConnectorID: "google",
+		Subject:     "google-sub-alice",
+		Email:       "alice@example.com",
+		FamilyID:    "family-" + token,
+		AuthTime:    now.Add(-time.Hour),
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(7 * 24 * time.Hour),
 	}
 }
 
@@ -542,7 +543,7 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			return err
 		}},
 		{"RevokeRefreshBySubject", func() error {
-			_, err := s.store.RevokeRefreshBySubject(s.ctx, "closed", time.Now().UTC())
+			_, err := s.store.RevokeRefreshBySubject(s.ctx, "google", "closed", time.Now().UTC())
 			return err
 		}},
 		{"ListRefreshSessions", func() error {

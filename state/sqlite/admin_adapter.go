@@ -50,7 +50,7 @@ type adminSessionStore struct {
 func NewAdminSessionStore(s *Store) admin.SessionStore { return &adminSessionStore{s: s} }
 
 func (a *adminSessionStore) List(ctx context.Context, f admin.SessionFilter, now time.Time) ([]admin.Session, error) {
-	rows, err := a.s.ListRefreshSessions(ctx, RefreshSessionFilter{Email: f.Email, Subject: f.Subject}, now)
+	rows, err := a.s.ListRefreshSessions(ctx, RefreshSessionFilter{Email: f.Email, ConnectorID: f.ConnectorID, Subject: f.Subject}, now)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +69,6 @@ func (a *adminSessionStore) RevokeEmail(ctx context.Context, email string, at ti
 	return a.s.RevokeRefreshByEmail(ctx, email, at)
 }
 
-func (a *adminSessionStore) RevokeSubject(ctx context.Context, subject string, at time.Time) (int, error) {
-	return a.s.RevokeRefreshBySubject(ctx, subject, at)
+func (a *adminSessionStore) RevokeSubject(ctx context.Context, connectorID, subject string, at time.Time) (int, error) {
+	return a.s.RevokeRefreshBySubject(ctx, connectorID, subject, at)
 }

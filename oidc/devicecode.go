@@ -40,8 +40,8 @@ var ErrDeviceCodeNotPending = errors.New("oidc: device code already approved or 
 // verification page (already normalised — uppercase, no dashes — so a lookup
 // is a plain UNIQUE-index probe).
 //
-// Subject and Email are empty until Approve stamps the authenticated user onto
-// the row;
+// ConnectorID, Subject and Email are empty until Approve stamps the
+// authenticated user onto the row;
 // ApprovedAt and DeniedAt carry the pending → approved/denied transition,
 // with both nil meaning "still awaiting user action". LastPolledAt and
 // IntervalSeconds back the server-enforced slow_down rule (§3.5): a poll
@@ -52,6 +52,7 @@ type DeviceCode struct {
 	UserCode        string
 	ClientID        string
 	Scope           string
+	ConnectorID     string
 	Subject         string
 	Email           string
 	ApprovedAt      *time.Time

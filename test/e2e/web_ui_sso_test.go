@@ -65,8 +65,11 @@ const (
 	deniedEmail  = "intruder@evil.test"
 
 	// allowedSub is the stable, non-email Google account id the mock asserts
-	// for allowedEmail; tempogate must mint it as the token's sub.
+	// for allowedEmail.
 	allowedSub = "google-sub-alice-0001"
+	// allowedTokenSub is the sub tempogate mints for that account: the
+	// connector it signed in through, then Google's sub.
+	allowedTokenSub = "google:" + allowedSub
 	// hostedDomain is the Workspace `hd` the Web UI and CLI stacks require
 	// via OIDC_ALLOWED_HOSTED_DOMAINS ("Workspace mode").
 	hostedDomain = "example.com"
@@ -139,7 +142,9 @@ func TestWebUISSO(t *testing.T) {
 		clientIDClaim, _ := access.Field("client_id")
 		require.Equal(t, clientID, clientIDClaim)
 		sub, _ := access.Subject()
-		require.Equal(t, allowedSub, sub, "sub must be Google's stable account id, not the email")
+		require.Equal(t, allowedTokenSub, sub, "sub must be the connector and Google's stable account id, not the email")
+		idp, _ := access.Field("idp")
+		require.Equal(t, "google", idp)
 		email, ok := access.Field("email")
 		require.True(t, ok, "email stays a claim")
 		require.Equal(t, allowedEmail, email)
@@ -159,7 +164,9 @@ func TestWebUISSO(t *testing.T) {
 		require.True(t, id.Has("nonce"), "nonce must round-trip so the UI accepts the token")
 		require.False(t, id.Has("permissions"), "the ID token must grant nothing")
 		idSub, _ := id.Subject()
-		require.Equal(t, allowedSub, idSub, "the ID token carries the same Google sub")
+		require.Equal(t, allowedTokenSub, idSub, "the ID token carries the same sub")
+		idIDP, _ := id.Field("idp")
+		require.Equal(t, "google", idIDP)
 
 		// (4) The access token authenticates a gRPC call to temporal-frontend.
 		client, conn := dialFrontend(t, st.frontendAddr)

@@ -20,11 +20,11 @@ func (s *StoreSuite) TestAdminSessionStore() {
 	all, err := st.List(s.ctx, admin.SessionFilter{}, now)
 	s.Require().NoError(err)
 	s.Len(all, 3)
-	bob, err := st.List(s.ctx, admin.SessionFilter{Email: "BOB@example.com", Subject: "google-sub-alice"}, now)
+	bob, err := st.List(s.ctx, admin.SessionFilter{Email: "BOB@example.com", ConnectorID: "google", Subject: "google-sub-alice"}, now)
 	s.Require().NoError(err)
 	s.Require().Len(bob, 1)
 	s.Equal(admin.Session{
-		FamilyID: "fam-b", ClientID: "ui", Subject: "google-sub-alice", Email: "bob@example.com",
+		FamilyID: "fam-b", ClientID: "ui", ConnectorID: "google", Subject: "google-sub-alice", Email: "bob@example.com",
 		AuthTime: bob[0].AuthTime, RotatedAt: bob[0].RotatedAt, ExpiresAt: bob[0].ExpiresAt,
 	}, bob[0])
 
@@ -38,7 +38,7 @@ func (s *StoreSuite) TestAdminSessionStore() {
 	s.Require().NoError(err)
 	s.Equal(1, n)
 
-	n, err = st.RevokeSubject(s.ctx, "google-sub-alice", now)
+	n, err = st.RevokeSubject(s.ctx, "google", "google-sub-alice", now)
 	s.Require().NoError(err)
 	s.Equal(1, n, "only carol's session was still live")
 

@@ -187,6 +187,23 @@ func (s *SignerSuite) TestMintOmitsEmailWhenEmpty() {
 	s.False(tok.Has("email"))
 }
 
+// TestMintStampsIDPOnlyForPeople: a person's tokens name the connector they
+// signed in through; an integration key is not an identity provider and
+// carries none.
+func (s *SignerSuite) TestMintStampsIDPOnlyForPeople() {
+	r := s.req()
+	r.IDP = "google"
+	signed, _, err := s.signer.Mint(s.ctx, r)
+	s.Require().NoError(err)
+	idp, err := jwt.Get[string](s.parseWithLatestPublicKey(signed), "idp")
+	s.Require().NoError(err)
+	s.Equal("google", idp)
+
+	signed, _, err = s.signer.Mint(s.ctx, s.req())
+	s.Require().NoError(err)
+	s.False(s.parseWithLatestPublicKey(signed).Has("idp"))
+}
+
 // TestMintIsAnAccessToken: Mint produces access tokens only. They are
 // explicitly typed (RFC 9068 §2.1, RFC 8725 §3.11) so no verifier can mistake
 // one for an ID token or vice versa, carry the Signer's audience (the Temporal
@@ -222,6 +239,7 @@ func (s *SignerSuite) TestMintIDTokenCarriesIdentityOnly() {
 	signed, err := s.signer.MintIDToken(s.ctx, IDTokenRequest{
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
+		IDP:      "google",
 		Audience: "temporal-ui",
 		Nonce:    "rp-nonce",
 		AuthTime: authTime,
@@ -251,6 +269,9 @@ func (s *SignerSuite) TestMintIDTokenCarriesIdentityOnly() {
 	nonce, err := jwt.Get[string](tok, "nonce")
 	s.Require().NoError(err)
 	s.Equal("rp-nonce", nonce)
+	idp, err := jwt.Get[string](tok, "idp")
+	s.Require().NoError(err)
+	s.Equal("google", idp)
 	at, err := jwt.Get[float64](tok, "auth_time")
 	s.Require().NoError(err)
 	s.Equal(float64(authTime.Unix()), at)
@@ -261,6 +282,7 @@ func (s *SignerSuite) TestMintIDTokenCarriesIdentityOnly() {
 	})
 	s.Require().NoError(err)
 	s.False(s.parseWithLatestPublicKey(signed).Has("nonce"))
+	s.False(s.parseWithLatestPublicKey(signed).Has("idp"))
 }
 
 func (s *SignerSuite) TestMintIDTokenRequiresAudience() {

@@ -87,7 +87,8 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 	conns := googleConnectorsAt(s.T(), s.mg.issuer(), upstream, "")
 	authorizer := oidc.New(store, reg, binding, conns, s.issuer)
 	callback := oidc.NewCallback(store, conns, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll))
-	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
+	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"),
+		oidc.WithConnectors(conns))
 	deviceAuth := oidc.NewDeviceAuthorization(store, reg, s.issuer)
 
 	// The integration server is httptest TLS so the production cookie
@@ -276,7 +277,7 @@ func (s *DeviceUIIntegrationSuite) TestFullDeviceFlowAgainstRealStack() {
 	s.Require().NoError(err)
 	sub, ok := parsed.Subject()
 	s.Require().True(ok)
-	s.Equal("google-sub-123", sub, "the device grant mints the approver's Google sub")
+	s.Equal("google:google-sub-123", sub, "the device grant mints the approver's sub")
 }
 
 // TestDenyFlipsRowAndDeviceCodePollSeesAccessDenied exercises the deny

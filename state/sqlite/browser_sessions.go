@@ -20,9 +20,9 @@ var ErrDuplicateBrowserSession = errors.New("sqlite: browser session with this s
 
 func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO browser_sessions (sid_hash, subject, email, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		secret.Hash(bs.SID), bs.Subject, bs.Email, bs.CreatedAt, bs.ExpiresAt,
+		`INSERT INTO browser_sessions (sid_hash, connector_id, subject, email, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		secret.Hash(bs.SID), bs.ConnectorID, bs.Subject, bs.Email, bs.CreatedAt, bs.ExpiresAt,
 	)
 	if err != nil {
 		var sqliteErr *sqlite3.Error
@@ -39,11 +39,11 @@ func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) 
 func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.BrowserSession, error) {
 	bs := oidc.BrowserSession{SID: sid}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT subject, email, created_at, expires_at
+		`SELECT connector_id, subject, email, created_at, expires_at
 		 FROM browser_sessions
 		 WHERE sid_hash = ?`,
 		secret.Hash(sid),
-	).Scan(&bs.Subject, &bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
+	).Scan(&bs.ConnectorID, &bs.Subject, &bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return oidc.BrowserSession{}, oidc.ErrBrowserSessionNotFound
 	}

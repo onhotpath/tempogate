@@ -88,7 +88,7 @@ func (s *TokenSuite) TestIDTokenIsSeparateFromAccessToken() {
 	s.Require().NoError(err)
 	s.Equal("rp-nonce-pkce", nonce)
 	sub, _ := id.Subject()
-	s.Equal("google-sub-alice", sub)
+	s.Equal("google:google-sub-alice", sub)
 	verified, err := jwxjwt.Get[bool](id, "email_verified")
 	s.Require().NoError(err)
 	s.True(verified)
@@ -110,7 +110,7 @@ func (s *TokenSuite) TestIDTokenIsSeparateFromAccessToken() {
 func (s *TokenSuite) TestRefreshIDTokenKeepsAuthTimeAndDropsNonce() {
 	authTime := signNow.Add(-time.Hour)
 	s.store.putRefresh(oidc.Refresh{
-		Token: "rt-1", ClientID: "ui", Subject: "google-sub-alice", Email: "alice@example.com",
+		Token: "rt-1", ClientID: "ui", ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com",
 		FamilyID: "fam-1", AuthTime: authTime,
 		CreatedAt: authTime, ExpiresAt: signNow.Add(time.Hour),
 	})

@@ -257,7 +257,7 @@ func (s *TokenSuite) TestFamilyRevocationsAreObserved() {
 
 	// A refresh for a domain that is no longer allowed.
 	s.store.putRefresh(oidc.Refresh{
-		Token: "rt-evil", JTI: "jti-evil", ClientID: "ui", Subject: "google-sub-mallory", Email: "mallory@evil.example",
+		Token: "rt-evil", JTI: "jti-evil", ClientID: "ui", ConnectorID: "google", Subject: "google-sub-mallory", Email: "mallory@evil.example",
 		FamilyID: "family-evil", AuthTime: signNow, CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
 	})
 	resp := s.post(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"rt-evil"}, "client_id": {"ui"}})
