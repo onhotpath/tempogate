@@ -18,6 +18,13 @@ Click **Sign in**, approve on the mock consent screen (it asserts
 `alice@example.com`), and you land in the Temporal UI authenticated by a JWT
 tempogate issued. `curl -fsS http://tempogate:8000/healthz` returns `200`.
 
+The API docs are on too: browse the OIDC endpoints at
+<http://tempogate:8000/docs> (the raw spec is
+<http://tempogate:8000/openapi.json>). `API_DOCS_ENABLED` is for local stacks
+like this one only: `serve` refuses it unless `OIDC_ISSUER` is plain `http://`,
+and the admin listener never serves docs. Elsewhere, use `tempogate gen-oas`
+(add `--admin` for the admin API).
+
 > During first boot the `temporal` container logs two one-shot
 > `ERROR ... Namespace default is not found` lines — that is
 > `temporalio/auto-setup`'s own probe-before-create, immediately followed by
@@ -47,7 +54,7 @@ On Linux you can put every container in the host network namespace instead:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.host-network.yml up --build
-# everything is on localhost: http://localhost:8080
+# everything is on localhost: http://localhost:8080 (API docs: http://localhost:8000/docs)
 ```
 
 This is **Linux only** — on Docker Desktop (macOS/Windows) `network_mode:

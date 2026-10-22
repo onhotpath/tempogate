@@ -49,8 +49,10 @@ type apiConfig struct {
 type Option func(*apiConfig)
 
 // WithDocs serves the OpenAPI document, the docs page and the JSON schemas
-// on both surfaces. Off by default. gen-oas is unaffected either way: it
-// reads Surface.API.OpenAPI() in-process, which never depends on the routes.
+// on the public surface. Off by default. The admin surface never serves them:
+// they would sit outside the admin guard. gen-oas is unaffected either way:
+// it reads Surface.API.OpenAPI() in-process, which never depends on the
+// routes.
 func WithDocs(enabled bool) Option {
 	return func(c *apiConfig) { c.docs = enabled }
 }
@@ -155,7 +157,12 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 
 func newAdmin(cfg *apiConfig) *Surface {
 	mux := http.NewServeMux()
-	a := humago.NewWithPrefix(mux, "", cfg.humaConfig("tempogate-admin"))
+	// No docs routes, ever: Huma serves them outside the operation
+	// middleware chain, so the admin guard below could not cover them.
+	// `tempogate gen-oas --admin` emits the admin spec instead.
+	hc := huma.DefaultConfig("tempogate-admin", buildinfo.Version())
+	withoutDocs(&hc)
+	a := humago.NewWithPrefix(mux, "", hc)
 	// Huma binds the middleware chain when an operation is registered, so
 	// this order is what keeps the liveness probe open (probes cannot carry
 	// the admin token or a predictable Host) and every other admin route

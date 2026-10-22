@@ -100,6 +100,41 @@ func (s *ServeCmdSuite) TestRejectsUnreachableStore() {
 	s.store = nil
 }
 
+// TestAPIDocsRequireDevIssuer: the docs are for a local dev stack, so serve
+// refuses to start with them on behind anything but a plain-http issuer, and
+// says so before touching the store. Past the check, the unmigrated store is
+// what stops serve.
+func (s *ServeCmdSuite) TestAPIDocsRequireDevIssuer() {
+	for _, tc := range []struct {
+		name      string
+		docs      bool
+		plainHTTP bool
+		wantErr   string
+	}{
+		{"docs on, https issuer", true, false, "API_DOCS_ENABLED is for local development only and requires a plain-http OIDC_ISSUER"},
+		{"docs on, http issuer", true, true, "schema version 0"},
+		{"docs off, https issuer", false, false, "schema version 0"},
+	} {
+		s.Run(tc.name, func() {
+			cmd := newServeCmd(supply(serveParams{
+				Logger:          zap.NewNop(),
+				Store:           s.store,
+				DocsEnabled:     tc.docs,
+				IssuerPlainHTTP: tc.plainHTTP,
+			}))
+			cmd.SetOut(new(testWriter))
+			cmd.SetErr(new(testWriter))
+
+			err := cmd.ExecuteContext(s.ctx)
+			s.Require().Error(err)
+			s.Contains(err.Error(), tc.wantErr)
+			if tc.docs && !tc.plainHTTP {
+				s.Contains(err.Error(), "tempogate gen-oas", "the refusal points at the way to get the specs")
+			}
+		})
+	}
+}
+
 // TestServesUntilCancelled drives serve's happy path: on a migrated store it
 // bootstraps the signing keypair, binds both listeners, marks readiness, and
 // shuts down cleanly when the command's context is cancelled.

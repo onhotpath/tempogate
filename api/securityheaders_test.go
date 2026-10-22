@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -86,7 +87,7 @@ func TestAPIDocsDisabledByDefault(t *testing.T) {
 			t.Cleanup(adminSrv.Close)
 
 			for _, base := range []string{publicSrv.URL, publicSrv.URL + basePath, adminSrv.URL} {
-				for _, p := range []string{"/openapi.json", "/openapi.yaml", "/openapi-3.0.json", "/docs", "/schemas/HealthBody.json"} {
+				for _, p := range docsPaths {
 					resp, _ := do(t, base+p)
 					assert.Equal(t, http.StatusNotFound, resp.StatusCode, "%s%s must 404 with docs disabled", base, p)
 				}
@@ -106,34 +107,65 @@ func TestAPIDocsDisabledByDefault(t *testing.T) {
 	}
 }
 
-// TestAPIDocsEnabled: with docs opted in, both listeners serve the spec and
-// docs page, still under the security headers. Huma's docs page loads its
-// renderer from a CDN and sets its own, route-specific CSP; that policy
-// replaces the default one but keeps frame-ancestors 'none'.
+// docsPaths are every route that describes an API: the OpenAPI documents,
+// the docs page and a per-type JSON schema.
+var docsPaths = []string{"/openapi.json", "/openapi.yaml", "/openapi-3.0.json", "/docs", "/schemas/HealthBody.json"}
+
+// TestAPIDocsEnabled: with docs opted in, the public listener serves the spec
+// and docs page under the OIDC base path, still under the security headers.
+// Huma's docs page loads its renderer from a CDN and sets its own,
+// route-specific CSP; that policy replaces the default one but keeps
+// frame-ancestors 'none'.
 func TestAPIDocsEnabled(t *testing.T) {
 	t.Parallel()
 	for _, basePath := range []string{"", "/idp"} {
 		t.Run("basePath="+basePath, func(t *testing.T) {
 			t.Parallel()
-			publicSrv, servers, _ := servePublic(t, basePath, api.WithDocs(true))
+			publicSrv, _, _ := servePublic(t, basePath, api.WithDocs(true))
+			base := publicSrv.URL + basePath
+
+			spec, _ := do(t, base+"/openapi.json")
+			assert.Equal(t, http.StatusOK, spec.StatusCode, "%s/openapi.json", base)
+			assertSecurityHeaders(t, spec)
+
+			schema, _ := do(t, base+"/schemas/HealthBody.json")
+			assert.Equal(t, http.StatusOK, schema.StatusCode, "%s/schemas/HealthBody.json", base)
+
+			docs, body := do(t, base+"/docs")
+			assert.Equal(t, http.StatusOK, docs.StatusCode, "%s/docs", base)
+			assertAntiFramingHeaders(t, docs)
+			assert.Contains(t, docs.Header.Get("Content-Security-Policy"), "script-src https://unpkg.com/",
+				"docs page keeps Huma's route-specific CSP so its renderer loads")
+			assert.True(t, strings.Contains(string(body), "unpkg.com"), "sanity: docs page loads its renderer from the CDN")
+
+			_, body = do(t, base+"/.well-known/openid-configuration")
+			assert.Contains(t, string(body), `"$schema"`, "schema links come back with the schemas route")
+		})
+	}
+}
+
+// TestAPIDocsNeverOnAdminListener: the admin docs routes would sit outside
+// the admin bearer token and Host allowlist that guard /admin/*, describing
+// the admin API to anyone who can reach the port. So the admin listener never
+// serves them, whatever API_DOCS_ENABLED says; `tempogate gen-oas --admin`
+// emits the admin spec instead.
+func TestAPIDocsNeverOnAdminListener(t *testing.T) {
+	t.Parallel()
+	for _, docs := range []bool{false, true} {
+		t.Run(fmt.Sprintf("docs=%t", docs), func(t *testing.T) {
+			t.Parallel()
+			_, servers, _ := servePublic(t, "", api.WithDocs(docs), api.WithAdminRegistrar(adminProbe))
 			adminSrv := httptest.NewServer(servers.Admin.Handler)
 			t.Cleanup(adminSrv.Close)
 
-			for _, base := range []string{publicSrv.URL + basePath, adminSrv.URL} {
-				spec, _ := do(t, base+"/openapi.json")
-				assert.Equal(t, http.StatusOK, spec.StatusCode, "%s/openapi.json", base)
-				assertSecurityHeaders(t, spec)
-
-				docs, body := do(t, base+"/docs")
-				assert.Equal(t, http.StatusOK, docs.StatusCode, "%s/docs", base)
-				assertAntiFramingHeaders(t, docs)
-				assert.Contains(t, docs.Header.Get("Content-Security-Policy"), "script-src https://unpkg.com/",
-					"docs page keeps Huma's route-specific CSP so its renderer loads")
-				assert.True(t, strings.Contains(string(body), "unpkg.com"), "sanity: docs page loads its renderer from the CDN")
+			for _, p := range docsPaths {
+				resp, _ := do(t, adminSrv.URL+p)
+				assert.Equal(t, http.StatusNotFound, resp.StatusCode, "admin %s must 404", p)
 			}
-
-			_, body := do(t, publicSrv.URL+basePath+"/.well-known/openid-configuration")
-			assert.Contains(t, string(body), `"$schema"`, "schema links come back with the schemas route")
+			for _, p := range []string{"/admin/healthz", "/admin/probe"} {
+				_, body := do(t, adminSrv.URL+p)
+				assert.NotContains(t, string(body), `"$schema"`, "admin %s must not link a schema that is not served", p)
+			}
 		})
 	}
 }

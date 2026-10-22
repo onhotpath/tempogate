@@ -25,6 +25,39 @@ func TestFxProjectsAPIDocsEnabled(t *testing.T) {
 	assert.True(t, got.DocsEnabled)
 }
 
+// TestProjectsIssuerPlainHTTP: whether the issuer is plain http is decided
+// once, here, for every consumer (the session cookie's Secure flag, serve's
+// API docs check). Anything but an http scheme, an unparseable issuer
+// included, counts as not plain http, the safe side for both.
+func TestProjectsIssuerPlainHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		issuer string
+		want   bool
+	}{
+		{"http://127.0.0.1:8000", true},
+		{"http://tempogate:8000/idp", true},
+		{"HTTP://tempogate:8000", true},
+		{" http://tempogate:8000 ", true},
+		{"https://tempogate.example.com", false},
+		{"https://shared.example.com/idp", false},
+		{"", false},
+		{"tempogate:8000", false},
+		{"://nonsense", false},
+	} {
+		t.Run(tc.issuer, func(t *testing.T) {
+			cfg := defaultConfig()
+			cfg.OIDC.Issuer = tc.issuer
+			var got struct {
+				fx.In
+
+				PlainHTTP bool `name:"oidc_issuer_plain_http"`
+			}
+			fxtest.New(t, Supply(cfg), fx.Populate(&got)).RequireStart().RequireStop()
+			assert.Equal(t, tc.want, got.PlainHTTP)
+		})
+	}
+}
+
 // TestSupplyProjectsLikeFx guards the sub-graph seam: a graph built from an
 // already-loaded *Config must see the same named values as the root graph.
 func TestSupplyProjectsLikeFx(t *testing.T) {

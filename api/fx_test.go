@@ -14,7 +14,8 @@ import (
 )
 
 // TestFxWiresAPIDocsEnabled follows API_DOCS_ENABLED from the environment
-// through config.Fx into the Servers api.Fx builds.
+// through config.Fx into the Servers api.Fx builds: it switches the public
+// docs, and the admin listener serves none either way.
 func TestFxWiresAPIDocsEnabled(t *testing.T) {
 	for _, tc := range []struct {
 		env  string
@@ -35,11 +36,20 @@ func TestFxWiresAPIDocsEnabled(t *testing.T) {
 			app.RequireStart()
 			t.Cleanup(app.RequireStop)
 
-			for _, h := range []http.Handler{servers.Public.Handler, servers.Admin.Handler} {
-				srv := httptest.NewServer(h)
-				resp, _ := do(t, srv.URL+"/openapi.json")
+			for _, h := range []struct {
+				name    string
+				handler http.Handler
+				want    int
+			}{
+				{"public", servers.Public.Handler, tc.want},
+				{"admin", servers.Admin.Handler, http.StatusNotFound},
+			} {
+				srv := httptest.NewServer(h.handler)
+				for _, p := range docsPaths {
+					resp, _ := do(t, srv.URL+p)
+					assert.Equal(t, h.want, resp.StatusCode, "%s %s", h.name, p)
+				}
 				srv.Close()
-				assert.Equal(t, tc.want, resp.StatusCode)
 			}
 		})
 	}

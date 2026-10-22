@@ -64,7 +64,7 @@ Never list a range that clients can connect from directly, or they can choose th
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `API_DOCS_ENABLED` | `false` | Serves the OpenAPI document (`/openapi.json`, `/openapi.yaml`), the docs page (`/docs`) and the JSON schemas (`/schemas/*`) on both listeners, under the OIDC base path on the public one. Off, they return `404` and response bodies carry no `$schema` link. `tempogate gen-oas` emits the specs either way. |
+| `API_DOCS_ENABLED` | `false` | Dev only. Serves the OpenAPI document (`/openapi.json`, `/openapi.yaml`), the docs page (`/docs`) and the JSON schemas (`/schemas/*`) on the public listener, under the OIDC base path. `serve` refuses to start with it on unless `OIDC_ISSUER` is plain `http://`, so it cannot be enabled in an https deployment. The admin listener never serves them, whatever this says. Off, they return `404` and response bodies carry no `$schema` link. Anywhere else, use `tempogate gen-oas` (public spec) and `tempogate gen-oas --admin` (admin spec), which work either way. |
 
 ### Admin API
 

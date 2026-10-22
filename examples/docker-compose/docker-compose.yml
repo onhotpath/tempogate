@@ -102,6 +102,10 @@ services:
       OIDC_GOOGLE_AUTH_ENDPOINT: "http://mockoidc:8081/auth"
       OIDC_GOOGLE_TOKEN_ENDPOINT: "http://mockoidc:8081/token"
       OIDC_GOOGLE_ISSUER_URL: "http://mockoidc:8081"
+      # Browsable API docs at http://tempogate:8000/docs. Dev only: serve
+      # refuses this unless OIDC_ISSUER is plain http, and never serves the
+      # docs on the admin listener.
+      API_DOCS_ENABLED: "true"
     ports:
       - "8000:8000"
     depends_on:

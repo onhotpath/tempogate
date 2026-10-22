@@ -69,12 +69,13 @@ func (s *FxSuite) supplyConfigWithSessionKey(clients, signingKeyB64 string) fx.O
 // list (or the insecure-redirect flag) without forcing every other test to
 // plumb the extra arguments.
 func (s *FxSuite) supplyConfigFull(clients, secrets, signingKeyB64 string, allowInsecureRedirectURIs bool) fx.Option {
-	return s.supplyConfigAt(testIssuer, "", clients, secrets, signingKeyB64, allowInsecureRedirectURIs)
+	return s.supplyConfigAt(testIssuer, "", false, clients, secrets, signingKeyB64, allowInsecureRedirectURIs)
 }
 
-// supplyConfigAt additionally varies the issuer and the base path config
-// projects from it, for the wiring that derives behaviour from the issuer.
-func (s *FxSuite) supplyConfigAt(issuer, basePath, clients, secrets, signingKeyB64 string, allowInsecureRedirectURIs bool) fx.Option {
+// supplyConfigAt additionally varies the issuer and the base path and
+// plain-http flag config projects from it, for the wiring that derives
+// behaviour from the issuer.
+func (s *FxSuite) supplyConfigAt(issuer, basePath string, plainHTTP bool, clients, secrets, signingKeyB64 string, allowInsecureRedirectURIs bool) fx.Option {
 	return fx.Options(
 		fx.Provide(func() oidc.AuthRequestStore { return &memAuthStore{} }),
 		fx.Provide(func() oidc.BrowserSessionStore { return newMemBrowserSessionStore() }),
@@ -92,6 +93,7 @@ func (s *FxSuite) supplyConfigAt(issuer, basePath, clients, secrets, signingKeyB
 		fx.Supply(
 			fx.Annotated{Name: "oidc_issuer", Target: issuer},
 			fx.Annotated{Name: "oidc_base_path", Target: basePath},
+			fx.Annotated{Name: "oidc_issuer_plain_http", Target: plainHTTP},
 			fx.Annotated{Name: "oidc_clients", Target: clients},
 			fx.Annotated{Name: "oidc_client_secrets", Target: secrets},
 			fx.Annotated{Name: "oidc_allow_insecure_redirect_uris", Target: allowInsecureRedirectURIs},
@@ -312,7 +314,7 @@ func (s *FxSuite) TestSessionCookieFollowsIssuer() {
 		s.Run(tc.name, func() {
 			var sm *oidc.SessionManager
 			app := fxtest.New(s.T(),
-				s.supplyConfigAt(tc.issuer, tc.basePath, "ui:https://app.example.com/auth",
+				s.supplyConfigAt(tc.issuer, tc.basePath, !tc.wantSecure, "ui:https://app.example.com/auth",
 					"", testSigningKeyB64, false),
 				oidc.Fx(),
 				fx.Populate(&sm),

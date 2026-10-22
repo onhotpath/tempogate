@@ -117,9 +117,10 @@ type KeysConfig struct {
 // APIConfig controls what the Huma APIs expose beyond their operations.
 type APIConfig struct {
 	// DocsEnabled serves the OpenAPI document, the docs page and the JSON
-	// schemas on both listeners. Off by default: they are an
-	// unauthenticated map of every endpoint, and the docs page needs a
-	// looser CSP to load its renderer from a CDN.
+	// schemas on the public listener, never the admin one. Dev only: they
+	// are an unauthenticated map of every endpoint, and the docs page needs
+	// a looser CSP to load its renderer from a CDN, so serve refuses it
+	// unless OIDC_ISSUER is plain http. Off by default.
 	DocsEnabled bool `ferry:"docs_enabled"`
 }
 

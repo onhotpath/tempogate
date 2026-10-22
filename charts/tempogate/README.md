@@ -48,6 +48,12 @@ curl -fsS http://127.0.0.1:8000/healthz
   (reach it with `kubectl port-forward`). `service.admin.enabled=true` binds
   it on all pod interfaces behind a separate `<fullname>-admin` Service that
   no Ingress/HTTPRoute targets, and requires `admin.tokenSha256SecretRef`.
+- **No API docs.** The OpenAPI document and docs page (`API_DOCS_ENABLED`)
+  are for a local dev stack only: `serve` refuses to start with them on
+  unless `OIDC_ISSUER` is plain `http://`, so they cannot be enabled in an
+  https deployment, `extraEnv` included, and the admin listener never
+  serves them. Get the specs with `tempogate gen-oas` and
+  `tempogate gen-oas --admin` instead.
 - **Schema migrations** run in a dedicated `tempogate migrate` Job
   applied alongside the release (not a Helm hook — Helm v4's sequential
   hook execution deadlocks a hook Job against a chart-managed
