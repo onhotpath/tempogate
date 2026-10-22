@@ -8,10 +8,10 @@
 # Build context is the repo root so the binary shares the module (and its jwx
 # pin) with tempogate. Built only by the e2e test via testcontainers.
 # syntax=docker/dockerfile:1.24
-ARG GO_VERSION=1.27.3
-ARG HEADLESS_SHELL_IMAGE=chromedp/headless-shell:131.0.6778.86
+ARG GO_IMAGE=golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
+ARG HEADLESS_SHELL_IMAGE=chromedp/headless-shell:131.0.6778.86@sha256:35500b175064d015acf5c27891f6160908cdc2ce46ded9ec471e07ffe9930e52
 
-FROM golang:${GO_VERSION}-alpine AS builder
+FROM ${GO_IMAGE} AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

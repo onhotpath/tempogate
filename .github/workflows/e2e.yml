@@ -37,17 +37,17 @@ jobs:
       github.event_name == 'push' ||
       contains(github.event.pull_request.labels.*.name, 'e2e:true')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Caches $GOMODCACHE + the build cache keyed on go.sum, so the e2e-tagged
       # deps (chromedp, testcontainers, temporal api…) are fetched/compiled
       # once and restored on every later run with an unchanged go.sum.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # Each runner is a fresh VM, so a plain `docker build` would re-pull the
       # base images and re-run `go mod download` + `go build` inside Docker
@@ -58,7 +58,7 @@ jobs:
       # module-download / compile layers are restored when go.* + sources are
       # unchanged.
       - name: Build tempogate e2e image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -68,7 +68,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=e2e-tempogate
 
       - name: Build mock-Google e2e image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./test/e2e/mockgoogle/Dockerfile
@@ -78,7 +78,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=e2e-mockgoogle
 
       - name: Build CLI-client e2e image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./test/e2e/cliclient/Dockerfile

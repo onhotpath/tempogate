@@ -168,7 +168,9 @@ Container images are published to `ghcr.io/onhotpath/tempogate`:
 | --- | --- |
 | `:vX.Y.Z`, `:X.Y`, `:X`, `:latest` | Stable releases (pushed on `git tag vX.Y.Z`) |
 | `:vX.Y.Z-rc.N` | Pre-releases (release candidates) |
-| `:sha-<short>` | One-off builds dispatched manually from a specific commit |
+| `:sha-<short>` | One-off builds dispatched manually from `main` or a `v*` tag, named after the built commit |
+
+Every pushed image carries SLSA provenance and an SBOM attestation and is signed with cosign (keyless); [RELEASING.md](RELEASING.md#verify-a-release) shows how to verify them.
 
 ### Prebuilt CLI binaries
 
@@ -189,6 +191,11 @@ brew install --cask tempogate
 
 Homebrew 6 requires trust for casks from non-official taps.
 The `brew trust` step grants trust only to the tempogate cask and is needed once.
+
+The macOS binary is not signed or notarized by Apple: the project has no paid Apple Developer account.
+So that Gatekeeper does not block it, the cask removes the `com.apple.quarantine` attribute after install, which also means Gatekeeper never checks the binary.
+What you rely on instead is Homebrew's sha256 check of the release archive, which the cask pins, and the cosign-signed `checksums.txt` on the GitHub Release ([verify it](RELEASING.md#verify-a-release)).
+If that is not acceptable for your machines, download the archive and verify the signature yourself, or build from source.
 
 Or download a release asset directly (Linux x86_64 shown — pick your os/arch):
 

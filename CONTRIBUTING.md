@@ -28,7 +28,7 @@ Then:
 ```bash
 git clone git@github.com:onhotpath/tempogate.git
 cd tempogate
-make tools     # one-time: installs gci + golangci-lint + govulncheck into ./.bin
+make tools     # one-time: installs gci + golangci-lint + govulncheck + actionlint into ./.bin
 make test      # check + race + coverage
 make start     # runs `tempogate serve` with build-info ldflags
 ```
@@ -36,9 +36,15 @@ make start     # runs `tempogate serve` with build-info ldflags
 ### Bumping Go
 
 The `go` directive in [`go.mod`](go.mod) is the single source of truth for the toolchain: CI and release read it via `setup-go`'s `go-version-file`.
-Dockerfiles cannot read `go.mod`, so each one carries an `ARG GO_VERSION` default that must match; `make check` fails if any drifts.
-Renovate bumps all of them together in one "Go toolchain" PR.
-To bump by hand, run `go mod edit -go=X.Y.Z`, update every `ARG GO_VERSION=`, then `make ci`.
+Dockerfiles cannot read `go.mod`, so each one takes its builder from an `ARG GO_IMAGE=golang:X.Y.Z-alpine@sha256:...` default whose tag must match; `make check` fails if any drifts.
+Renovate bumps the go directive and every `GO_IMAGE` tag and digest together in one "Go toolchain" PR.
+To bump by hand, run `go mod edit -go=X.Y.Z`, set every `ARG GO_IMAGE=` to `golang:X.Y.Z-alpine@<digest>` (from `docker buildx imagetools inspect golang:X.Y.Z-alpine`), then `make ci`.
+
+### Pinned build inputs
+
+Every GitHub Action is pinned to a full commit SHA with a `# vX.Y.Z` comment, and every Dockerfile base image (and `# syntax=` frontend) to an `@sha256:` digest, keeping the tag for readability.
+`make check-supply-chain` (part of `make ci`) runs actionlint on the workflows and fails on any unpinned reference.
+Renovate keeps the SHAs and digests current; when adding an action or image by hand, resolve the SHA from the release tag (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing annotated tags) or the digest with `docker buildx imagetools inspect <image:tag>`.
 
 ## Working on a change
 

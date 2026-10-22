@@ -1,8 +1,8 @@
-# syntax=docker/dockerfile:1.24
+# syntax=docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-ARG GO_VERSION=1.27.3
+ARG GO_IMAGE=golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
 
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/tempogate .
 RUN mkdir -p /out/state
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=builder /out/tempogate /tempogate
 COPY --chown=nonroot:nonroot --from=builder /out/state /var/lib/tempogate

@@ -6,14 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to build (branch, tag, or full SHA). Defaults to the workflow's run ref."
+        description: "Git ref to build: main or a v* tag. Defaults to the workflow's run ref."
         required: false
         default: ""
 
 permissions:
   contents: read
-  packages: write
-  id-token: write   # reserved for future cosign keyless signing
 
 concurrency:
   group: release-${{ github.event.inputs.ref || github.ref }}
@@ -23,22 +21,62 @@ env:
   IMAGE: ghcr.io/onhotpath/tempogate
 
 jobs:
+  # Only main or a v* tag may be built and pushed. Without this a dispatch
+  # could build any ref (for example refs/pull/N/head from a fork) and publish
+  # it to GHCR. The ref is returned fully qualified so a branch can never
+  # shadow a tag of the same name.
+  resolve:
+    name: validate ref
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+      tag: ${{ steps.ref.outputs.tag }}
+    steps:
+      - name: Restrict the build ref to main or a v* tag
+        id: ref
+        env:
+          REF: ${{ github.event.inputs.ref || github.ref }}
+        run: |
+          if [[ "$REF" =~ ^(refs/heads/)?main$ ]]; then
+            ref=refs/heads/main
+          elif [[ "$REF" =~ ^(refs/tags/)?(v[0-9A-Za-z._+-]*)$ ]]; then
+            ref="refs/tags/${BASH_REMATCH[2]}"
+            echo "tag=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::refusing to build '$REF': only main or a v* tag may be released"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
   publish:
     name: build + push (linux/amd64, linux/arm64)
+    needs: resolve
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # cosign keyless signing of the pushed image
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
+          ref: ${{ needs.resolve.outputs.ref }}
 
-      - uses: docker/setup-qemu-action@v4
+      # Tags and build metadata name the commit actually checked out, which on
+      # a dispatch differs from github.sha (the run ref's head).
+      - name: Resolve built commit
+        id: commit
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -46,7 +84,7 @@ jobs:
 
       - name: Compute image tags + labels
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           # `latest` is reserved for stable tag releases (handled below).
@@ -55,13 +93,13 @@ jobs:
           # Tag mapping:
           #   tag vX.Y.Z (stable)   -> :vX.Y.Z, :X.Y, :X, :latest
           #   tag vX.Y.Z-rc.N etc.  -> :vX.Y.Z-rc.N (no truncated/latest aliases)
-          #   workflow_dispatch     -> :sha-<short>
+          #   workflow_dispatch     -> :sha-<short> of the built commit only
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref, '-') }}
-            type=semver,pattern={{major}},enable=${{ !contains(github.ref, '-') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
-            type=sha,prefix=sha-,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=semver,pattern=v{{version}},enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && !contains(github.ref, '-') }}
+            type=semver,pattern={{major}},enable=${{ github.event_name == 'push' && !contains(github.ref, '-') }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=raw,value=sha-${{ steps.commit.outputs.short }},enable=${{ github.event_name == 'workflow_dispatch' }}
           labels: |
             org.opencontainers.image.title=tempogate
             org.opencontainers.image.description=OIDC + OAuth2 authorization server for self-hosted Temporal
@@ -70,7 +108,8 @@ jobs:
             org.opencontainers.image.url=https://github.com/${{ github.repository }}
 
       - name: Build + push
-        uses: docker/build-push-action@v7
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -78,40 +117,61 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
+          # SLSA provenance (mode=max records the build inputs and steps) and
+          # an SPDX SBOM, pushed as attestation manifests in the image index.
+          provenance: mode=max
+          sbom: true
           build-args: |
-            GIT_TAG=${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-dev' }}
-            GIT_COMMIT=${{ github.sha }}
+            GIT_TAG=${{ needs.resolve.outputs.tag || 'v0.0.0-dev' }}
+            GIT_COMMIT=${{ steps.commit.outputs.sha }}
             VERSION=${{ steps.meta.outputs.version }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Keyless: the signing certificate is issued to this workflow's GitHub
+      # OIDC identity and the signature is logged in Rekor. Signing the index
+      # digest covers every tag pushed above. See RELEASING.md to verify.
+      - name: Sign image (cosign keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
   binaries:
     name: goreleaser (cli binaries)
+    needs: resolve
     runs-on: ubuntu-latest
     # GoReleaser creates the GitHub Release, uploads assets, pushes a cask
     # branch, and opens a PR for the in-repo Homebrew tap.
     permissions:
       contents: write
       pull-requests: write
+      id-token: write   # cosign keyless signing of checksums.txt (.goreleaser.yaml signs)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
+          ref: ${{ needs.resolve.outputs.ref }}
           fetch-depth: 0   # GoReleaser needs full history + tags
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Resolve built commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       # Tag push (vX.Y.Z / vX.Y.Z-rc.N): publish a GitHub Release with the lean
       # multi-arch CLI binaries + checksums. `prerelease: auto` marks rc tags.
       # On stable tags GoReleaser also opens a PR for the refreshed cask.
       - name: GoReleaser (release on tag push)
         if: github.event_name == 'push'
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -124,7 +184,7 @@ jobs:
       # snapshot — no GitHub Release, no cask upload (skip_upload: auto).
       - name: GoReleaser (snapshot on dispatch)
         if: github.event_name == 'workflow_dispatch'
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -134,11 +194,12 @@ jobs:
 
       - name: Upload snapshot binaries
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: tempogate-snapshot-${{ github.sha }}
+          name: tempogate-snapshot-${{ steps.commit.outputs.sha }}
           path: |
             dist/*.tar.gz
             dist/checksums.txt
+            dist/checksums.txt.sigstore.json
           if-no-files-found: error
           retention-days: 14
