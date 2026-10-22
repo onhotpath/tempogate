@@ -331,6 +331,7 @@ Every authorization response, success or error, carries `iss` ([RFC 9207](https:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `TEMPOGATE_ISSUER` | _(empty)_ | Read by `tempogate login` / `tempogate token` to find the server. Equivalent to the `--issuer` flag. Must be `https`, or plain `http` on a loopback host, unless `--insecure` is passed. Never read by `tempogate serve`. |
+| `TEMPOGATE_LOGIN_MODE` | _(empty)_ | Set to `device` to make `tempogate login` use the [device flow](cli-device-login.md), as `--device` does. An explicit `--device` or `--device=false` flag wins. Any other value is ignored. |
 
 ## Revocation and signing-key retirement
 

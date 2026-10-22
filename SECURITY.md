@@ -8,7 +8,13 @@
 
 **Do not open a public GitHub issue for security reports.**
 
-Use [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new) for private, coordinated disclosure. Include:
+Report privately through GitHub's private vulnerability reporting:
+
+1. Sign in to GitHub.
+2. Open <https://github.com/onhotpath/tempogate/security/advisories/new> (or the repository's **Security** tab, then **Report a vulnerability**).
+3. Fill in the form and submit it. Only you and the maintainers can see the report.
+
+Include:
 
 - A description of the issue and its impact.
 - Steps to reproduce, ideally a minimal proof-of-concept.
@@ -21,14 +27,15 @@ We aim to:
 - Provide an initial assessment within **7 business days**.
 - Coordinate a fix and a disclosure timeline with you.
 
-If you don't get a response, please escalate by opening a *non-sensitive* GitHub issue asking us to check the advisory inbox — without disclosing details.
+If the form is not available, or you don't get a response, open a *non-sensitive* GitHub issue asking the maintainers for a private reporting channel or to check the advisory inbox.
+Do not include any vulnerability details in that issue.
 
 ## Scope
 
 In scope:
 
 - The `tempogate` binary and its published container images.
-- The Helm chart and other artifacts under `examples/`.
+- The Helm chart under `charts/` and the artifacts under `examples/`.
 - CI/CD pipeline configurations in this repo.
 
 Out of scope:

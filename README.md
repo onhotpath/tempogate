@@ -53,6 +53,8 @@ One binary with subcommands `serve`, `login`, `token`, `keys`, `sessions`,
 `migrate`, `version`. State is pluggable; the default is SQLite on a PVC via the pure-Go
 `modernc.org/sqlite` driver, with embedded migrations applied by
 `tempogate migrate`.
+`tempogate gen-oas` prints the OpenAPI 3.1 spec of the public API (`--admin` for the admin API, `-f json` for JSON).
+`make gen-oas` writes both to `api/openapi.yaml` and `api/openapi.admin.yaml`; they are generated on demand and not committed.
 
 ## Status
 
@@ -153,21 +155,22 @@ Google account required (a bundled mock IdP stands in).
 ## Multi-tenancy
 
 Tempogate serializes a token's authorization as a flat `permissions` claim of
-`"<namespace>:<role>"` entries — the exact shape Temporal's default JWT
-`ClaimMapper` parses into `claims.Namespaces[ns] = role`. Two entries in the
-array for **different** namespaces accumulate independently, so a single token
-can grant `read` on one namespace and `admin` on another; two entries for the
-**same** namespace last-write-wins, mirroring the ClaimMapper's own behaviour.
+`"<namespace>:<role>"` entries, the shape Temporal's default JWT `ClaimMapper` parses into a per-namespace role bitmask.
+Two entries for **different** namespaces accumulate independently, so a single token can grant `read` on one namespace and `admin` on another.
+Two entries for the **same** namespace are ORed together by the ClaimMapper, not overridden ([`default_jwt_claim_mapper.go`](https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_jwt_claim_mapper.go#L102-L127) in Temporal v1.25.2), so `ns:admin` plus `ns:read` authorizes admin.
+Tempogate itself never emits duplicates: `perms.Grant` keeps one role per namespace.
 
-The four canonical Temporal roles — `read`, `write`, `worker`, `admin` —
-are honoured verbatim. Cluster-wide access is expressed by granting a role on
+The four canonical Temporal roles (`read`, `write`, `worker`, `admin`) are passed through verbatim.
+`worker` on its own authorizes nothing: in Temporal's role bitmask it sits below `read`, and the default authorizer requires at least `read` for every API except health checks (task-queue polling is a write API).
+Grant `write` to a namespace's workers.
+Cluster-wide access is expressed by granting a role on
 the `temporal-system` namespace (the only construct the default ClaimMapper
 recognises for "every namespace"); the literal `*` is rejected as a real
 namespace name by the same authorizer, so the `perms.AddWildcard` Go-API
 sugar is internally rewritten to `temporal-system:<role>` before serialization.
-The model lives in the [`perms`](perms/perms.go) package; both the OIDC
-`/token` flow and the `/admin/keys` admin API funnel through `perms.Grant`
-so the wire shape stays uniform regardless of which path minted the token.
+The model lives in the [`perms`](perms/perms.go) package.
+The `/admin/keys` admin API builds its claim through `perms.Grant`.
+The OIDC `/token` flow does not use `perms.Grant` yet: it stamps the literal `temporal-system:admin` (see [flat authorization](#status)), which has the same wire shape.
 
 A token issued for `tenant-a` cannot perform any action on `tenant-b`. That
 boundary is enforced at the Temporal frontend by the default authorizer — not
@@ -344,6 +347,9 @@ See [docs/configuration.md](docs/configuration.md).
 | `OIDC_REFRESH_MAX_LIFETIME` | No | `720h` (30 days) | Absolute session lifetime from sign-in; rotation never extends it. See [Sessions and refresh tokens](#sessions-and-refresh-tokens) |
 | `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
 | `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
+| `OIDC_SESSION_SIGNING_KEY` | Yes | _(empty)_ | Base64url 32-byte HMAC key for the device-flow session cookie and SSO `state`; `serve` refuses to boot without it |
+| `OIDC_SESSION_TTL` | No | `5m` | Lifetime of the device-flow verification-page session cookie |
+| `OIDC_GOOGLE_AUTH_ENDPOINT`, `OIDC_GOOGLE_TOKEN_ENDPOINT`, `OIDC_GOOGLE_ISSUER_URL` | No | Google's | Upstream endpoint overrides, for a mock IdP only |
 | `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
 | `HTTP_LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
 | `ADMIN_LISTENER` | No | `127.0.0.1:8081` | `host:port` for the separate admin listener (`/admin/*`, Prometheus `/metrics`); never expose it publicly |
@@ -353,9 +359,14 @@ See [docs/configuration.md](docs/configuration.md).
 | `SERVER_READ_TIMEOUT`, `SERVER_WRITE_TIMEOUT`, `SERVER_IDLE_TIMEOUT`, `SERVER_MAX_HEADER_BYTES`, `SERVER_SHUTDOWN_TIMEOUT` | No | `15s`, `30s`, `60s`, `16384`, `15s` | HTTP server hardening for both listeners; see [docs/configuration.md](docs/configuration.md#http-server-hardening) |
 | `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
 | `KEYS_ENCRYPTION_KEY` / `KEYS_ENCRYPTION_KEY_FILE` | No | _(empty)_ | Base64 32-byte key (or a file holding it) that encrypts the stored signing key. See [Signing-key encryption](docs/configuration.md#signing-key-encryption) |
+| `STATE_SQLITE_MAX_CONNS` | No | `1` | SQLite connection pool size; do not raise (one writer) |
+| `STATE_SQLITE_BUSY_TIMEOUT` | No | `5s` | How long a query waits on a locked database |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
 | `LOG_REQUESTS` | No | `true` | One access-log line per HTTP request (no query strings, headers or bodies) |
 | `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
+| `TEMPOGATE_LOGIN_MODE` | No | _(empty)_ | **Client-side**. `device` makes `tempogate login` use the device flow, as `--device` does; an explicit `--device` or `--device=false` wins |
+
+[docs/configuration.md](docs/configuration.md) describes every setting in detail.
 
 ## Sub-path hosting
 

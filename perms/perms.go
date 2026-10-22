@@ -20,8 +20,8 @@
 // `temporal-system:<role>` is bitwise-ORed into claims.System, and the
 // default authorizer evaluates every namespace-scoped call as
 // `hasRole = claims.System | claims.Namespaces[target]`. So a system role at
-// any of the four canonical levels — read, write, worker, admin — applies
-// across every namespace at that level.
+// read, write or admin applies across every namespace at that level (worker
+// alone authorizes nothing; see Role).
 //
 // Two equivalent options encode that mechanism: WithSystemRole(role) names
 // it after the Temporal concept ("grant on the system namespace") and
@@ -33,14 +33,20 @@
 // reaches Temporal, because Temporal would treat `*` as a literal
 // namespace name and deny every real-namespace call.
 //
-// # Last-write-wins
+// # One role per namespace (last write wins inside Grant)
 //
-// The default ClaimMapper keeps only the last permissions entry for a given
-// namespace prefix (multiple entries for the same namespace are overridden).
-// Grant mirrors that: the internal store is a map keyed by namespace, so
-// adding the same namespace twice with different roles keeps only the most
-// recent option. The behaviour is exposed deliberately so callers can layer
-// a default and then override per-namespace without filtering by hand.
+// Grant's internal store is a map keyed by namespace, so adding the same
+// namespace twice with different roles keeps only the most recent option.
+// The behaviour is exposed deliberately so callers can layer a default and
+// then override per-namespace without filtering by hand, and it means
+// ToClaim never emits two entries for one namespace.
+//
+// This is Grant's own rule, not Temporal's. The default ClaimMapper ORs
+// every entry for a namespace into one role bitmask
+// (`role |= permissionToRole(...)` in extractPermissions, see
+// https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_jwt_claim_mapper.go#L102-L127),
+// so a foreign claim carrying `ns:admin` and `ns:read` authorizes admin at
+// the frontend even though ParseClaim keeps only `ns:read`.
 package perms
 
 import (
@@ -55,6 +61,11 @@ import (
 // silently reshape authz for every token already in circulation, because
 // they are concatenated into the `<namespace>:<role>` entries the default
 // ClaimMapper parses.
+//
+// RoleWorker on its own authorizes no API: Temporal's worker bit is below
+// the reader bit, and the default authorizer needs at least reader for
+// every non-health-check call (task-queue polling is a write API). Workers
+// need RoleWrite.
 type Role string
 
 const (
@@ -134,9 +145,8 @@ func New(opts ...Option) *Grant {
 }
 
 // AddNamespace grants role on the given namespace. Calling AddNamespace
-// twice for the same namespace applies last-write-wins, mirroring the
-// default ClaimMapper's behaviour where duplicate entries for one
-// namespace collapse to the final one.
+// twice for the same namespace keeps only the last role (see the package
+// doc: Temporal would OR duplicate entries, Grant never emits them).
 func AddNamespace(namespace string, role Role) Option {
 	return func(g *Grant) { g.perms[namespace] = role }
 }
@@ -192,7 +202,8 @@ func (g *Grant) ToClaim() []string {
 // canonical representation). Each entry must be exactly
 // `<namespace>:<role>`; the split happens on the LAST colon so a namespace
 // name that itself contains `:` round-trips correctly. Duplicate
-// namespaces apply last-write-wins, same as the constructor options.
+// namespaces keep the last role, same as the constructor options; this
+// differs from Temporal's ClaimMapper, which ORs them.
 func ParseClaim(claim []string) (*Grant, error) {
 	g := New()
 	for i, entry := range claim {
