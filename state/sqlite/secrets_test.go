@@ -159,6 +159,29 @@ func (s *StoreSuite) TestNotFoundErrorsOmitTheSecret() {
 	err = s.store.SaveDeviceCode(s.ctx, s.deviceCode("dup-dc", "LMNPQRST"))
 	s.Require().ErrorIs(err, ErrDuplicateDeviceCode)
 	s.NotContains(err.Error(), "dup-dc")
+
+	_, err = s.store.ConsumeRefresh(s.ctx, "rt-in-error", "c", time.Now())
+	s.Require().Error(err)
+	s.NotContains(err.Error(), "rt-in-error")
+	_, err = s.store.LookupDeviceCodeByUserCode(s.ctx, "UC-IN-ERROR")
+	s.Require().Error(err)
+	s.NotContains(err.Error(), "UC-IN-ERROR")
+	_, err = s.store.ConsumeAuthRequest(s.ctx, "state-in-error")
+	s.Require().ErrorIs(err, oidc.ErrAuthRequestNotFound)
+	s.NotContains(err.Error(), "state-in-error")
+	now := time.Now().UTC()
+	ar := oidc.AuthRequest{InternalState: "dup-state", ClientID: "c", RedirectURI: "https://x/cb", CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+	s.Require().NoError(s.store.SaveAuthRequest(s.ctx, ar))
+	err = s.store.SaveAuthRequest(s.ctx, ar)
+	s.Require().ErrorIs(err, ErrDuplicateInternalState)
+	s.NotContains(err.Error(), "dup-state")
+
+	// A second decision on a known, unexpired code is refused without
+	// echoing the user code.
+	s.Require().NoError(s.store.DenyDeviceCode(s.ctx, "BCDFGHJK", now))
+	err = s.store.ApproveDeviceCode(s.ctx, "BCDFGHJK", oidc.Identity{Subject: "sub", Email: "a@example.com"}, now)
+	s.Require().ErrorIs(err, ErrDeviceCodeNotPending)
+	s.NotContains(err.Error(), "BCDFGHJK")
 }
 
 // migrateTo applies the embedded migrations up to and including version,

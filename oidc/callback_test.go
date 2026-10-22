@@ -19,7 +19,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/api/requestid"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
@@ -437,6 +442,38 @@ func (s *CallbackSuite) TestUpstreamFailureIsBadGateway() {
 	s.Equal(http.StatusBadGateway, resp.StatusCode)
 	s.Equal("upstream_error", s.decodeOAuthError(resp))
 	s.Zero(s.store.codeCount())
+}
+
+// TestUpstreamFailureKeepsOAuthShapeBehindSanitizer serves the callback
+// through the real API surface: its 502 upstream_error is written for the
+// client, so the 5xx sanitizer keeps the OAuth body (no upstream detail in
+// it) and still logs the failure under the response's request id.
+func (s *CallbackSuite) TestUpstreamFailureKeepsOAuthShapeBehindSanitizer() {
+	s.up.err = errors.New("dial tcp 10.9.8.7:443: connection refused")
+	s.store.put(s.pendingRequest(fixedState))
+	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains,
+		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
+		oidc.WithCallbackIssuer(testIssuer),
+		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(io.Discard, nil))),
+	)
+	core, apiLogs := observer.New(zapcore.DebugLevel)
+	srv := httptest.NewServer(api.New(api.NewReadiness(),
+		api.WithLogger(zap.New(core)),
+		api.WithRegistrar(c.Register),
+	).Public.Handler)
+	defer srv.Close()
+
+	q := callbackQuery("c", fixedState)
+	resp := s.getFrom(srv, q, s.binding.Cookie(q.Get("state")))
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	s.Require().NoError(err)
+
+	s.Equal(http.StatusBadGateway, resp.StatusCode)
+	s.JSONEq(`{"error":"upstream_error","error_description":"could not complete Google sign-in"}`, string(raw))
+	reqID := resp.Header.Get(requestid.Header)
+	s.Require().NotEmpty(reqID)
+	s.Len(apiLogs.FilterField(zap.String("request_id", reqID)).All(), 1)
 }
 
 func (s *CallbackSuite) TestGoogleErrorIsForwardedToClient() {

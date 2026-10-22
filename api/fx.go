@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/fx"
+	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/keys"
 )
@@ -15,6 +16,9 @@ type serversParams struct {
 	OIDCIssuer   string `name:"oidc_issuer"`
 	OIDCBasePath string `name:"oidc_base_path"`
 	DocsEnabled  bool   `name:"api_docs_enabled"`
+	// Logger receives 5xx details; optional so api.Fx() builds in graphs
+	// without logging (package tests). The app always provides one.
+	Logger *zap.Logger `optional:"true"`
 
 	// Registrars are contributed by feature packages (e.g. oidc) into the
 	// shared group so they can append Huma operations without api importing
@@ -42,6 +46,9 @@ func newServers(p serversParams) *Servers {
 		WithBasePath(p.OIDCBasePath),
 		WithDocs(p.DocsEnabled),
 		WithWellKnown(p.Keys, p.OIDCIssuer),
+	}
+	if p.Logger != nil {
+		opts = append(opts, WithLogger(p.Logger.Named("http")))
 	}
 	for _, r := range p.Registrars {
 		opts = append(opts, WithRegistrar(r))

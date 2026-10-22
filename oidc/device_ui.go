@@ -22,6 +22,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/onhotpath/tempogate/api/requestid"
 	"github.com/onhotpath/tempogate/ratelimit"
 )
 
@@ -464,7 +465,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Summary:     "Device-flow verification: show the user_code entry form",
 		Tags:        []string{"oidc"},
 	}, func(ctx context.Context, in *deviceEnterGetInput) (*htmlOutput, error) {
-		return u.handleEnterGet(ctx, in)
+		return u.htmlOrServerError(ctx, "device-ui-enter")(u.handleEnterGet(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -476,7 +477,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Middlewares:   huma.Middlewares{withClientKey},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceEnterPostInput) (*deviceRedirectOrPage, error) {
-		return u.handleEnterPost(ctx, in)
+		return u.pageOrServerError(ctx, "device-ui-submit")(u.handleEnterPost(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -487,7 +488,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:          []string{"oidc"},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceSSOCallbackInput) (*deviceRedirectOrPage, error) {
-		return u.handleSSOCallback(ctx, in)
+		return u.pageOrServerError(ctx, "device-ui-sso-callback")(u.handleSSOCallback(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -498,7 +499,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceConfirmInput) (*deviceRedirectOrPage, error) {
-		return u.handleConfirm(ctx, in)
+		return u.pageOrServerError(ctx, "device-ui-confirm")(u.handleConfirm(ctx, in))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -509,7 +510,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
-		return u.handleDecision(ctx, in, true)
+		return u.htmlOrServerError(ctx, "device-ui-approve")(u.handleDecision(ctx, in, true))
 	})
 
 	huma.Register(api, huma.Operation{
@@ -520,7 +521,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Tags:        []string{"oidc"},
 		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
-		return u.handleDecision(ctx, in, false)
+		return u.htmlOrServerError(ctx, "device-ui-deny")(u.handleDecision(ctx, in, false))
 	})
 }
 
@@ -1056,6 +1057,44 @@ func (u *DeviceUI) errorHTMLPage(reason string) *htmlOutput {
 		body = []byte("device verification error")
 	}
 	return u.htmlPage(body)
+}
+
+// htmlOrServerError and pageOrServerError pass a handler's result through,
+// or turn its unexpected error into the 500 error page (see serverErrorHTML).
+// They are curried so a registration reads u.htmlOrServerError(ctx, op)(u.handle(...)).
+func (u *DeviceUI) htmlOrServerError(ctx context.Context, op string) func(*htmlOutput, error) (*htmlOutput, error) {
+	return func(out *htmlOutput, err error) (*htmlOutput, error) {
+		if err != nil {
+			return u.serverErrorHTML(ctx, op, err), nil
+		}
+		return out, nil
+	}
+}
+
+func (u *DeviceUI) pageOrServerError(ctx context.Context, op string) func(*deviceRedirectOrPage, error) (*deviceRedirectOrPage, error) {
+	return func(out *deviceRedirectOrPage, err error) (*deviceRedirectOrPage, error) {
+		if err != nil {
+			return u.redirectOrPage(u.serverErrorHTML(ctx, op, err)), nil
+		}
+		return out, nil
+	}
+}
+
+// serverErrorHTML turns an unexpected handler error into the HTML error page
+// at 500. Left to Huma, the error would reach the browser
+// as a JSON problem document, which the verification page cannot render. The
+// cause is logged under the request id the page shows, so a user's report
+// can be matched to the log line without the page exposing internals.
+func (u *DeviceUI) serverErrorHTML(ctx context.Context, op string, err error) *htmlOutput {
+	id := requestid.FromContext(ctx)
+	u.logger.ErrorContext(ctx, "device-ui request failed",
+		"op", op,
+		"request_id", id,
+		"err", err,
+	)
+	out := u.errorHTMLPage("Something went wrong on our side. Restart the sign-in from your device. (request id " + id + ")")
+	out.Status = http.StatusInternalServerError
+	return out
 }
 
 // requestFromCookieHeader builds the minimal http.Request a SessionManager

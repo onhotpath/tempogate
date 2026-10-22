@@ -149,6 +149,11 @@ Temporal never refetches JWKS on an unknown `kid`. See
 can serve under a prefix on a shared hostname while health probes stay at the
 root. See [docs/configuration.md](configuration.md#sub-path-hosting).
 
+**Server errors stay server-side.** Every response carries an `X-Request-Id` header.
+A 5xx body is generic (for example `internal server error (request id <id>)`) and never includes the underlying error; the device verification page shows the same id on its HTML error page.
+The real cause is logged at `error` level with a matching `request_id` field, so a user's report can be traced with `kubectl logs | grep <id>`.
+4xx bodies, including OAuth `error` / `error_description`, are unchanged, and so is the one deliberate OAuth-shaped 5xx: `502 upstream_error` from `/callback/google`, whose description is fixed text.
+
 ## See also
 
 - [docs/getting-started.md](getting-started.md) — the architecture running end
