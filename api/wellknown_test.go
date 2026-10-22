@@ -140,10 +140,9 @@ func (s *WellKnownSuite) TestOpenIDConfigurationIsFullyPopulated() {
 	s.Equal(s.issuer+"/device_authorization", doc.DeviceAuthorizationEndpoint)
 	s.Equal(s.issuer+"/.well-known/jwks.json", doc.JwksURI)
 	s.Equal([]string{"code"}, doc.ResponseTypesSupported)
-	// device_code grant is intentionally absent from grant_types_supported
-	// until /token grows the device_code branch — advertising before then
-	// would lie to RFC-conformant clients.
-	s.Equal([]string{"authorization_code", "refresh_token"}, doc.GrantTypesSupported)
+	// /token serves the RFC 8628 device_code grant, so discovery must say
+	// so or a conformant client never tries the device flow.
+	s.Equal([]string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"}, doc.GrantTypesSupported)
 	s.Equal([]string{"S256"}, doc.CodeChallengeMethodsSupported)
 	s.Equal([]string{"openid", "profile", "email"}, doc.ScopesSupported)
 	s.Equal([]string{"public"}, doc.SubjectTypesSupported)

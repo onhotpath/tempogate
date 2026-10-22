@@ -197,6 +197,26 @@ func newBrowserClient(t *testing.T, dialMap map[string]string) *http.Client {
 // issuer URL.
 func driveVerificationUI(ctx context.Context, t *testing.T, browser *http.Client, issuer, userCode, decision string) {
 	t.Helper()
+	csrf := openConfirmPage(t, browser, issuer, userCode)
+	req := decisionRequest(ctx, t, issuer, userCode, decision, csrf)
+	// net/http never sends Origin; a browser does on a form POST, and
+	// tempogate's CSRF defence requires it to match the issuer origin.
+	issuerURL := mustParseURL(t, issuer)
+	req.Header.Set("Origin", issuerURL.Scheme+"://"+issuerURL.Host)
+	resp, err := browser.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equalf(t, http.StatusOK, resp.StatusCode, "%s: %s", resp.Request.URL, body)
+}
+
+// openConfirmPage submits userCode on the verification page, approves at the
+// mock upstream consent page (unless the browser already has a session) and
+// returns the CSRF token of the
+// /device/confirm page the browser lands on.
+func openConfirmPage(t *testing.T, browser *http.Client, issuer, userCode string) string {
+	t.Helper()
 	page := func(resp *http.Response, err error) (string, string) {
 		t.Helper()
 		require.NoError(t, err)
@@ -208,6 +228,10 @@ func driveVerificationUI(ctx context.Context, t *testing.T, browser *http.Client
 	}
 
 	at, body := page(browser.PostForm(issuer+oidc.DevicePath, url.Values{"user_code": {userCode}}))
+	if csrf := csrfTokenPattern.FindStringSubmatch(body); csrf != nil {
+		// A browser that already holds a session skips the upstream bounce.
+		return csrf[1]
+	}
 	href := mockApproveHrefPattern.FindStringSubmatch(body)
 	require.NotEmptyf(t, href, "POST /device must land on the upstream consent page, got %s:\n%s", at, body)
 
@@ -217,16 +241,18 @@ func driveVerificationUI(ctx context.Context, t *testing.T, browser *http.Client
 		"after upstream consent the browser must reach %s%s; it landed on %s instead, which means the %s cookie set by %s%s was not sent back (cookies the jar would send to the confirm page: %v)",
 		issuer, oidc.DeviceConfirmPath, at, oidc.DefaultSessionCookieName, issuer, oidc.DeviceSSOCallbackPath,
 		browser.Jar.Cookies(mustParseURL(t, issuer+oidc.DeviceConfirmPath)))
+	return csrf[1]
+}
 
+// decisionRequest builds the approve/deny form POST the confirm page
+// submits, without Origin or Referer; callers set whichever they test.
+func decisionRequest(ctx context.Context, t *testing.T, issuer, userCode, decision, csrf string) *http.Request {
+	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+oidc.DevicePath+"/"+decision,
-		strings.NewReader(url.Values{"csrf_token": {csrf[1]}, "user_code": {userCode}}.Encode()))
+		strings.NewReader(url.Values{"csrf_token": {csrf}, "user_code": {userCode}}.Encode()))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	// net/http never sends Origin; a browser does on a form POST, and
-	// tempogate's CSRF defence requires it to match the issuer origin.
-	issuerURL := mustParseURL(t, issuer)
-	req.Header.Set("Origin", issuerURL.Scheme+"://"+issuerURL.Host)
-	page(browser.Do(req))
+	return req
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

@@ -3,9 +3,7 @@ package oidc
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
@@ -21,6 +19,8 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/onhotpath/tempogate/ratelimit"
 )
 
 const (
@@ -32,8 +32,9 @@ const (
 
 	// DeviceSSOCallbackPath is the loopback redirect_uri the internal
 	// tempogate-device-ui client registers under. It must match the value
-	// operators configure for that client in OIDC_CLIENTS; the registrar's
-	// graph-time validation rejects a deployment where they have drifted.
+	// operators configure for that client in OIDC_CLIENTS; NewDeviceUI
+	// rejects a registry where <issuer>+DeviceSSOCallbackPath is not an
+	// allowed redirect URI, so a drifted deployment fails at startup.
 	DeviceSSOCallbackPath = DevicePath + "/sso-callback"
 
 	// DeviceConfirmPath renders the approve/deny prompt after the session
@@ -70,7 +71,30 @@ const (
 	// build a dashboard panel on it without re-deriving the string from
 	// log content.
 	logOpSSOCallback = "device.sso_callback"
+
+	// User-code attempt budgets (RFC 8628 §5.1). A user_code has ~36.6 bits
+	// of entropy and lives for minutes, so a handful of attempts per minute
+	// leaves brute force hopeless while a typo or two never trips them. Only
+	// failed lookups spend the budget, so a NAT full of honest users is not
+	// throttled by its own successful sign-ins.
+	defaultUserCodeAttemptsPerSession = 5
+	defaultUserCodeAttemptsPerIP      = 20
+	userCodeAttemptWindow             = time.Minute
+
+	// msgUnusableUserCode is the single answer for a code that is unknown,
+	// expired or already decided. Distinct messages would tell a guesser
+	// which codes are real.
+	msgUnusableUserCode = "That code is not valid. Check the code on your device and try again, or restart the sign-in from your device."
+
+	// msgTooManyAttempts is the answer once a client or session has spent
+	// its user-code attempt budget, whatever the code it submitted.
+	msgTooManyAttempts = "Too many attempts. Wait a minute, then try again."
 )
+
+// clientKeyCtxKey carries the requesting client's rate-limit key from the
+// per-operation middleware into the typed handlers, which only see a
+// context.Context.
+type clientKeyCtxKey struct{}
 
 //go:embed templates/*.html
 var deviceUITemplatesFS embed.FS
@@ -106,6 +130,12 @@ var ErrInternalDeviceUIClientNotConfidential = errors.New("oidc: internal device
 // upstream IdP shares the issuer's origin.
 var ErrInvalidUpstreamIDPOrigin = errors.New("oidc: upstream IdP authorization endpoint must be an absolute URL with scheme and host")
 
+// ErrInternalDeviceUIClientRedirectMismatch is returned by NewDeviceUI when
+// the internal client is not registered for <issuer>/device/sso-callback.
+// /authorize would reject every verification bounce with that mismatch, so
+// it is caught at construction instead of on the first user form-submit.
+var ErrInternalDeviceUIClientRedirectMismatch = errors.New("oidc: internal device-ui client must be registered in OIDC_CLIENTS with redirect URI <issuer>" + DeviceSSOCallbackPath)
+
 // ErrNilAuthCodeRedeemer is returned by NewDeviceUI when no redeemer is
 // passed. The SSO callback cannot complete without one, and a nil seam
 // would surface only at the first user form-submit; fail at construction
@@ -137,11 +167,18 @@ type DeviceUI struct {
 	redeemer             AuthCodeRedeemer
 	signingKey           []byte
 	issuer               string
+	issuerURL            *url.URL
 	internalClientID     string
 	internalClientSecret string
 	now                  func() time.Time
 	newStateNonce        func() (string, error)
 	pages                map[string]*template.Template
+
+	// ipAttempts and sessionAttempts throttle user_code guessing per client
+	// IP and per verification session. In-process: each replica keeps its
+	// own budget, which still bounds a guesser to a small multiple of it.
+	ipAttempts      *ratelimit.Limiter
+	sessionAttempts *ratelimit.Limiter
 
 	// rawUpstreamIDPAuthEndpoint is captured by WithUpstreamIDPOrigin and
 	// parsed once in NewDeviceUI; the result lives in upstreamFormActionSource.
@@ -194,6 +231,16 @@ func WithDeviceUIStateNonceGenerator(fn func() (string, error)) DeviceUIOption {
 // quiet without forcing every caller to know about the logger.
 func WithDeviceUILogger(l *slog.Logger) DeviceUIOption {
 	return func(u *DeviceUI) { u.logger = l }
+}
+
+// WithUserCodeRateLimiters swaps the per-client-IP and per-session limiters
+// that throttle user_code attempts. For tests; production keeps 20 failed
+// attempts per minute per IP and 5 per session.
+func WithUserCodeRateLimiters(perIP, perSession *ratelimit.Limiter) DeviceUIOption {
+	return func(u *DeviceUI) {
+		u.ipAttempts = perIP
+		u.sessionAttempts = perSession
+	}
 }
 
 // WithUpstreamIDPOrigin lets the device_enter page emit a CSP form-action
@@ -254,6 +301,8 @@ func NewDeviceUI(
 		internalClientID: DefaultInternalDeviceUIClientID,
 		now:              func() time.Time { return time.Now().UTC() },
 		newStateNonce:    randomDeviceStateNonce,
+		ipAttempts:       ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerIP, userCodeAttemptWindow)),
+		sessionAttempts:  ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerSession, userCodeAttemptWindow)),
 	}
 	for _, o := range opts {
 		o(u)
@@ -270,6 +319,15 @@ func NewDeviceUI(
 		return nil, fmt.Errorf("%w: %s", ErrInternalDeviceUIClientNotConfidential, u.internalClientID)
 	}
 	u.internalClientSecret = client.Secret
+
+	iss, err := url.Parse(u.issuer)
+	if err != nil || iss.Scheme == "" || iss.Host == "" {
+		return nil, fmt.Errorf("%w: issuer %q is not an absolute URL", ErrInternalDeviceUIClientRedirectMismatch, u.issuer)
+	}
+	u.issuerURL = iss
+	if err := clients.Validate(u.internalClientID, u.issuer+DeviceSSOCallbackPath); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInternalDeviceUIClientRedirectMismatch, err)
+	}
 
 	if u.rawUpstreamIDPAuthEndpoint != "" {
 		source, err := upstreamFormActionSource(u.rawUpstreamIDPAuthEndpoint)
@@ -354,6 +412,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Path:          DevicePath,
 		Summary:       "Device-flow verification: accept the user_code and bounce through SSO if no session",
 		Tags:          []string{"oidc"},
+		Middlewares:   huma.Middlewares{withClientKey},
 		DefaultStatus: http.StatusSeeOther,
 	}, func(ctx context.Context, in *deviceEnterPostInput) (*deviceRedirectOrPage, error) {
 		return u.handleEnterPost(ctx, in)
@@ -376,6 +435,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Path:        DeviceConfirmPath,
 		Summary:     "Device-flow verification: render the approve/deny prompt",
 		Tags:        []string{"oidc"},
+		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceConfirmInput) (*deviceRedirectOrPage, error) {
 		return u.handleConfirm(ctx, in)
 	})
@@ -386,6 +446,7 @@ func (u *DeviceUI) Register(api huma.API) {
 		Path:        DeviceApprovePath,
 		Summary:     "Device-flow verification: approve the pending device authorization",
 		Tags:        []string{"oidc"},
+		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
 		return u.handleDecision(ctx, in, true)
 	})
@@ -396,15 +457,18 @@ func (u *DeviceUI) Register(api huma.API) {
 		Path:        DeviceDenyPath,
 		Summary:     "Device-flow verification: deny the pending device authorization",
 		Tags:        []string{"oidc"},
+		Middlewares: huma.Middlewares{withClientKey},
 	}, func(ctx context.Context, in *deviceDecisionInput) (*htmlOutput, error) {
 		return u.handleDecision(ctx, in, false)
 	})
 }
 
 // htmlOutput is the shared response shape for any device-ui page that just
-// renders HTML at 200. Cache-Control: no-store keeps the user_code and email
+// renders HTML. Status must be set (huma writes it verbatim); htmlPage
+// defaults it to 200. Cache-Control: no-store keeps the user_code and email
 // off intermediary caches.
 type htmlOutput struct {
+	Status       int
 	ContentType  string `header:"Content-Type"`
 	CacheControl string `header:"Cache-Control"`
 	Body         []byte
@@ -480,28 +544,34 @@ func (u *DeviceUI) handleEnterPost(ctx context.Context, in *deviceEnterPostInput
 		return u.errorPage("Enter the code shown on your device."), nil
 	}
 
-	dc, err := u.devices.LookupDeviceCodeByUserCode(ctx, canonical)
-	if errors.Is(err, ErrDeviceCodeNotFound) {
-		return u.errorPage("That code is not active. Check the code on your device and try again."), nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("oidc: lookup user_code: %w", err)
-	}
-	if u.now().After(dc.ExpiresAt) {
-		return u.errorPage("That code has expired. Restart the sign-in from your device."), nil
-	}
-	if dc.ApprovedAt != nil || dc.DeniedAt != nil {
-		return u.errorPage("That code has already been used. Restart the sign-in from your device."), nil
+	// The session (if any) is resolved before the lookup so its attempt
+	// budget applies to signed-in guessers too.
+	var sid string
+	bs, err := u.sessions.Get(ctx, requestFromCookieHeader(in.Cookie))
+	switch {
+	case err == nil:
+		sid = bs.SID
+	case !errors.Is(err, ErrNoSession):
+		return nil, fmt.Errorf("oidc: device-ui session lookup: %w", err)
 	}
 
-	req := requestFromCookieHeader(in.Cookie)
-	if _, err := u.sessions.Get(ctx, req); err == nil {
+	if !u.spendUserCodeAttempt(ctx, sid) {
+		return u.tooManyAttemptsPage(), nil
+	}
+	usable, err := u.userCodeUsable(ctx, canonical)
+	if err != nil {
+		return nil, err
+	}
+	if !usable {
+		return u.errorPage(msgUnusableUserCode), nil
+	}
+	u.refundUserCodeAttempt(ctx, sid)
+
+	if sid != "" {
 		return &deviceRedirectOrPage{
 			Status:   http.StatusSeeOther,
 			Location: u.confirmRedirect(canonical),
 		}, nil
-	} else if !errors.Is(err, ErrNoSession) {
-		return nil, fmt.Errorf("oidc: device-ui session lookup: %w", err)
 	}
 
 	state, err := u.signBounceState(canonical)
@@ -606,19 +676,17 @@ func (u *DeviceUI) handleConfirm(ctx context.Context, in *deviceConfirmInput) (*
 		return nil, fmt.Errorf("oidc: device-ui confirm session lookup: %w", err)
 	}
 
-	dc, err := u.devices.LookupDeviceCodeByUserCode(ctx, canonical)
-	if errors.Is(err, ErrDeviceCodeNotFound) {
-		return u.errorPage("That code is not active. Restart the sign-in from your device."), nil
+	if !u.spendUserCodeAttempt(ctx, bs.SID) {
+		return u.tooManyAttemptsPage(), nil
 	}
+	usable, err := u.userCodeUsable(ctx, canonical)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: device-ui confirm lookup: %w", err)
+		return nil, err
 	}
-	if u.now().After(dc.ExpiresAt) {
-		return u.errorPage("That code has expired. Restart the sign-in from your device."), nil
+	if !usable {
+		return u.errorPage(msgUnusableUserCode), nil
 	}
-	if dc.ApprovedAt != nil || dc.DeniedAt != nil {
-		return u.errorPage("That code has already been used. Restart the sign-in from your device."), nil
-	}
+	u.refundUserCodeAttempt(ctx, bs.SID)
 
 	body, err := u.render("confirm", map[string]any{
 		"DisplayUserCode": formatUserCode(canonical),
@@ -671,21 +739,24 @@ func (u *DeviceUI) handleDecision(ctx context.Context, in *deviceDecisionInput, 
 		return u.errorHTMLPage("That submission was missing the device code. Restart the sign-in from your device."), nil
 	}
 
+	if !u.spendUserCodeAttempt(ctx, bs.SID) {
+		out := u.errorHTMLPage(msgTooManyAttempts)
+		out.Status = http.StatusTooManyRequests
+		return out, nil
+	}
 	now := u.now()
 	if approve {
 		err = u.devices.ApproveDeviceCode(ctx, canonical, bs.Email, now)
 	} else {
 		err = u.devices.DenyDeviceCode(ctx, canonical, now)
 	}
-	if errors.Is(err, ErrDeviceCodeNotPending) {
-		return u.errorHTMLPage("That code has already been used. Restart the sign-in from your device."), nil
-	}
-	if errors.Is(err, ErrDeviceCodeNotFound) {
-		return u.errorHTMLPage("That code is not active. Restart the sign-in from your device."), nil
+	if errors.Is(err, ErrDeviceCodeNotPending) || errors.Is(err, ErrDeviceCodeNotFound) {
+		return u.errorHTMLPage(msgUnusableUserCode), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("oidc: device-ui decision flip: %w", err)
 	}
+	u.refundUserCodeAttempt(ctx, bs.SID)
 
 	page := "approved"
 	if !approve {
@@ -737,10 +808,8 @@ func (u *DeviceUI) signBounceState(canonicalUserCode string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	mac := hmac.New(sha256.New, u.signingKey)
-	mac.Write(raw)
 	return base64.RawURLEncoding.EncodeToString(raw) + "." +
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+		base64.RawURLEncoding.EncodeToString(labeledMAC(u.signingKey, macLabelDeviceBounceState, raw)), nil
 }
 
 func (u *DeviceUI) verifyBounceState(signed string) (string, error) {
@@ -756,9 +825,7 @@ func (u *DeviceUI) verifyBounceState(signed string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	want := hmac.New(sha256.New, u.signingKey)
-	want.Write(raw)
-	if subtle.ConstantTimeCompare(gotMAC, want.Sum(nil)) != 1 {
+	if subtle.ConstantTimeCompare(gotMAC, labeledMAC(u.signingKey, macLabelDeviceBounceState, raw)) != 1 {
 		return "", errors.New("bad state mac")
 	}
 	var payload deviceBounceState
@@ -782,26 +849,98 @@ type deviceBounceState struct {
 
 // originAllowed enforces the same-origin rule for Approve / Deny POSTs:
 // Origin, if present, must equal the issuer's scheme+host; otherwise the
-// Referer must start with the issuer. Either of those is sufficient — a
-// modern browser always sends one of the two on a same-origin POST, so the
-// pair forms a defence-in-depth check on top of SameSite=Lax.
+// Referer must be a URL on the issuer's scheme and host whose path sits
+// under the issuer's path. Either of those is sufficient: a modern browser
+// always sends one of the two on a same-origin POST, so the pair forms a
+// defence-in-depth check on top of SameSite=Lax.
 func (u *DeviceUI) originAllowed(origin, referer string) bool {
-	expected, ok := originPrefix(u.issuer)
-	if !ok {
-		return false
-	}
 	if origin != "" {
-		return origin == expected
+		return origin == u.issuerURL.Scheme+"://"+u.issuerURL.Host
 	}
-	return referer != "" && strings.HasPrefix(referer, expected)
+	return u.refererAllowed(referer)
 }
 
-func originPrefix(issuer string) (string, bool) {
-	parsed, err := url.Parse(issuer)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", false
+// refererAllowed parses the Referer rather than prefix-matching the raw
+// string, which would accept https://issuer.example.com.evil.com/ or
+// https://issuer.example.com@evil.com/. The path must equal the issuer's
+// path or continue it after a "/", so a sibling app at /idpevil does not
+// pass for an issuer at /idp.
+func (u *DeviceUI) refererAllowed(referer string) bool {
+	ref, err := url.Parse(referer)
+	if err != nil || ref.User != nil {
+		return false
 	}
-	return parsed.Scheme + "://" + parsed.Host, true
+	iss := u.issuerURL
+	if !strings.EqualFold(ref.Scheme, iss.Scheme) || !strings.EqualFold(ref.Host, iss.Host) {
+		return false
+	}
+	base := strings.TrimRight(iss.EscapedPath(), "/")
+	p := ref.EscapedPath()
+	return base == "" || p == base || strings.HasPrefix(p, base+"/")
+}
+
+// withClientKey stashes the requesting client's rate-limit key in the
+// context. It is the TCP peer address: X-Forwarded-For is client-controlled
+// unless a trusted proxy rewrites it, and tempogate has no notion of one, so
+// behind a reverse proxy every client shares the proxy's key and only the
+// per-session budget tells them apart.
+func withClientKey(ctx huma.Context, next func(huma.Context)) {
+	next(huma.WithValue(ctx, clientKeyCtxKey{}, ratelimit.ClientKey(ctx.RemoteAddr())))
+}
+
+func clientKeyFrom(ctx context.Context) string {
+	k, _ := ctx.Value(clientKeyCtxKey{}).(string)
+	return k
+}
+
+// spendUserCodeAttempt takes one attempt from the client IP's budget and,
+// when sid is non-empty, from the session's. It reports false once either is
+// exhausted; the caller must then answer without looking the code up, so a
+// throttled guesser learns nothing even about a live code. A token is spent
+// up front and handed back by refundUserCodeAttempt on success, so parallel
+// guesses cannot all slip past the check before any failure is recorded.
+func (u *DeviceUI) spendUserCodeAttempt(ctx context.Context, sid string) bool {
+	ip := clientKeyFrom(ctx)
+	if !u.ipAttempts.Allow(ip) {
+		return false
+	}
+	if sid != "" && !u.sessionAttempts.Allow(sid) {
+		u.ipAttempts.Refund(ip)
+		return false
+	}
+	return true
+}
+
+// refundUserCodeAttempt returns the attempt spent on a code that turned out
+// usable: only failed lookups count against the budget.
+func (u *DeviceUI) refundUserCodeAttempt(ctx context.Context, sid string) {
+	u.ipAttempts.Refund(clientKeyFrom(ctx))
+	if sid != "" {
+		u.sessionAttempts.Refund(sid)
+	}
+}
+
+// userCodeUsable reports whether canonical names a pending, unexpired
+// device code. Unknown, expired and decided codes all report false so the
+// caller answers them with the same msgUnusableUserCode.
+func (u *DeviceUI) userCodeUsable(ctx context.Context, canonical string) (bool, error) {
+	dc, err := u.devices.LookupDeviceCodeByUserCode(ctx, canonical)
+	if errors.Is(err, ErrDeviceCodeNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("oidc: lookup user_code: %w", err)
+	}
+	if u.now().After(dc.ExpiresAt) || dc.ApprovedAt != nil || dc.DeniedAt != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (u *DeviceUI) tooManyAttemptsPage() *deviceRedirectOrPage {
+	page := u.errorPage(msgTooManyAttempts)
+	page.Status = http.StatusTooManyRequests
+	return page
 }
 
 func (u *DeviceUI) confirmRedirect(canonical string) string {
@@ -815,16 +954,12 @@ func (u *DeviceUI) confirmRedirect(canonical string) string {
 // actions and Location headers resolve to the exact mount the live routes
 // listen on.
 func (u *DeviceUI) publicPath(p string) string {
-	parsed, err := url.Parse(u.issuer)
-	if err != nil {
-		return p
-	}
-	prefix := strings.TrimRight(parsed.Path, "/")
-	return prefix + p
+	return strings.TrimRight(u.issuerURL.Path, "/") + p
 }
 
 func (u *DeviceUI) htmlPage(body []byte) *htmlOutput {
 	return &htmlOutput{
+		Status:       http.StatusOK,
 		ContentType:  "text/html; charset=utf-8",
 		CacheControl: "no-store",
 		Body:         body,

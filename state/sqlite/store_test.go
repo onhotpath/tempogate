@@ -466,8 +466,9 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			_, err := s.store.LookupDeviceCodeByUserCode(s.ctx, "CLOSEDUC")
 			return err
 		}},
-		{"TouchDeviceCodePoll", func() error {
-			return s.store.TouchDeviceCodePoll(s.ctx, "closed", time.Now().UTC(), false)
+		{"PollDeviceCode", func() error {
+			_, err := s.store.PollDeviceCode(s.ctx, "closed", time.Now().UTC())
+			return err
 		}},
 		{"ApproveDeviceCode", func() error {
 			return s.store.ApproveDeviceCode(s.ctx, "CLOSEDUC", "alice@example.com", time.Now().UTC())

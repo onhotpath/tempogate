@@ -91,19 +91,21 @@ type DeviceCodeStore interface {
 	// rows.
 	LookupDeviceCodeByUserCode(ctx context.Context, userCode string) (DeviceCode, error)
 
-	// TouchDeviceCodePoll records the latest poll timestamp and, when
-	// bumpInterval is true, raises the server-tracked minimum-poll-interval
-	// by the RFC 8628 §3.5 increment (+5 seconds). The /token handler calls
-	// this on every device-code poll; well-behaved clients never pay the
-	// penalty.
-	TouchDeviceCodePoll(ctx context.Context, deviceCode string, now time.Time, bumpInterval bool) error
+	// PollDeviceCode records a /token poll and reports whether it arrived
+	// inside the stored minimum interval since the previous one (RFC 8628
+	// §3.5 slow_down), in which case the interval is also raised by 5
+	// seconds. It must be atomic: of several concurrent polls inside one
+	// interval at most one may report false. Returns ErrDeviceCodeNotFound
+	// for an unknown device_code.
+	PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (slowDown bool, err error)
 
 	// ApproveDeviceCode atomically stamps the row as approved by email only
-	// when it is still pending. Zero rows affected ⇒ ErrDeviceCodeNotPending.
+	// when it is still pending and not expired at now; otherwise
+	// ErrDeviceCodeNotPending.
 	ApproveDeviceCode(ctx context.Context, userCode, email string, now time.Time) error
 
 	// DenyDeviceCode atomically stamps the row as denied only when it is
-	// still pending. Zero rows affected ⇒ ErrDeviceCodeNotPending.
+	// still pending and not expired at now; otherwise ErrDeviceCodeNotPending.
 	DenyDeviceCode(ctx context.Context, userCode string, now time.Time) error
 
 	// ConsumeDeviceCode atomically deletes and returns the row, mirroring

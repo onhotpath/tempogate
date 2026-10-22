@@ -211,7 +211,9 @@ func (s *FxSuite) TestPrefixShapedClientsFailGraph() {
 // reaches the registry parser: a plain-http, non-loopback registration fails
 // the graph by default and builds once the dev-only flag is set.
 func (s *FxSuite) TestInsecureRedirectURIsNeedTheFlag() {
-	const clients = "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-device-ui:http://tempogate:8000/device/sso-callback"
+	// The device-ui callback must match the issuer (NewDeviceUI checks), so
+	// only the Temporal UI registration is the insecure one under test.
+	const clients = "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-device-ui:" + testIssuer + "/device/sso-callback"
 	secrets := "tempogate-device-ui:" + deviceUIInternalSecret
 
 	strict := fx.New(
