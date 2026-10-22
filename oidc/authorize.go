@@ -22,19 +22,14 @@ const (
 	// two from drifting.
 	AuthorizePath = "/authorize"
 
-	// CallbackPath is exported so the oidc/google provider can build a
-	// redirect_uri that exactly matches the one /authorize sends to Google;
-	// a mismatch makes Google reject the code exchange.
-	CallbackPath = "/callback/google"
+	// CallbackPathPrefix is where each connector's callback lives:
+	// CallbackPath(id).
+	CallbackPathPrefix = "/callback/"
 
 	// authRequestTTL bounds how long a pending request may sit between the
-	// downstream /authorize call and Google's round-trip back. Short enough
+	// downstream /authorize call and the upstream's round-trip back. Short enough
 	// that an abandoned login can't be resumed much later.
 	authRequestTTL = 5 * time.Minute
-
-	// googleScope is the upstream scope set. `email` is required so the
-	// callback can run the domain allowlist check.
-	googleScope = "openid email"
 
 	stateEntropyBytes = 32
 )
@@ -61,6 +56,12 @@ func oauthErr(status int, code, desc string) *oauthError {
 	return &oauthError{status: status, Code: code, Desc: desc}
 }
 
+// CallbackPath is the path of connectorID's callback, below the issuer. It
+// is the redirect URI registered with that upstream.
+func CallbackPath(connectorID string) string {
+	return CallbackPathPrefix + connectorID
+}
+
 type authorizeInput struct {
 	ResponseType        string `query:"response_type"`
 	ClientID            string `query:"client_id"`
@@ -82,18 +83,17 @@ type authorizeOutput struct {
 }
 
 // Authorizer serves GET /authorize: it validates the downstream client,
-// persists a pending AuthRequest, binds it to the browser, and redirects the
-// browser to Google with tempogate's own PKCE challenge and nonce.
+// persists a pending AuthRequest, binds it to the browser, and sends the
+// browser to the active upstream connector with tempogate's own PKCE
+// challenge and nonce.
 type Authorizer struct {
-	store        AuthRequestStore
-	clients      ClientRegistry
-	binding      *UpstreamBinding
-	issuer       string
-	googleClient string
-	googleAuth   string
-	hdHint       string
-	now          func() time.Time
-	newState     func() (string, error)
+	store      AuthRequestStore
+	clients    ClientRegistry
+	binding    *UpstreamBinding
+	connectors *Connectors
+	issuer     string
+	now        func() time.Time
+	newState   func() (string, error)
 }
 
 type Option func(*Authorizer)
@@ -101,27 +101,6 @@ type Option func(*Authorizer)
 // WithClock swaps the clock used to stamp AuthRequest timestamps. For tests.
 func WithClock(now func() time.Time) Option {
 	return func(a *Authorizer) { a.now = now }
-}
-
-// WithHostedDomainHint sends Google the `hd` parameter for the configured
-// hosted domains (OIDC_ALLOWED_HOSTED_DOMAINS): the domain itself when there
-// is exactly one, `*` (any Workspace account) when there are several, and
-// nothing when there are none. It only steers Google's account chooser; it
-// is not a security control, since the user can edit the request. The
-// callback's check of the `hd` claim is what enforces the restriction.
-func WithHostedDomainHint(hostedDomains string) Option {
-	return func(a *Authorizer) {
-		switch set := parseDomains(hostedDomains); len(set) {
-		case 0:
-			a.hdHint = ""
-		case 1:
-			for d := range set {
-				a.hdHint = d
-			}
-		default:
-			a.hdHint = "*"
-		}
-	}
 }
 
 // WithStateGenerator swaps the internal-state token generator. For tests.
@@ -133,18 +112,18 @@ func New(
 	store AuthRequestStore,
 	clients ClientRegistry,
 	binding *UpstreamBinding,
-	issuer, googleClientID, googleAuthEndpoint string,
+	connectors *Connectors,
+	issuer string,
 	opts ...Option,
 ) *Authorizer {
 	a := &Authorizer{
-		store:        store,
-		clients:      clients,
-		binding:      binding,
-		issuer:       strings.TrimRight(issuer, "/"),
-		googleClient: googleClientID,
-		googleAuth:   googleAuthEndpoint,
-		now:          clock.Now,
-		newState:     randomState,
+		store:      store,
+		clients:    clients,
+		binding:    binding,
+		connectors: connectors,
+		issuer:     strings.TrimRight(issuer, "/"),
+		now:        clock.Now,
+		newState:   randomState,
 	}
 	for _, o := range opts {
 		o(a)
@@ -157,7 +136,7 @@ func (a *Authorizer) Register(api huma.API) {
 		OperationID:   "authorize",
 		Method:        http.MethodGet,
 		Path:          AuthorizePath,
-		Summary:       "OIDC authorization endpoint (authorization-code flow; redirects to Google)",
+		Summary:       "OIDC authorization endpoint (authorization-code flow; redirects to the upstream identity provider)",
 		Tags:          []string{"oidc"},
 		DefaultStatus: http.StatusFound,
 	}, func(ctx context.Context, in *authorizeInput) (*authorizeOutput, error) {
@@ -208,9 +187,11 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 		return nil, fmt.Errorf("oidc: generate state: %w", err)
 	}
 
+	conn := a.connectors.Active()
 	now := a.now()
 	ar := AuthRequest{
 		InternalState:       internalState,
+		ConnectorID:         conn.ID(),
 		ClientID:            in.ClientID,
 		RedirectURI:         in.RedirectURI,
 		Scope:               in.Scope,
@@ -225,14 +206,20 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 		return nil, fmt.Errorf("oidc: persist auth request: %w", err)
 	}
 
-	loc, err := a.googleURL(internalState)
+	start, err := conn.Begin(ctx, BeginParams{
+		RedirectURI:   a.issuer + CallbackPath(conn.ID()),
+		State:         internalState,
+		CodeChallenge: a.binding.codeChallenge(conn.ID(), internalState),
+		Nonce:         a.binding.nonce(conn.ID(), internalState),
+		RequestID:     a.binding.requestID(conn.ID(), internalState),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("oidc: build upstream url: %w", err)
+		return nil, fmt.Errorf("oidc: begin %s sign-in: %w", conn.ID(), err)
 	}
 	return &authorizeOutput{
 		Status:    http.StatusFound,
-		Location:  loc,
-		SetCookie: a.binding.Cookie(internalState).String(),
+		Location:  start.RedirectURL,
+		SetCookie: a.binding.Cookie(conn.ID(), internalState).String(),
 	}, nil
 }
 
@@ -289,27 +276,6 @@ func authorizationResponse(redirectURI, issuer, state string, params url.Values)
 	}
 	if issuer != "" {
 		q.Set("iss", issuer)
-	}
-	u.RawQuery = q.Encode()
-	return u.String(), nil
-}
-
-func (a *Authorizer) googleURL(internalState string) (string, error) {
-	u, err := url.Parse(a.googleAuth)
-	if err != nil {
-		return "", err
-	}
-	q := u.Query()
-	q.Set("client_id", a.googleClient)
-	q.Set("redirect_uri", a.issuer+CallbackPath)
-	q.Set("response_type", "code")
-	q.Set("scope", googleScope)
-	q.Set("state", internalState)
-	q.Set("code_challenge", a.binding.codeChallenge(internalState))
-	q.Set("code_challenge_method", "S256")
-	q.Set("nonce", a.binding.nonce(internalState))
-	if a.hdHint != "" {
-		q.Set("hd", a.hdHint)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

@@ -21,7 +21,7 @@ import (
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/oidc/connector/google"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
@@ -67,7 +67,6 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 		s.mg.clientID,
 		"mock-secret",
 		s.mg.issuer()+"/token",
-		testIssuer+oidc.CallbackPath,
 		s.mg.issuer(),
 	)
 
@@ -85,8 +84,9 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 	)
 
 	binding := newTestBinding(s.T(), s.issuer)
-	authorizer := oidc.New(store, reg, binding, s.issuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll))
+	conns := googleConnectorsAt(s.T(), s.mg.issuer(), upstream, "")
+	authorizer := oidc.New(store, reg, binding, conns, s.issuer)
+	callback := oidc.NewCallback(store, conns, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll))
 	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	deviceAuth := oidc.NewDeviceAuthorization(store, reg, s.issuer)
 

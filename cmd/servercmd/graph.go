@@ -16,7 +16,7 @@ import (
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/metrics"
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/oidc/connector/google"
 )
 
 // deps hands a subcommand its dependencies only when it runs, and releases

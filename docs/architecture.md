@@ -33,6 +33,10 @@ Temporal and an OAuth2 client of Google.
    `state` bound to the browser by a short-lived cookie), then applies its
    email-domain gate to Google's verified email. See
    [Google leg](configuration.md#google-leg).
+   Google sits behind an upstream connector interface: the server owns the
+   state, the browser binding, the admission gates and the tokens, and a
+   connector owns only its upstream protocol, so another identity provider
+   can be added without touching the callback.
 3. tempogate mints two JWTs and completes the OIDC flow back to the UI:
    a short-lived access token (`aud` = the Temporal audience, a
    `permissions` claim) and a separate ID token for the UI's login (`aud` =

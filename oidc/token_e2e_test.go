@@ -18,7 +18,7 @@ import (
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/oidc/connector/google"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
@@ -62,7 +62,6 @@ func (s *TokenE2ESuite) SetupTest() {
 		s.mg.clientID,
 		"mock-secret",
 		s.mg.issuer()+"/token",
-		testIssuer+oidc.CallbackPath,
 		s.mg.issuer(),
 	)
 
@@ -71,8 +70,9 @@ func (s *TokenE2ESuite) SetupTest() {
 	s.Require().NoError(reg.WithSecrets("webui:" + e2eConfidentialSecret))
 
 	binding := newTestBinding(s.T(), testIssuer)
-	authorizer := oidc.New(store, reg, binding, testIssuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll), oidc.WithCallbackIssuer(testIssuer))
+	conns := googleConnectorsAt(s.T(), s.mg.issuer(), upstream, "")
+	authorizer := oidc.New(store, reg, binding, conns, testIssuer)
+	callback := oidc.NewCallback(store, conns, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll), oidc.WithCallbackIssuer(testIssuer))
 	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience)))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)

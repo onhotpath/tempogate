@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -49,69 +50,64 @@ type upstreamBindingParams struct {
 	Issuer string `name:"oidc_issuer"`
 }
 
-// newUpstreamBinding builds the one UpstreamBinding /authorize and
-// /callback/google share. It derives from OIDC_SESSION_SIGNING_KEY, so the
+// newUpstreamBinding builds the one UpstreamBinding /authorize and the
+// connector callbacks share. It derives from OIDC_SESSION_SIGNING_KEY, so the
 // whole browser-facing surface (device session cookie, device bounce state,
 // upstream state binding) rests on a single operator secret.
 func newUpstreamBinding(p upstreamBindingParams) (*UpstreamBinding, error) {
 	return NewUpstreamBinding(p.Issuer, p.SigningKey)
 }
 
+type connectorsParams struct {
+	fx.In
+
+	Connectors []Connector `group:"oidc_connectors"`
+}
+
+// newConnectors collects the connectors the provider packages contribute
+// (oidc/connector/google binds its Connector into the group), so this package
+// never imports an upstream protocol library.
+func newConnectors(p connectorsParams) (*Connectors, error) {
+	return NewConnectors(p.Connectors...)
+}
+
 type authorizeParams struct {
 	fx.In
 
-	Store   AuthRequestStore
-	Clients ClientRegistry
-	Binding *UpstreamBinding
+	Store      AuthRequestStore
+	Clients    ClientRegistry
+	Binding    *UpstreamBinding
+	Connectors *Connectors
 
-	Issuer         string `name:"oidc_issuer"`
-	GoogleClientID string `name:"google_client_id"`
-	GoogleAuth     string `name:"google_auth_endpoint"`
-	HostedDomains  string `name:"oidc_allowed_hosted_domains"`
+	Issuer string `name:"oidc_issuer"`
 }
 
 // newAuthorizeRegistrar builds the /authorize endpoint over the shared
 // registry, so its PKCE/confidential decisions cannot drift from /token's.
 func newAuthorizeRegistrar(p authorizeParams) func(huma.API) {
-	a := New(p.Store, p.Clients, p.Binding, p.Issuer, p.GoogleClientID, p.GoogleAuth,
-		WithHostedDomainHint(p.HostedDomains))
+	a := New(p.Store, p.Clients, p.Binding, p.Connectors, p.Issuer)
 	return a.Register
 }
 
 type callbackParams struct {
 	fx.In
 
-	Store    CallbackStore
-	Upstream Upstream
-	Binding  *UpstreamBinding
-	Logger   *slog.Logger
-	Resolver PermissionResolver
-	Logins   LoginObserver `optional:"true"`
-	Authz    AuthzObserver `optional:"true"`
+	Store      CallbackStore
+	Connectors *Connectors
+	Binding    *UpstreamBinding
+	Logger     *slog.Logger
+	Resolver   PermissionResolver
+	Logins     LoginObserver `optional:"true"`
+	Authz      AuthzObserver `optional:"true"`
 
 	Issuer         string `name:"oidc_issuer"`
 	AllowedDomains string `name:"oidc_allowed_domains"`
-	HostedDomains  string `name:"oidc_allowed_hosted_domains"`
 }
 
-// newCallbackRegistrar builds the /callback/google endpoint. The Google
-// upstream is injected as oidc.Upstream (bound by the oidc/google provider
-// via fx.As), so this package never imports oauth2/go-oidc. Without
-// OIDC_ALLOWED_HOSTED_DOMAINS the gate is the email domain alone, which a
-// consumer Google account for an allowed address passes; that is a supported
-// setup (e.g. mail not hosted on Google Workspace) but it is warned about at
-// startup so it is a visible choice rather than a silent default.
+// newCallbackRegistrar builds the /callback/{connector} endpoint.
 func newCallbackRegistrar(p callbackParams) func(huma.API) {
-	if len(parseDomains(p.HostedDomains)) == 0 {
-		p.Logger.Warn("OIDC_ALLOWED_HOSTED_DOMAINS is not set: the Google sign-in gate relies on the email domain only, "+
-			"which consumer Google accounts created for an allowed address also pass; "+
-			"set OIDC_ALLOWED_HOSTED_DOMAINS to your Google Workspace domain(s) to require the hd claim",
-			"op", "oidc.callback",
-		)
-	}
-	c := NewCallback(p.Store, p.Upstream, p.Binding, p.AllowedDomains,
+	c := NewCallback(p.Store, p.Connectors, p.Binding, p.AllowedDomains,
 		WithCallbackIssuer(p.Issuer),
-		WithAllowedHostedDomains(p.HostedDomains),
 		WithCallbackLogger(p.Logger),
 		WithLoginObserver(p.Logins),
 		WithCallbackPermissionResolver(p.Resolver),
@@ -276,13 +272,13 @@ type deviceUIParams struct {
 	Sessions   *SessionManager
 	Clients    ClientRegistry
 	Token      *Token
+	Connectors *Connectors
 	Logger     *slog.Logger
 	SigningKey sessionSigningKey
 	Resolver   PermissionResolver
 	Authz      AuthzObserver `optional:"true"`
 
-	Issuer             string `name:"oidc_issuer"`
-	GoogleAuthEndpoint string `name:"google_auth_endpoint"`
+	Issuer string `name:"oidc_issuer"`
 }
 
 // newDeviceUIRegistrar builds the verification-UI surface. The internal
@@ -294,13 +290,17 @@ type deviceUIParams struct {
 // same one SessionManager is built with, so the bounce state and the
 // session cookie share a single cryptographic root.
 func newDeviceUIRegistrar(p deviceUIParams) (func(huma.API), error) {
+	sources, err := p.Connectors.Active().FormActionSources(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("oidc: connector %q form-action sources: %w", p.Connectors.Active().ID(), err)
+	}
 	ui, err := NewDeviceUI(p.Devices, p.Sessions, p.Clients, p.Token, p.SigningKey, p.Issuer,
 		// Whitelist the upstream IdP's origin in the device_enter page's CSP
 		// form-action directive. CSP3 checks form-action across the redirect
 		// chain (POST /device → 303 /authorize → 302 upstream), so the
 		// cross-origin hop is silently dropped by the browser unless this
 		// source is present.
-		WithUpstreamIDPOrigin(p.GoogleAuthEndpoint),
+		WithUpstreamIDPOrigin(sources...),
 		// Surface the device-flow SSO callback failure modes through the
 		// project's structured logger. Without this, every callback failure
 		// collapses into the same generic HTML page with no log trail and
@@ -352,11 +352,11 @@ func newRateLimitMiddleware(p rateLimiterParams) (func(huma.Context, func(huma.C
 	).Middleware, nil
 }
 
-// Fx contributes the /authorize, /callback/google, /token, /userinfo,
+// Fx contributes the /authorize, /callback/{connector}, /token, /userinfo,
 // /device_authorization and /device* registrars into the shared
-// "api_registrars" group the api package collects. The store, upstream,
+// "api_registrars" group the api package collects. The store, connector,
 // signer and verifier dependencies are satisfied by state/sqlite,
-// oidc/google and keys via fx.As / fx.Provide. The rate limiter goes into
+// oidc/connector/google and keys via fx.As / fx.Provide. The rate limiter goes into
 // the "api_middlewares" group, which api installs on the same surface.
 func Fx() fx.Option {
 	return fx.Options(
@@ -370,6 +370,7 @@ func Fx() fx.Option {
 		fx.Provide(newSessionSigningKey),
 		fx.Provide(newSessionManager),
 		fx.Provide(newUpstreamBinding),
+		fx.Provide(newConnectors),
 		fx.Provide(newToken),
 		fx.Provide(
 			fx.Annotate(

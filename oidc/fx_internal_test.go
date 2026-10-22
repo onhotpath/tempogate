@@ -1,9 +1,9 @@
 package oidc
 
 import (
-	"bytes"
+	"context"
 	"encoding/base64"
-	"log/slog"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -42,33 +42,18 @@ func TestSessionSigningKeyRejectsInvalidKeys(t *testing.T) {
 	}
 }
 
-// TestCallbackRegistrarWarnsWithoutHostedDomains pins the startup warning
-// for the email-suffix-only gate: it fires when OIDC_ALLOWED_HOSTED_DOMAINS
-// is unset (or only separators) and stays quiet in Workspace mode.
-func TestCallbackRegistrarWarnsWithoutHostedDomains(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		hosted string
-		warn   bool
-	}{
-		{"unset", "", true},
-		{"only separators", " , ", true},
-		{"workspace mode", "example.com", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			registrar := newCallbackRegistrar(callbackParams{
-				Logger:         slog.New(slog.NewTextHandler(&buf, nil)),
-				AllowedDomains: "example.com",
-				HostedDomains:  tc.hosted,
-			})
-			require.NotNil(t, registrar)
-			if tc.warn {
-				require.Contains(t, buf.String(), "level=WARN")
-				require.Contains(t, buf.String(), "OIDC_ALLOWED_HOSTED_DOMAINS is not set")
-				return
-			}
-			require.Empty(t, buf.String())
-		})
-	}
+type failingSourcesConnector struct{ Connector }
+
+func (failingSourcesConnector) ID() string { return "okta" }
+
+func (failingSourcesConnector) FormActionSources(context.Context) ([]string, error) {
+	return nil, errors.New("discovery failed")
+}
+
+// TestDeviceUIRegistrarFailsOnConnectorSources: the device page's CSP is
+// built at startup, so a connector that cannot name its origins stops the
+// server rather than shipping a page whose redirect chain the browser drops.
+func TestDeviceUIRegistrarFailsOnConnectorSources(t *testing.T) {
+	_, err := newDeviceUIRegistrar(deviceUIParams{Connectors: &Connectors{active: failingSourcesConnector{}}})
+	require.ErrorContains(t, err, `connector "okta" form-action sources`)
 }

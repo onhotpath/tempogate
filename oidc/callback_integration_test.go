@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/oidc/connector/google"
 )
 
 const mockKID = "mock-google-key-1"
@@ -237,15 +237,15 @@ func (s *CallbackIntegrationSuite) serverFor(store *memCallbackStore, mg *mockGo
 		mg.clientID,
 		"mock-secret",
 		mg.issuer()+"/token",
-		testIssuer+oidc.CallbackPath,
 		mg.issuer(),
 		opts...,
 	)
 	binding := newTestBinding(s.T(), testIssuer)
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
-	a := oidc.New(store, reg, binding, testIssuer, testGoogleCID, mg.issuer()+"/auth")
-	c := oidc.NewCallback(store, up, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll),
+	conns := googleConnectorsAt(s.T(), mg.issuer(), up, "")
+	a := oidc.New(store, reg, binding, conns, testIssuer)
+	c := oidc.NewCallback(store, conns, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return time.Now().UTC() }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 	)

@@ -147,8 +147,7 @@ func (s *CallbackSuite) TestLoginOutcomesAreObserved() {
 // own reason so a misconfigured OIDC_ALLOWED_HOSTED_DOMAINS is visible.
 func (s *CallbackSuite) TestHostedDomainRefusalIsObserved() {
 	s.store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
-		oidc.WithAllowedHostedDomains("example.com"),
+	c := oidc.NewCallback(s.store, googleConnectors(s.T(), s.up, "example.com"), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithLoginObserver(s.observed),
 	)
@@ -157,7 +156,7 @@ func (s *CallbackSuite) TestHostedDomainRefusalIsObserved() {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
+	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie("google", fixedState))
 	_ = resp.Body.Close()
 
 	s.Equal(http.StatusForbidden, resp.StatusCode)
@@ -168,7 +167,7 @@ func (s *CallbackSuite) TestHostedDomainRefusalIsObserved() {
 // user is an internal failure, not a refusal: no code reaches the client.
 func (s *CallbackSuite) TestCodeGenerationFailureIsObserved() {
 	s.store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
+	c := oidc.NewCallback(s.store, googleConnectors(s.T(), s.up, ""), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return "", errors.New("entropy exhausted") }),
 		oidc.WithLoginObserver(s.observed),
@@ -178,7 +177,7 @@ func (s *CallbackSuite) TestCodeGenerationFailureIsObserved() {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
+	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie("google", fixedState))
 	_ = resp.Body.Close()
 
 	s.Equal(http.StatusInternalServerError, resp.StatusCode)

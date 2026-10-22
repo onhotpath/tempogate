@@ -193,15 +193,15 @@ type DeviceUI struct {
 	ipAttempts      *ratelimit.Limiter
 	sessionAttempts *ratelimit.Limiter
 
-	// rawUpstreamIDPAuthEndpoint is captured by WithUpstreamIDPOrigin and
-	// parsed once in NewDeviceUI; the result lives in upstreamFormActionSource.
-	rawUpstreamIDPAuthEndpoint string
+	// rawUpstreamIDPAuthEndpoints are captured by WithUpstreamIDPOrigin and
+	// parsed once in NewDeviceUI; the result lives in upstreamFormActionSources.
+	rawUpstreamIDPAuthEndpoints []string
 
-	// upstreamFormActionSource is the "scheme://host[:port]" origin of the
-	// upstream IdP's authorization endpoint, used as an extra source in the
+	// upstreamFormActionSources are the "scheme://host[:port]" origins of
+	// the upstream IdP's authorization endpoints, extra sources in the
 	// device_enter page's CSP form-action directive. Empty when the operator
 	// hasn't wired an origin (e.g., tests whose mock IdP shares the issuer).
-	upstreamFormActionSource string
+	upstreamFormActionSources []string
 
 	// enterPagePolicy and pagePolicy are the Content-Security-Policy
 	// headers for the entry page and for every other page. Only the entry
@@ -297,13 +297,15 @@ func WithUserCodeRateLimiters(perIP, perSession *ratelimit.Limiter) DeviceUIOpti
 // the upstream IdP), so a cross-origin upstream silently breaks the device
 // flow unless its origin is in the source list.
 //
-// rawAuthEndpoint is the same value that wires the Authorizer's upstream
-// endpoint (OIDC_GOOGLE_AUTH_ENDPOINT) — pass it verbatim, the constructor
-// extracts scheme + host. An empty value leaves the directive at 'self',
-// which is correct only when the upstream IdP shares the issuer's origin
-// (typically integration tests with an in-process mock).
-func WithUpstreamIDPOrigin(rawAuthEndpoint string) DeviceUIOption {
-	return func(u *DeviceUI) { u.rawUpstreamIDPAuthEndpoint = rawAuthEndpoint }
+// rawAuthEndpoints are where the connectors send the browser (their
+// FormActionSources); the constructor extracts scheme + host from each. An
+// empty value is skipped, and none leaves the directive at 'self', which is
+// correct only when the upstream IdP shares the issuer's origin (typically
+// integration tests with an in-process mock).
+func WithUpstreamIDPOrigin(rawAuthEndpoints ...string) DeviceUIOption {
+	return func(u *DeviceUI) {
+		u.rawUpstreamIDPAuthEndpoints = append(u.rawUpstreamIDPAuthEndpoints, rawAuthEndpoints...)
+	}
 }
 
 // NewDeviceUI constructs the device-flow verification UI handler. signingKey
@@ -378,12 +380,15 @@ func NewDeviceUI(
 		return nil, fmt.Errorf("%w: %w", ErrInternalDeviceUIClientRedirectMismatch, err)
 	}
 
-	if u.rawUpstreamIDPAuthEndpoint != "" {
-		source, err := upstreamFormActionSource(u.rawUpstreamIDPAuthEndpoint)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %q: %s", ErrInvalidUpstreamIDPOrigin, u.rawUpstreamIDPAuthEndpoint, err)
+	for _, raw := range u.rawUpstreamIDPAuthEndpoints {
+		if raw == "" {
+			continue
 		}
-		u.upstreamFormActionSource = source
+		source, err := upstreamFormActionSource(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q: %s", ErrInvalidUpstreamIDPOrigin, raw, err)
+		}
+		u.upstreamFormActionSources = append(u.upstreamFormActionSources, source)
 	}
 
 	pages, err := loadDevicePages()
@@ -401,10 +406,7 @@ func NewDeviceUI(
 	// which 303s through /authorize and then 302s to the upstream IdP, so
 	// the IdP's origin has to be a source or the browser refuses the
 	// cross-origin hop and the device flow silently stalls.
-	enterFormAction := "'self'"
-	if u.upstreamFormActionSource != "" {
-		enterFormAction += " " + u.upstreamFormActionSource
-	}
+	enterFormAction := strings.Join(append([]string{"'self'"}, u.upstreamFormActionSources...), " ")
 	u.enterPagePolicy = devicePagePolicy(styleSource, enterFormAction)
 	u.pagePolicy = devicePagePolicy(styleSource, "'self'")
 
@@ -604,9 +606,9 @@ type deviceSSOCallbackInput struct {
 	Code  string `query:"code"`
 	State string `query:"state"`
 
-	// Error is the authorization error /callback/google sent back instead
-	// of a code: access_denied when the person declined at Google or no
-	// authorization rule grants them anything.
+	// Error is the authorization error the upstream callback sent back
+	// instead of a code: access_denied when the person declined upstream or
+	// no authorization rule grants them anything.
 	Error string `query:"error"`
 }
 

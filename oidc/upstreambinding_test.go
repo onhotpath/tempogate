@@ -47,7 +47,7 @@ func (s *UpstreamBindingSuite) TestRejectsAKeyThatIsNot32Bytes() {
 // and Path=/; a sibling subdomain therefore cannot plant one.
 func (s *UpstreamBindingSuite) TestHTTPSIssuerUsesHostPrefixedCookie() {
 	for _, issuer := range []string{testIssuer, testIssuer + "/idp"} {
-		c := newTestBinding(s.T(), issuer).Cookie("st")
+		c := newTestBinding(s.T(), issuer).Cookie("google", "st")
 		s.True(strings.HasPrefix(c.Name, "__Host-"), c.Name)
 		s.True(c.Secure)
 		s.Equal("/", c.Path)
@@ -68,7 +68,7 @@ func (s *UpstreamBindingSuite) TestPlainHTTPIssuerFallsBackToPathScopedCookie() 
 		"http://localhost:8000/idp/": "/idp/callback/google",
 	}
 	for issuer, path := range cases {
-		c := newTestBinding(s.T(), issuer).Cookie("st")
+		c := newTestBinding(s.T(), issuer).Cookie("google", "st")
 		s.False(strings.HasPrefix(c.Name, "__Host-"), c.Name)
 		s.False(c.Secure)
 		s.Equal(path, c.Path)
@@ -79,14 +79,14 @@ func (s *UpstreamBindingSuite) TestPlainHTTPIssuerFallsBackToPathScopedCookie() 
 
 func (s *UpstreamBindingSuite) TestCookieIsPerStateAndKeyed() {
 	b := newTestBinding(s.T(), testIssuer)
-	one, two := b.Cookie("state-one"), b.Cookie("state-two")
+	one, two := b.Cookie("google", "state-one"), b.Cookie("google", "state-two")
 	s.NotEqual(one.Name, two.Name, "concurrent logins in one browser must not overwrite each other")
 	s.NotEqual(one.Value, two.Value)
 	s.NotContains(one.Value, "state-one")
-	s.Equal(one.Value, b.Cookie("state-one").Value, "deterministic for a state")
+	s.Equal(one.Value, b.Cookie("google", "state-one").Value, "deterministic for a state")
 
 	other := newTestBindingWithKey(s.T(), testIssuer, "fedcba9876543210fedcba9876543210")
-	s.NotEqual(one.Value, other.Cookie("state-one").Value, "the value depends on the server key")
+	s.NotEqual(one.Value, other.Cookie("google", "state-one").Value, "the value depends on the server key")
 }
 
 // TestRoundTripBindsTheGoogleLeg drives /authorize then /callback/google with
@@ -102,8 +102,9 @@ func (s *UpstreamBindingSuite) TestRoundTripBindsTheGoogleLeg() {
 
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("test", "0.0.0"))
-	oidc.New(store, reg, binding, testIssuer, testGoogleCID, testGoogleAuth).Register(api)
-	oidc.NewCallback(store, up, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll)).Register(api)
+	conns := googleConnectors(s.T(), up, "")
+	oidc.New(store, reg, binding, conns, testIssuer).Register(api)
+	oidc.NewCallback(store, conns, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll)).Register(api)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
