@@ -279,7 +279,7 @@ func (s *KeysIntegrationSuite) TestRevokeStampsTheHandlersClock() {
 	srv := httptest.NewServer(s.guarded(h))
 	defer srv.Close()
 
-	raw, err := json.Marshal(postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon", ExpiresAt: inAnHour()})
+	raw, err := json.Marshal(postBody{Namespace: "payments", Role: "write", Owner: "svc-recon", ExpiresAt: inAnHour()})
 	s.Require().NoError(err)
 	resp, err := authedClient.Post(srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
 	s.Require().NoError(err)

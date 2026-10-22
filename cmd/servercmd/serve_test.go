@@ -291,6 +291,7 @@ func (s *ServeCmdSuite) TestChangeFeedShortensReloadAndRevocation() {
 		AdminListener: loopback,
 		Server:        config.ServerConfig{ShutdownTimeout: 5 * time.Second},
 		KeysReload:    time.Hour,
+		Policy:        testPolicy,
 	}))
 	cmd.SetOut(new(testWriter))
 	cmd.SetErr(new(testWriter))
