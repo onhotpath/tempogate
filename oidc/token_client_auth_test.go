@@ -160,6 +160,7 @@ func (s *TokenSuite) TestGrantTypeNotAllowedIsUnauthorizedClient() {
 		f := url.Values{}
 		f.Set("grant_type", "refresh_token")
 		f.Set("refresh_token", token)
+		f.Set("client_id", clientID)
 		return f
 	}
 	deviceOnlyCode := func() url.Values {
@@ -179,7 +180,6 @@ func (s *TokenSuite) TestGrantTypeNotAllowedIsUnauthorizedClient() {
 		{"device-only client uses authorization_code", deviceOnlyCode},
 		{"auth-code-only client uses device_code", func() url.Values { return deviceForm("dc-1", "ui") }},
 		{"client without refresh_token uses refresh_token", func() url.Values { return refresh("rt-1", "no-refresh") }},
-		{"deregistered client uses refresh_token", func() url.Values { return refresh("rt-2", "deregistered") }},
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {
@@ -189,6 +189,13 @@ func (s *TokenSuite) TestGrantTypeNotAllowedIsUnauthorizedClient() {
 			s.Equal("unauthorized_client", s.decodeOAuthError(resp))
 		})
 	}
+
+	// A token whose client has since been deregistered cannot be redeemed:
+	// the client presenting it no longer authenticates.
+	deregistered := s.post(refresh("rt-2", "deregistered"))
+	defer deregistered.Body.Close()
+	s.Equal(http.StatusUnauthorized, deregistered.StatusCode)
+	s.Equal("invalid_client", s.decodeOAuthError(deregistered))
 }
 
 // TestDeviceCodeGrantAuthenticatesConfidentialClient: the device grant runs

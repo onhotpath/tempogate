@@ -236,6 +236,7 @@ func (s *TokenE2ESuite) TestFullFlowMintsJWTVerifiableAgainstPublishedJWKS() {
 	rf := url.Values{}
 	rf.Set("grant_type", "refresh_token")
 	rf.Set("refresh_token", body.RefreshToken)
+	rf.Set("client_id", "ui")
 	rResp := s.tokenRequest(rf)
 	defer rResp.Body.Close()
 	s.Require().Equal(http.StatusOK, rResp.StatusCode)

@@ -127,8 +127,8 @@ progress, expiry) goes to `stderr`, so `$(tempogate login)` is safe in scripts.
 ## Persistence and `tempogate token`
 
 `tempogate login` does not just print the token — it also writes the access
-token, the refresh token, and the absolute expiry to
-`~/.tempogate/token.json` (file mode `0600`, parent directory `0700`; the
+token, the refresh token, the absolute expiry, and the `client_id` they were
+issued to to `~/.tempogate/token.json` (file mode `0600`, parent directory `0700`; the
 write is atomic via a same-directory temp file + rename, so a crash never
 leaves a half-written credential).
 
@@ -146,6 +146,8 @@ export TEMPORAL_AUTH_TOKEN=$(tempogate token)
 * if it is **within 5 minutes** of expiry, transparently exchanges the
   refresh token at `<issuer>/token` (`grant_type=refresh_token`), rewrites
   `token.json` with the rotated pair, and prints the fresh access token.
+  The exchange presents the stored `client_id`, because the issuer only honours a refresh token for the client it was issued to.
+  A `token.json` written by an older CLI has no `client_id`; the CLI then uses the access token's `aud`, which tempogate sets to the requesting client.
 
 Failure modes are explicit, never silent:
 

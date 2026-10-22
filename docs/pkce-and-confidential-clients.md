@@ -110,6 +110,13 @@ the client have a registered secret?**
   §5.2): `authorization_code`, the device-code grant and `refresh_token` are
   each refused with `unauthorized_client` for a client not registered for
   them.
+* The refresh grant authenticates the same way (RFC 6749 §6).
+  A confidential client presents its secret (HTTP Basic or form body) on every refresh, or gets `401 invalid_client`.
+  A public client sends its `client_id` (OAuth 2.1 §4.3.1); a missing or unknown one is `401 invalid_client`.
+* A refresh token is bound to the client it was issued to (RFC 9700 §4.14).
+  Presented by any other client, even an authenticated one, it fails with `invalid_grant`.
+  The minted token keeps that client as its `aud`.
+  As with codes, client authentication and the binding check run before the token is consumed, so a rejected attempt does not burn the real client's refresh token.
 
 Net properties:
 

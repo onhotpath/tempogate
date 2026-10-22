@@ -25,13 +25,17 @@ const (
 var ErrNoToken = errors.New("cli: no token file; run `tempogate login` first")
 
 // Token is the persisted credential set: the bearer access token, the opaque
-// refresh token that renews it, and the access token's absolute expiry. It is
-// the single shape produced by login, written to disk, and renewed by
-// EnsureFresh, so the three never drift apart.
+// refresh token that renews it, the access token's absolute expiry, and the
+// client_id both were issued to. It is the single shape produced by login,
+// written to disk, and renewed by EnsureFresh, so the three never drift
+// apart. ClientID is kept because the issuer only honours a refresh token for
+// the client it was issued to, and the loopback and device flows log in as
+// different clients.
 type Token struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
+	ClientID     string    `json:"client_id,omitempty"`
 }
 
 // DefaultTokenPath is ~/.tempogate/token.json. It is resolved lazily (not a

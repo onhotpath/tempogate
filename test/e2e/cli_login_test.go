@@ -186,9 +186,14 @@ func TestCLILogin(t *testing.T) {
 	fast := st.runToken(ctx, t)
 	require.Equal(t, tok.AccessToken, fast, "fast path must print the persisted access token unchanged")
 
+	require.Equal(t, cliClientID, tok.ClientID, "login must persist the client the tokens were issued to")
+
 	// --- tempogate token, refresh path: rewrite the file with a past expiry
 	// (keeping the as-yet-unused refresh token) and prove the next invocation
 	// transparently exchanges it, rewrites the file, and prints a new JWT.
+	// The rewrite drops client_id, as in a token file written before the
+	// refresh grant was bound to its client: the CLI must recover it from
+	// the access token's aud, since the server now requires it.
 	st.writeToken(ctx, t, cli.Token{
 		AccessToken:  tok.AccessToken,
 		RefreshToken: tok.RefreshToken,
@@ -202,6 +207,14 @@ func TestCLILogin(t *testing.T) {
 	require.Equal(t, refreshed, after.AccessToken, "the refreshed token must be written back")
 	require.NotEqual(t, tok.RefreshToken, after.RefreshToken, "the refresh token must rotate on use")
 	require.True(t, after.ExpiresAt.After(time.Now().Add(3*time.Hour)), "the renewed token gets a fresh ~4h life")
+	require.Equal(t, cliClientID, after.ClientID, "the recovered client binding is persisted")
+
+	// --- and again from the rewritten file, which now carries client_id.
+	after.ExpiresAt = time.Now().Add(-time.Minute)
+	st.writeToken(ctx, t, after)
+	again := st.runToken(ctx, t)
+	require.NotEqual(t, refreshed, again, "the rotated refresh token must renew again")
+	assertTempogateJWT(t, again)
 }
 
 type loginResult struct {
@@ -279,16 +292,27 @@ func (s *cliStack) readToken(ctx context.Context, t *testing.T) cli.Token {
 
 func (s *cliStack) writeToken(ctx context.Context, t *testing.T, tok cli.Token) {
 	t.Helper()
+	s.writeTokenTo(ctx, t, cliTokenFile, tok)
+}
+
+func (s *cliStack) writeTokenTo(ctx context.Context, t *testing.T, path string, tok cli.Token) {
+	t.Helper()
 	b, err := json.Marshal(tok)
 	require.NoError(t, err)
-	require.NoError(t, s.client.CopyToContainer(ctx, b, cliTokenFile, 0o600))
+	require.NoError(t, s.client.CopyToContainer(ctx, b, path, 0o600))
 }
 
 // runToken runs `tempogate token` and returns the JWT it printed to stdout.
 func (s *cliStack) runToken(ctx context.Context, t *testing.T) string {
 	t.Helper()
+	return s.runTokenFrom(ctx, t, cliTokenFile)
+}
+
+// runTokenFrom is runToken against an explicit token file.
+func (s *cliStack) runTokenFrom(ctx context.Context, t *testing.T, path string) string {
+	t.Helper()
 	code, r, err := s.client.Exec(ctx,
-		[]string{"tempogate", "token", "--issuer", tempogateIssuer, "--token-file", cliTokenFile},
+		[]string{"tempogate", "token", "--issuer", tempogateIssuer, "--token-file", path},
 		tcexec.Multiplexed(),
 	)
 	require.NoError(t, err)

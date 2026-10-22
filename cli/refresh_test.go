@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,9 +21,10 @@ import (
 // counts requests so a test can prove the fast path never touched the network;
 // token is overridable to drive the revoked path.
 type refreshIssuer struct {
-	srv   *httptest.Server
-	hits  atomic.Int32
-	token func(w http.ResponseWriter, gotRefresh string)
+	srv         *httptest.Server
+	hits        atomic.Int32
+	gotClientID atomic.Value
+	token       func(w http.ResponseWriter, gotRefresh string)
 }
 
 func newRefreshIssuer() *refreshIssuer {
@@ -31,6 +33,7 @@ func newRefreshIssuer() *refreshIssuer {
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		ri.hits.Add(1)
 		_ = r.ParseForm()
+		ri.gotClientID.Store(r.Form.Get("client_id"))
 		ri.token(w, r.Form.Get("refresh_token"))
 	})
 	ri.srv = httptest.NewServer(mux)
@@ -97,6 +100,7 @@ func (s *RefreshSuite) TestExpiringTokenIsRefreshedAndRewritten() {
 		AccessToken:  "about.to.expire",
 		RefreshToken: "r-old",
 		ExpiresAt:    s.now.Add(2 * time.Minute), // inside the 5-min skew
+		ClientID:     "tempogate-device",
 	}))
 
 	got, err := s.ensureFresh()
@@ -110,6 +114,65 @@ func (s *RefreshSuite) TestExpiringTokenIsRefreshedAndRewritten() {
 	s.Require().NoError(err)
 	s.Equal("new.jwt.token", persisted.AccessToken)
 	s.Equal("r-rotated", persisted.RefreshToken, "the rotated refresh token must be written back")
+	s.Equal("tempogate-device", s.issuer.gotClientID.Load(), "refresh must present the client the token was issued to")
+	s.Equal("tempogate-device", persisted.ClientID, "the client binding must survive the rewrite")
+}
+
+// unsignedJWT builds a compact JWS whose payload is claims; the signature is
+// junk because the CLI only reads its own token, never verifies it.
+func unsignedJWT(claims string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc([]byte(claims)) + ".c2ln"
+}
+
+// TestLegacyTokenFileFallsBackToAccessTokenAudience: a token file written
+// before the client binding was persisted still refreshes, presenting the
+// client the issuer minted the access token for.
+func (s *RefreshSuite) TestLegacyTokenFileFallsBackToAccessTokenAudience() {
+	cases := []struct {
+		name   string
+		claims string
+	}{
+		{"aud array", `{"sub":"alice","aud":["tempogate-cli"]}`},
+		{"aud string", `{"sub":"alice","aud":"tempogate-cli"}`},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			s.Require().NoError(cli.Save(s.path, cli.Token{
+				AccessToken:  unsignedJWT(tc.claims),
+				RefreshToken: "r-old",
+				ExpiresAt:    s.now.Add(time.Minute),
+			}))
+
+			got, err := s.ensureFresh()
+			s.Require().NoError(err)
+			s.Equal("tempogate-cli", s.issuer.gotClientID.Load())
+			s.Equal("tempogate-cli", got.ClientID, "the recovered binding is persisted for next time")
+		})
+	}
+}
+
+func (s *RefreshSuite) TestUnknownClientFailsWithoutNetwork() {
+	for _, access := range []string{
+		"not-a-jwt",
+		"a.%%%.c",
+		unsignedJWT(`not json`),
+		unsignedJWT(`{"sub":"alice"}`),
+		unsignedJWT(`{"aud":["tempogate-cli","temporal-ui"]}`),
+	} {
+		s.Run(access, func() {
+			s.Require().NoError(cli.Save(s.path, cli.Token{
+				AccessToken:  access,
+				RefreshToken: "r-old",
+				ExpiresAt:    s.now.Add(time.Minute),
+			}))
+
+			_, err := s.ensureFresh()
+			s.Require().Error(err)
+			s.Contains(err.Error(), "tempogate login")
+			s.Equal(int32(0), s.issuer.hits.Load())
+		})
+	}
 }
 
 func (s *RefreshSuite) TestRevokedRefreshFailsCleanlyWithoutClobbering() {
@@ -117,6 +180,7 @@ func (s *RefreshSuite) TestRevokedRefreshFailsCleanlyWithoutClobbering() {
 		AccessToken:  "about.to.expire",
 		RefreshToken: "r-revoked",
 		ExpiresAt:    s.now.Add(1 * time.Minute),
+		ClientID:     "tempogate-cli",
 	}
 	s.Require().NoError(cli.Save(s.path, original))
 	s.issuer.token = func(w http.ResponseWriter, _ string) {
@@ -142,6 +206,7 @@ func (s *RefreshSuite) TestRefreshWithoutRotationKeepsOldRefreshToken() {
 		AccessToken:  "about.to.expire",
 		RefreshToken: "r-keep",
 		ExpiresAt:    s.now.Add(1 * time.Minute),
+		ClientID:     "tempogate-cli",
 	}))
 	s.issuer.token = func(w http.ResponseWriter, _ string) {
 		w.Header().Set("Content-Type", "application/json")
@@ -173,6 +238,7 @@ func (s *RefreshSuite) TestRefreshSucceedsButPersistFails() {
 		AccessToken:  "about.to.expire",
 		RefreshToken: "r-old",
 		ExpiresAt:    s.now.Add(1 * time.Minute),
+		ClientID:     "tempogate-cli",
 	}))
 	s.Require().NoError(os.Chmod(roDir, 0o500)) // readable (Load) but not writable (Save)
 	defer func() { _ = os.Chmod(roDir, 0o700) }()
@@ -191,6 +257,7 @@ func (s *RefreshSuite) TestUnparseableIssuerFailsAtRequestBuild() {
 		AccessToken:  "about.to.expire",
 		RefreshToken: "r-old",
 		ExpiresAt:    s.now.Add(1 * time.Minute),
+		ClientID:     "tempogate-cli",
 	}))
 
 	_, err := cli.EnsureFresh(context.Background(), s.path, "http://\x7fbad",

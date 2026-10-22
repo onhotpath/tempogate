@@ -48,9 +48,9 @@ const (
 )
 
 // ErrRefreshNotFound is returned by ConsumeRefresh when no token matches —
-// because it was never issued, has already been used (single-use; refresh is
-// rotated on every exchange), or its row was reaped. The /token handler maps
-// this to OAuth2 invalid_grant.
+// because it was never issued, was issued to a different client, has already
+// been used (single-use; refresh is rotated on every exchange), or its row was
+// reaped. The /token handler maps this to OAuth2 invalid_grant.
 var ErrRefreshNotFound = errors.New("oidc: refresh token not found")
 
 // Refresh is the opaque, single-use credential a client presents to obtain a
@@ -85,10 +85,12 @@ type TokenStore interface {
 	// SaveRefresh persists a freshly minted refresh token.
 	SaveRefresh(ctx context.Context, r Refresh) error
 
-	// ConsumeRefresh atomically loads and deletes the refresh token,
-	// enforcing single use so every exchange rotates the token. It returns
-	// ErrRefreshNotFound when no row matches.
-	ConsumeRefresh(ctx context.Context, token string) (Refresh, error)
+	// ConsumeRefresh atomically loads and deletes the refresh token issued to
+	// clientID, enforcing single use so every exchange rotates the token. It
+	// returns ErrRefreshNotFound when no row matches; a token issued to
+	// another client does not match and is left in place, so a cross-client
+	// attempt cannot burn it.
+	ConsumeRefresh(ctx context.Context, token, clientID string) (Refresh, error)
 }
 
 // TokenClients is the client registry as the /token handler needs it: look
@@ -214,7 +216,7 @@ func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error)
 	case grantAuthorizationCode:
 		return t.authorizationCodeGrant(ctx, form, in.Authorization)
 	case grantRefreshToken:
-		return t.refreshTokenGrant(ctx, form)
+		return t.refreshTokenGrant(ctx, form, in.Authorization)
 	case grantDeviceCode:
 		return t.deviceCodeGrant(ctx, form, in.Authorization)
 	case "":
@@ -352,15 +354,26 @@ func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, aut
 	return t.issue(ctx, r.Email, r.ClientID, r.Nonce)
 }
 
-func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values) (*tokenOutput, error) {
+func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
 	token := form.Get("refresh_token")
 	if token == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "refresh_token is required")
 	}
 
-	rt, err := t.store.ConsumeRefresh(ctx, token)
+	// A refresh token is bound to the client it was issued to (RFC 9700
+	// §4.14), which must authenticate when confidential (RFC 6749 §6) and
+	// identify itself when public (OAuth 2.1 §4.3.1). As with the auth code,
+	// the client is authenticated before anything is consumed, and the
+	// binding is part of the atomic consume, so neither a failed nor a
+	// cross-client attempt burns the legitimate client's token.
+	clientID, secret := clientCredentials(form, authHeader)
+	if _, err := t.authenticateClient(clientID, secret, GrantTypeRefreshToken); err != nil {
+		return nil, err
+	}
+
+	rt, err := t.store.ConsumeRefresh(ctx, token, clientID)
 	if errors.Is(err, ErrRefreshNotFound) {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown or already-used refresh token")
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown, already-used, or other client's refresh token")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("oidc: consume refresh token: %w", err)
@@ -368,11 +381,6 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values) (*tokenO
 
 	if t.now().After(rt.ExpiresAt) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "refresh token expired")
-	}
-	// The token was issued to rt.ClientID; refuse it once that client is no
-	// longer registered for refresh.
-	if c, ok := t.clients.Lookup(rt.ClientID); !ok || !c.Allows(GrantTypeRefreshToken) {
-		return nil, oauthErr(http.StatusBadRequest, "unauthorized_client", "client is not registered for the refresh_token grant")
 	}
 
 	// No nonce on refresh: OIDC Core binds nonce to the original
