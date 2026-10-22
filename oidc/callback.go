@@ -80,10 +80,12 @@ const (
 // RFC 6749 §5.2 error code the token endpoint answered with (e.g.
 // invalid_grant, invalid_client), when there is one; it is a fixed token,
 // safe to log, and the quickest way to tell a bad client secret from a
-// replayed code.
+// replayed code. Timeout marks a call that got no answer in time, which
+// points at Google or the network rather than at the login.
 type UpstreamError struct {
 	Reason     string
 	OAuthError string
+	Timeout    bool
 	Err        error
 }
 
@@ -324,14 +326,17 @@ func (c *Callback) refusal(id UpstreamIdentity) string {
 // resolve on retry, but a sustained rate means misconfiguration. Only the
 // reason category and the OAuth error code are logged, never the error text.
 func (c *Callback) logUpstreamFailure(ctx context.Context, err error) {
-	cause, oauthCode := "unknown", ""
+	cause, oauthCode, timeout := "unknown", "", false
 	var ue *UpstreamError
 	if errors.As(err, &ue) {
-		cause, oauthCode = ue.Reason, ue.OAuthError
+		cause, oauthCode, timeout = ue.Reason, ue.OAuthError, ue.Timeout
 	}
 	attrs := []any{"op", logOpGoogleCallback, "cause", cause}
 	if oauthCode != "" {
 		attrs = append(attrs, "oauth_error", oauthCode)
+	}
+	if timeout {
+		attrs = append(attrs, "timeout", true)
 	}
 	c.logger.WarnContext(ctx, "google sign-in failed", attrs...)
 }

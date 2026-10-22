@@ -6,7 +6,7 @@
 // /auth, checks the code_verifier at /token, and echoes the nonce into the
 // id_token. The asserted identity (email, email_verified, Google Workspace `hd`
 // and the stable `sub`) is controllable at runtime via /_control/identity, and
-// faults (discovery outage, wrong nonce) via /_control/faults, so one running
+// faults (discovery outage, wrong nonce, hung token endpoint) via /_control/faults, so one running
 // instance can drive every scenario without a container restart.
 //
 // It is deliberately standalone (its own main, its own container image) so the
@@ -73,6 +73,9 @@ type faults struct {
 	// WrongNonce signs id_tokens with a nonce other than the request's,
 	// as an id_token minted for another login would carry.
 	WrongNonce bool
+	// TokenHang leaves token requests unanswered until the client hangs
+	// up, as a stalled Google would.
+	TokenHang bool
 }
 
 type server struct {
@@ -254,6 +257,13 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	s.mu.Lock()
+	hang := s.faults.TokenHang
+	s.mu.Unlock()
+	if hang {
+		<-r.Context().Done()
+		return
+	}
 	code := r.Form.Get("code")
 	clientID := r.Form.Get("client_id")
 
@@ -346,7 +356,7 @@ func (s *server) setIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 // setFaults switches failure modes on and off. Form fields:
-// discovery_down and wrong_nonce, each "true" to enable; anything else
+// discovery_down, wrong_nonce and token_hang, each "true" to enable; anything else
 // (including absent) disables it.
 func (s *server) setFaults(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
@@ -361,6 +371,7 @@ func (s *server) setFaults(w http.ResponseWriter, r *http.Request) {
 	s.faults = faults{
 		DiscoveryDown: r.Form.Get("discovery_down") == "true",
 		WrongNonce:    r.Form.Get("wrong_nonce") == "true",
+		TokenHang:     r.Form.Get("token_hang") == "true",
 	}
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)

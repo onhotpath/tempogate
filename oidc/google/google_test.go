@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -56,6 +57,55 @@ type idp struct {
 	// discoveryDown makes the discovery document answer 503, modelling a
 	// transient outage of the IdP's well-known endpoint.
 	discoveryDown atomic.Bool
+
+	// stalled maps a path to the way it hangs ("headers": never answers;
+	// "body": sends headers, then trickles the body forever). Either holds
+	// the request until the client gives up.
+	stalled sync.Map
+	// delay, in nanoseconds, slows every response down by that much.
+	delay atomic.Int64
+}
+
+const (
+	stallHeaders = "headers"
+	stallBody    = "body"
+)
+
+func (i *idp) stall(path, how string) { i.stalled.Store(path, how) }
+
+func (i *idp) unstall(path string) { i.stalled.Delete(path) }
+
+// withStalls hangs the paths stall marks, ahead of the real handlers.
+func (i *idp) withStalls(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(time.Duration(i.delay.Load()))
+		how, ok := i.stalled.Load(r.URL.Path)
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// The server notices the client hanging up only once the request
+		// body is consumed; until then a stalled POST would outlive it.
+		_, _ = io.Copy(io.Discard, r.Body)
+		if how == stallBody {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{"))
+		}
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-tick.C:
+				if how == stallBody {
+					_, _ = w.Write([]byte(" "))
+					w.(http.Flusher).Flush()
+				}
+			}
+		}
+	})
 }
 
 func newIDP(t *testing.T) *idp {
@@ -110,7 +160,7 @@ func (i *idp) server(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, resp)
 	})
-	srv = httptest.NewServer(mux)
+	srv = httptest.NewServer(i.withStalls(mux))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -390,6 +440,119 @@ func (s *GoogleSuite) TestDiscoveryBackoffIsCapped() {
 	s.EqualValues(n+1, atomic.LoadInt32(&i.discoveryN))
 }
 
+// testTimeout stands in for the 10s production timeout; stallBound is how
+// long a call may take against a stalled IdP before the test calls it hung.
+const (
+	testTimeout = 200 * time.Millisecond
+	stallBound  = 5 * time.Second
+)
+
+// exchangeWithin runs ExchangeAndVerify and fails the test if it does not
+// return within stallBound, rather than hanging the suite.
+func (s *GoogleSuite) exchangeWithin(c *google.Client) error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(stallBound):
+		s.FailNow("ExchangeAndVerify still blocked on a stalled upstream", "after %s", stallBound)
+		return nil
+	}
+}
+
+// A stalled or trickling Google must fail the login within the upstream
+// timeout, as the reason of the call that hung, flagged as a timeout. The
+// request context has no deadline here, as with a browser that keeps
+// waiting: before the client had its own bound, each of these blocked until
+// the browser hung up.
+func (s *GoogleSuite) TestStalledUpstreamTimesOut() {
+	cases := []struct {
+		name, path, how, reason, op string
+	}{
+		{"discovery never answers", "/.well-known/openid-configuration", stallHeaders, oidc.UpstreamReasonDiscovery, "discovery"},
+		{"discovery trickles its body", "/.well-known/openid-configuration", stallBody, oidc.UpstreamReasonDiscovery, "discovery"},
+		{"token endpoint never answers", "/token", stallHeaders, oidc.UpstreamReasonExchange, "code_exchange"},
+		{"token endpoint trickles its body", "/token", stallBody, oidc.UpstreamReasonExchange, "code_exchange"},
+		{"JWKS never answers", "/jwks", stallHeaders, oidc.UpstreamReasonIDToken, "verify_id_token"},
+		{"JWKS trickles its body", "/jwks", stallBody, oidc.UpstreamReasonIDToken, "verify_id_token"},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			i := newIDP(s.T())
+			i.stall(tc.path, tc.how)
+			c, obs := s.observedClientFor(i.server(s.T()), google.WithTimeout(testTimeout))
+
+			start := time.Now()
+			err := s.exchangeWithin(c)
+			took := time.Since(start)
+
+			var ue *oidc.UpstreamError
+			s.Require().ErrorAs(err, &ue)
+			s.Equal(tc.reason, ue.Reason)
+			s.True(ue.Timeout, "a call that got no answer in time is flagged as a timeout")
+			s.GreaterOrEqual(took, testTimeout, "the call is given its full budget")
+			s.Contains(obs.calls, tc.op+"/timeout")
+		})
+	}
+}
+
+// Every call gets its own budget: a login whose discovery, exchange and
+// JWKS fetch each take most of the timeout (together well over it) still
+// succeeds.
+func (s *GoogleSuite) TestTimeoutIsPerCall() {
+	i := newIDP(s.T())
+	const budget = time.Second
+	i.delay.Store(int64(budget * 6 / 10))
+	srv := i.server(s.T())
+	c := google.New(testClientID, "secret", srv.URL+"/token",
+		"https://tempogate.example.com/callback/google", srv.URL, google.WithTimeout(budget))
+	s.Require().NoError(s.exchangeWithin(c))
+}
+
+// A discovery timeout is a failure like any other: retried after the
+// backoff, never cached until restart.
+func (s *GoogleSuite) TestDiscoveryTimeoutIsNotCached() {
+	i := newIDP(s.T())
+	i.stall("/.well-known/openid-configuration", stallHeaders)
+	t0 := time.Unix(1700000000, 0)
+	now := t0
+	srv := i.server(s.T())
+	c := google.New(testClientID, "secret", srv.URL+"/token",
+		"https://tempogate.example.com/callback/google", srv.URL,
+		google.WithTimeout(testTimeout), google.WithClock(func() time.Time { return now }))
+
+	err := s.exchangeWithin(c)
+	s.Require().Error(err)
+	s.Equal(oidc.UpstreamReasonDiscovery, reasonOf(err))
+
+	i.unstall("/.well-known/openid-configuration")
+	now = t0.Add(time.Second)
+	s.Require().NoError(s.exchangeWithin(c), "discovery must be retried once the backoff elapses")
+}
+
+// The JWKS fetch runs on a context the provider kept from discovery, after
+// that discovery call's deadline has passed. It must still go through, and
+// be bounded by, the upstream client, and a timed-out fetch must not poison
+// later ones.
+func (s *GoogleSuite) TestJWKSRecoversAfterTimeout() {
+	i := newIDP(s.T())
+	srv := i.server(s.T())
+	c := google.New(testClientID, "secret", srv.URL+"/token",
+		"https://tempogate.example.com/callback/google", srv.URL, google.WithTimeout(testTimeout))
+
+	i.stall("/jwks", stallHeaders)
+	err := s.exchangeWithin(c)
+	s.Require().Error(err)
+	s.Equal(oidc.UpstreamReasonIDToken, reasonOf(err))
+
+	i.unstall("/jwks")
+	s.Require().NoError(s.exchangeWithin(c), "a later login must fetch the JWKS afresh")
+}
+
 func reasonOf(err error) string {
 	var ue *oidc.UpstreamError
 	if errors.As(err, &ue) {
@@ -403,7 +566,11 @@ type recordingObserver struct{ calls []string }
 
 func (r *recordingObserver) ObserveUpstream(op string, took time.Duration, err error) {
 	outcome := "ok"
-	if err != nil {
+	var ue *oidc.UpstreamError
+	switch {
+	case errors.As(err, &ue) && ue.Timeout:
+		outcome = "timeout"
+	case err != nil:
 		outcome = "error"
 	}
 	if took <= 0 {

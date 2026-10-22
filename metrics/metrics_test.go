@@ -79,8 +79,21 @@ func (s *MetricsSuite) TestUpstreamLatencyAndErrors() {
 	s.m.ObserveUpstream("code_exchange", 80*time.Millisecond, errors.New("boom"))
 
 	s.Equal(1, testutil.CollectAndCount(s.m.upstreamDuration, "tempogate_upstream_request_duration_seconds"))
-	s.InDelta(1, testutil.ToFloat64(s.m.upstreamErrors.WithLabelValues("code_exchange")), 0)
+	s.InDelta(1, testutil.ToFloat64(s.m.upstreamErrors.WithLabelValues("code_exchange", "error")), 0)
 	s.Contains(s.scrape(), `tempogate_upstream_request_duration_seconds_count{op="code_exchange"} 2`)
+}
+
+// A call the Google client flagged as timed out is counted apart from one
+// Google answered with an error, so a stalled IdP is visible as such.
+func (s *MetricsSuite) TestUpstreamTimeoutsCountedApart() {
+	s.m.ObserveUpstream("discovery", 10*time.Second,
+		&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Timeout: true, Err: errors.New("deadline")})
+	s.m.ObserveUpstream("discovery", time.Millisecond,
+		&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("503")})
+
+	body := s.scrape()
+	s.Contains(body, `tempogate_upstream_errors_total{op="discovery",reason="timeout"} 1`)
+	s.Contains(body, `tempogate_upstream_errors_total{op="discovery",reason="error"} 1`)
 }
 
 func (s *MetricsSuite) TestDBErrorsCountedByOp() {
