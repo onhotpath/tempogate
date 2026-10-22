@@ -46,7 +46,7 @@ oidc:
 # No upstream Google client is configured, so the SSO flow is not exercised
 # by this smoke overlay.
 auth:
-  clients: tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback
+  clients: tempogate-device-ui:http://127.0.0.1/device/sso-callback
   clientSecretsSecretRef:
     name: tempogate-kind
     key: client-secrets

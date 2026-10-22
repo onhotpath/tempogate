@@ -19,7 +19,7 @@ oidc:
     key: session-signing-key
 
 auth:
-  clients: tempogate-device-ui:http://127.0.0.1:8000/device/sso-callback
+  clients: tempogate-device-ui:http://127.0.0.1/device/sso-callback
   clientSecretsSecretRef:
     name: tempogate-smoke
     key: client-secrets
