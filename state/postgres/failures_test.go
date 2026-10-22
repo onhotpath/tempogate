@@ -38,7 +38,7 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 			return keys.Keypair{Kid: kid, Alg: "RS256", PrivatePEM: []byte("p"), PublicPEM: []byte("p"), CreatedAt: at}
 		}
 		rt := func(token, family string) oidc.Refresh {
-			return oidc.Refresh{Token: token, ClientID: "ui", Email: "a@example.com", Subject: "sub", FamilyID: family, AuthTime: at, CreatedAt: at, ExpiresAt: at.Add(time.Hour)}
+			return oidc.Refresh{Token: token, ClientID: "ui", Email: "a@example.com", ConnectorID: "google", Subject: "sub", FamilyID: family, AuthTime: at, CreatedAt: at, ExpiresAt: at.Add(time.Hour)}
 		}
 		cases := []struct {
 			name, op, table, event string
@@ -85,7 +85,7 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 				name: "revoke by subject", op: "revoke_refresh", table: "refresh_families", event: "UPDATE",
 				seed: func(t *testing.T, s *Store) { require.NoError(t, s.SaveRefresh(t.Context(), rt("r", "fam"))) },
 				call: func(t *testing.T, s *Store) error {
-					_, err := s.RevokeRefreshBySubject(t.Context(), "sub", at)
+					_, err := s.RevokeRefreshBySubject(t.Context(), "google", "sub", at)
 					return err
 				},
 			},

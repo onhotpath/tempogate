@@ -53,6 +53,6 @@ func (a *adminSessionStore) RevokeEmail(ctx context.Context, email string, at ti
 	return a.s.RevokeRefreshByEmail(ctx, email, at)
 }
 
-func (a *adminSessionStore) RevokeSubject(ctx context.Context, subject string, at time.Time) (int, error) {
-	return a.s.RevokeRefreshBySubject(ctx, subject, at)
+func (a *adminSessionStore) RevokeSubject(ctx context.Context, connectorID, subject string, at time.Time) (int, error) {
+	return a.s.RevokeRefreshBySubject(ctx, connectorID, subject, at)
 }

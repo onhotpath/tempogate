@@ -53,7 +53,7 @@ func TestObserve(t *testing.T) {
 				{"consume_refresh", func() error { _, err := st.ConsumeRefresh(ctx, "x", "ui", now); return err }},
 				{"revoke_refresh", func() error { _, err := st.RevokeRefreshFamily(ctx, "family", now); return err }},
 				{"revoke_refresh", func() error { _, err := st.RevokeRefreshByEmail(ctx, "a@example.com", now); return err }},
-				{"revoke_refresh", func() error { _, err := st.RevokeRefreshBySubject(ctx, "sub", now); return err }},
+				{"revoke_refresh", func() error { _, err := st.RevokeRefreshBySubject(ctx, "google", "sub", now); return err }},
 				{"list_refresh_sessions", func() error { _, err := st.ListRefreshSessions(ctx, admin.SessionFilter{}, now); return err }},
 				{"save_browser_session", func() error { return st.SaveBrowserSession(ctx, oidc.BrowserSession{}) }},
 				{"lookup_browser_session", func() error { _, err := st.LookupBrowserSession(ctx, "x"); return err }},

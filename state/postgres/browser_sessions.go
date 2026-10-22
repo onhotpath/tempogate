@@ -18,9 +18,9 @@ var ErrDuplicateBrowserSession = errors.New("postgres: browser session with this
 
 func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO browser_sessions (sid_hash, subject, email, created_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		secret.Hash(bs.SID), bs.Subject, bs.Email, bs.CreatedAt, bs.ExpiresAt,
+		`INSERT INTO browser_sessions (sid_hash, connector_id, subject, email, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		secret.Hash(bs.SID), bs.ConnectorID, bs.Subject, bs.Email, bs.CreatedAt, bs.ExpiresAt,
 	)
 	if isUniqueViolation(err) {
 		return ErrDuplicateBrowserSession
@@ -36,11 +36,11 @@ func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) 
 func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.BrowserSession, error) {
 	bs := oidc.BrowserSession{SID: sid}
 	err := s.pool.QueryRow(ctx,
-		`SELECT subject, email, created_at, expires_at
+		`SELECT connector_id, subject, email, created_at, expires_at
 		 FROM browser_sessions
 		 WHERE sid_hash = $1`,
 		secret.Hash(sid),
-	).Scan(&bs.Subject, &bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
+	).Scan(&bs.ConnectorID, &bs.Subject, &bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return oidc.BrowserSession{}, oidc.ErrBrowserSessionNotFound
 	}

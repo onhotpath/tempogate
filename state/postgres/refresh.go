@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,7 +23,7 @@ var ErrDuplicateRefreshToken = errors.New("postgres: refresh token with this val
 // hash: the token itself is never stored, so the caller passes it in and
 // gets it back on the returned Refresh.
 const (
-	refreshFields  = `jti, client_id, subject, email, family_id, auth_time, created_at, expires_at`
+	refreshFields  = `jti, client_id, connector_id, subject, email, family_id, auth_time, created_at, expires_at`
 	refreshColumns = `token_hash, ` + refreshFields
 )
 
@@ -48,8 +49,8 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 			return errRevoked
 		}
 		_, err = tx.Exec(ctx,
-			`INSERT INTO refresh_tokens (`+refreshColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			secret.Hash(r.Token), r.JTI, r.ClientID, r.Subject, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
+			`INSERT INTO refresh_tokens (`+refreshColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			secret.Hash(r.Token), r.JTI, r.ClientID, r.ConnectorID, r.Subject, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
 		)
 		return err
 	})
@@ -158,19 +159,21 @@ func (s *Store) RevokeRefreshFamily(ctx context.Context, familyID string, at tim
 // case-insensitively for ASCII letters (emailMatches), and reports how many
 // live sessions it ended.
 func (s *Store) RevokeRefreshByEmail(ctx context.Context, email string, at time.Time) (int, error) {
-	return s.revokeFamiliesWhere(ctx, emailMatches, email, at)
+	return s.revokeFamiliesWhere(ctx, emailMatches, at, email)
 }
 
-// RevokeRefreshBySubject revokes every family of the subject, matched
-// exactly, and reports how many live sessions it ended.
-func (s *Store) RevokeRefreshBySubject(ctx context.Context, subject string, at time.Time) (int, error) {
-	return s.revokeFamiliesWhere(ctx, `subject = $1`, subject, at)
+// RevokeRefreshBySubject revokes every family of the upstream subject at
+// connectorID, both matched exactly, and reports how many live sessions it
+// ended.
+func (s *Store) RevokeRefreshBySubject(ctx context.Context, connectorID, subject string, at time.Time) (int, error) {
+	return s.revokeFamiliesWhere(ctx, `connector_id = $1 AND subject = $2`, at, connectorID, subject)
 }
 
-// revokeFamiliesWhere revokes the families with a token matching where. It
-// locks their refresh_families rows in family_id order, so two revocations
-// over overlapping families cannot deadlock, then revokes their tokens.
-func (s *Store) revokeFamiliesWhere(ctx context.Context, where, arg string, at time.Time) (int, error) {
+// revokeFamiliesWhere revokes the families with a token matching where,
+// whose parameters args bind from $1 (at follows them). It locks their
+// refresh_families rows in family_id order, so two revocations over
+// overlapping families cannot deadlock, then revokes their tokens.
+func (s *Store) revokeFamiliesWhere(ctx context.Context, where string, at time.Time, args ...any) (int, error) {
 	var live int
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		// #nosec G202 -- where is one of the constant predicates above, never input.
@@ -181,10 +184,10 @@ func (s *Store) revokeFamiliesWhere(ctx context.Context, where, arg string, at t
 			     ORDER BY family_id
 			     FOR UPDATE
 			 )
-			 UPDATE refresh_families f SET revoked_at = coalesce(f.revoked_at, $2)
+			 UPDATE refresh_families f SET revoked_at = coalesce(f.revoked_at, $`+strconv.Itoa(len(args)+1)+`)
 			 FROM locked WHERE f.family_id = locked.family_id
 			 RETURNING f.family_id`,
-			arg, at,
+			append(args, at)...,
 		)
 		if err != nil {
 			return err
@@ -223,20 +226,21 @@ func revokeTokens(ctx context.Context, tx pgx.Tx, families []string, at time.Tim
 // like SQLite) then auth_time.
 func (s *Store) ListRefreshSessions(ctx context.Context, f admin.SessionFilter, now time.Time) ([]admin.Session, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT family_id, client_id, subject, email, auth_time, created_at, expires_at
+		`SELECT family_id, client_id, connector_id, subject, email, auth_time, created_at, expires_at
 		 FROM refresh_tokens
-		 WHERE consumed_at IS NULL AND revoked_at IS NULL AND expires_at > $3
+		 WHERE consumed_at IS NULL AND revoked_at IS NULL AND expires_at > $4
 		   AND ($1::text = '' OR `+emailMatches+`)
-		   AND ($2::text = '' OR subject = $2)
+		   AND ($2::text = '' OR connector_id = $2)
+		   AND ($3::text = '' OR subject = $3)
 		 ORDER BY email COLLATE "C", auth_time`,
-		f.Email, f.Subject, now,
+		f.Email, f.ConnectorID, f.Subject, now,
 	)
 	if err != nil {
 		return nil, s.fail("list_refresh_sessions", fmt.Errorf("postgres: list refresh sessions: %w", err))
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (admin.Session, error) {
 		var rs admin.Session
-		err := r.Scan(&rs.FamilyID, &rs.ClientID, &rs.Subject, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt)
+		err := r.Scan(&rs.FamilyID, &rs.ClientID, &rs.ConnectorID, &rs.Subject, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt)
 		return rs, err
 	})
 	if err != nil {
@@ -247,6 +251,6 @@ func (s *Store) ListRefreshSessions(ctx context.Context, f admin.SessionFilter, 
 
 func scanRefresh(token string, row pgx.Row) (oidc.Refresh, error) {
 	r := oidc.Refresh{Token: token}
-	err := row.Scan(&r.JTI, &r.ClientID, &r.Subject, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
+	err := row.Scan(&r.JTI, &r.ClientID, &r.ConnectorID, &r.Subject, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
 	return r, err
 }
