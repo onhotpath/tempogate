@@ -67,17 +67,18 @@ You point Temporal at it with two settings, and you change no Temporal code.
 
 ## How it works
 
-```
-┌──────────────┐     OIDC      ┌────────────────────┐
-│ Temporal Web │ ─────────────▶│      tempogate     │ ──wraps──▶ Google OAuth2
-│      UI      │◀── our JWT ───│  (OIDC + OAuth2 AS) │
-└──────┬───────┘               └────────────────────┘
-       │ Bearer <tempogate JWT>          ▲
-       ▼                                 │
-┌──────────────┐         JWKS            │
-│  temporal-   │ ◀───────────────────────┘
-│  frontend    │  (stock default JWT ClaimMapper)
-└──────────────┘
+```mermaid
+flowchart LR
+    ui["Temporal Web UI"]
+    tg["tempogate<br/>OIDC provider + OAuth2 AS"]
+    google["Google OAuth2"]
+    fe["temporal-frontend<br/>stock default JWT ClaimMapper"]
+
+    ui -- "OIDC sign-in" --> tg
+    tg -- "wraps" --> google
+    tg -- "tempogate JWT" --> ui
+    ui -- "Bearer tempogate JWT" --> fe
+    tg -- "JWKS" --> fe
 ```
 
 1. The Web UI sends the browser to tempogate, and tempogate sends it to Google.

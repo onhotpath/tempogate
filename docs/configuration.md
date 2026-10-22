@@ -1,28 +1,28 @@
 # Configuration reference
 
-Every tempogate setting, its default, and when you need it.
+This page lists every tempogate setting, its default, and when you need it.
 
 ## How configuration is resolved
 
-Three layers, last wins:
+tempogate reads three layers, and the last layer wins:
 
-1. **Built-in defaults** (the [quick reference](#quick-reference) and the tables below).
-2. **An optional yaml file.**
+1. **Built-in defaults**, shown in the [quick reference](#quick-reference) and the tables below.
+2. **An optional YAML file.**
    Nested keys are normal YAML (`oidc: { issuer: ... }`).
-   Which file:
-   - `--config <path>`, accepted by every subcommand (`tempogate --config /etc/tempogate.yaml serve`), else
-   - the `TEMPOGATE_CONFIG` environment variable, else
+   tempogate loads the first file that applies:
+   - `--config <path>`, which every subcommand accepts (`tempogate --config /etc/tempogate.yaml serve`);
+   - the `TEMPOGATE_CONFIG` environment variable;
    - `application.yaml` in the working directory, if present.
-     Parent directories are **not** searched, so a file planted above the working directory cannot repoint the server.
+     tempogate does **not** search parent directories, so a file planted above the working directory cannot repoint the server.
 
-   A file named by `--config` or `TEMPOGATE_CONFIG` that cannot be read is fatal.
-   An `application.yaml` in the working directory that cannot be read (for example the image's `/home/nonroot` when the container runs under a uid other than the default `65532`) is skipped with a warning.
-   Run with `LOG_LEVEL=debug` to log which file was loaded.
-3. **Environment variables** - these **override** the file.
+   If tempogate cannot read a file named by `--config` or `TEMPOGATE_CONFIG`, it stops.
+   If it cannot read `application.yaml` in the working directory, it logs a warning and skips the file.
+   This occurs, for example, with the image's `/home/nonroot` when the container runs under a uid other than the default `65532`.
+   Run with `LOG_LEVEL=debug` to log which file tempogate loaded.
+3. **Environment variables.** They **override** the file.
 
-Environment is the recommended surface for containers and Kubernetes. Nested
-config keys flatten with a **`_`** separator: `oidc.google.client_id`
-becomes `OIDC_GOOGLE_CLIENT_ID`.
+Use environment variables for containers and Kubernetes.
+Nested keys flatten with a **`_`** separator: `oidc.google.client_id` becomes `OIDC_GOOGLE_CLIENT_ID`.
 
 ## Quick reference
 
@@ -93,8 +93,8 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `HTTP_LISTENER` | `127.0.0.1:8000` | `host:port` for the single public listener (OIDC/OAuth2 + `/healthz` + `/readyz`). The loopback default is unreachable through a container/Service — set `0.0.0.0:8000` in-cluster. |
-| `HTTP_TRUSTED_PROXIES` | _(empty)_ | Comma-separated CIDRs or addresses of reverse proxies in front of tempogate. Only for a connection from one of these is the client address taken from `X-Forwarded-For`. See [Abuse controls](#abuse-controls). |
+| `HTTP_LISTENER` | `127.0.0.1:8000` | `host:port` for the single public listener (OIDC/OAuth2 + `/healthz` + `/readyz`). The loopback default is not reachable through a container or Service; set `0.0.0.0:8000` in a cluster. |
+| `HTTP_TRUSTED_PROXIES` | _(empty)_ | Comma-separated CIDRs or addresses of reverse proxies in front of tempogate. tempogate takes the client address from `X-Forwarded-For` only for a connection from one of these. See [Abuse controls](#abuse-controls). |
 | `HTTP_RATE_LIMIT_AUTHORIZE` | `30` | Requests per minute per client address to `GET /authorize`. `0` disables. |
 | `HTTP_RATE_LIMIT_DEVICE_AUTHORIZATION` | `10` | Requests per minute per client address to `POST /device_authorization`. `0` disables. |
 | `HTTP_RATE_LIMIT_DEVICE_VERIFICATION` | `20` | Requests per minute per client address to `POST /device` (the user_code form). `0` disables. |
@@ -102,40 +102,50 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 ### HTTP server hardening
 
-Applied identically to the public and the admin listener.
+The public and the admin listener use the same settings.
 Durations are Go durations; `0` disables that timeout (not recommended).
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `SERVER_READ_HEADER_TIMEOUT` | `10s` | Time allowed to read the request headers. Bounds slow-header (slowloris) clients. |
-| `SERVER_READ_TIMEOUT` | `15s` | Time allowed to read the whole request, headers and body. Bounds slow-body clients; request bodies are small form posts, capped at 1 MiB. |
-| `SERVER_WRITE_TIMEOUT` | `30s` | Time from the end of the request headers until the response is written. Covers the handler itself, so it must outlast the slowest legitimate request: the Google callback's code exchange and JWKS fetch. No endpoint streams or long-polls (device-flow polling returns immediately). |
+| `SERVER_READ_HEADER_TIMEOUT` | `10s` | Time to read the request headers. Limits slow-header (slowloris) clients. |
+| `SERVER_READ_TIMEOUT` | `15s` | Time to read the whole request, headers and body. Limits slow-body clients; request bodies are small form posts, capped at 1 MiB. |
+| `SERVER_WRITE_TIMEOUT` | `30s` | Time from the end of the request headers until the response is written. It includes the handler, so it must be longer than the slowest legitimate request: the code exchange and JWKS fetch of the Google callback. No endpoint streams or long-polls (device-flow polling returns immediately). |
 | `SERVER_IDLE_TIMEOUT` | `60s` | How long an idle keep-alive connection stays open between requests. |
-| `SERVER_MAX_HEADER_BYTES` | `16384` | Upper bound on the request header block (net/http adds 4 KiB of slack). Larger requests get `431 Request Header Fields Too Large`. `0` falls back to the net/http default of 1 MiB. |
-| `SERVER_SHUTDOWN_TIMEOUT` | `15s` | Grace in-flight requests get after `SIGTERM`; connections still active afterwards are force-closed (logged as `graceful shutdown: context deadline exceeded`); `0` force-closes immediately. Keep it below the pod's `terminationGracePeriodSeconds` (Kubernetes default `30s`) and under the process's 1-minute stop ceiling. |
+| `SERVER_MAX_HEADER_BYTES` | `16384` | Maximum size of the request header block (net/http adds 4 KiB of slack). Larger requests get `431 Request Header Fields Too Large`. `0` uses the net/http default of 1 MiB. |
+| `SERVER_SHUTDOWN_TIMEOUT` | `15s` | Time that in-flight requests get after `SIGTERM`. tempogate then force-closes connections that are still active (logged as `graceful shutdown: context deadline exceeded`); `0` force-closes at once. Keep it below the pod's `terminationGracePeriodSeconds` (Kubernetes default `30s`) and below the 1-minute stop limit of the process. |
 
 ### Abuse controls
 
-The public endpoints accept anonymous requests, and `/authorize` and `/device_authorization` write a row per request, so tempogate bounds both the size and the rate of what an unauthenticated caller can send.
+The public endpoints accept anonymous requests, and `/authorize` and `/device_authorization` write a row per request.
+tempogate thus limits the size and the rate of what an unauthenticated caller can send.
 
 **Parameter caps.**
-Oversized parameters are refused with `400 invalid_request` before anything is stored:
-`state` and `nonce` at most 512 bytes, `scope` at most 1 KiB, `client_id` at most 256 bytes, `redirect_uri` at most 2 KiB, and `code_challenge` exactly 43 base64url characters (an S256 challenge).
-At `/token`, `code`, `refresh_token`, `device_code` and `code_verifier` are capped at 1 KiB, a generous ceiling over the 43-character values tempogate issues.
+tempogate refuses an oversized parameter with `400 invalid_request` before it stores anything:
+
+| Parameter | Maximum |
+| --- | --- |
+| `state`, `nonce` | 512 bytes |
+| `scope` | 1 KiB |
+| `client_id` | 256 bytes |
+| `redirect_uri` | 2 KiB |
+| `code_challenge` | Exactly 43 base64url characters (an S256 challenge) |
+| `code`, `refresh_token`, `device_code`, `code_verifier` at `/token` | 1 KiB, well above the 43-character values that tempogate issues |
 
 **Rate limits.**
-Each `HTTP_RATE_LIMIT_*` endpoint allows a burst of that many requests per client address, refilling evenly over a minute.
-IPv6 clients are counted per /64.
-A request over the budget gets `429 Too Many Requests` with `Retry-After` (seconds until one more request is allowed) and, on the OAuth endpoints, an RFC 6749 error body `{"error": "temporarily_unavailable", ...}`.
-The budgets live in process memory: they reset on restart, and each replica would count separately.
-A fronting proxy or WAF may rate-limit instead; set the matching limit to `0` to leave it to the proxy.
-The Temporal Web UI calls `/token` from its server for every user's sign-in and refresh, so all UI users share the UI server's `/token` budget: raise `HTTP_RATE_LIMIT_TOKEN` if many users sign in at once.
+
+- Each `HTTP_RATE_LIMIT_*` endpoint allows a burst of that many requests per client address, and refills evenly over one minute.
+- IPv6 clients count per /64.
+- A request over the budget gets `429 Too Many Requests` with `Retry-After` (seconds until one more request is allowed). On the OAuth endpoints the body is an RFC 6749 error, `{"error": "temporarily_unavailable", ...}`.
+- The budgets are in process memory. They reset on restart, and each replica counts separately.
+- To let a fronting proxy or WAF do the rate limit, set the matching limit to `0`.
+- The Temporal Web UI calls `/token` from its server for the sign-in and refresh of every user. All UI users thus share the `/token` budget of the UI server; raise `HTTP_RATE_LIMIT_TOKEN` if many users sign in at the same time.
 
 **Client address behind a proxy.**
-By default the client address is the TCP peer.
-Behind an ingress or load balancer every request then comes from the proxy, so all clients share one budget and one noisy client can lock everyone out.
-Set `HTTP_TRUSTED_PROXIES` to the proxies' addresses (for a Kubernetes ingress controller, typically the pod CIDR) to fix this.
-For a connection from a trusted proxy, tempogate walks `X-Forwarded-For` from the right and uses the first address that is not itself a trusted proxy: entries further left were written by the client and are ignored.
+By default, the client address is the TCP peer.
+Behind an ingress or a load balancer, every request then comes from the proxy: all clients share one budget, and one noisy client can lock out everyone.
+To prevent this, set `HTTP_TRUSTED_PROXIES` to the proxy addresses (for a Kubernetes ingress controller, usually the pod CIDR).
+For a connection from a trusted proxy, tempogate reads `X-Forwarded-For` from the right and uses the first address that is not a trusted proxy.
+It ignores the entries further left, because the client wrote them.
 A connection from any other address is its own client, whatever `X-Forwarded-For` it sends.
 Never list a range that clients can connect from directly, or they can choose their own budget.
 
@@ -143,22 +153,23 @@ Never list a range that clients can connect from directly, or they can choose th
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `API_DOCS_ENABLED` | `false` | Dev only. Serves the OpenAPI document (`/openapi.json`, `/openapi.yaml`), the docs page (`/docs`) and the JSON schemas (`/schemas/*`) on the public listener, under the OIDC base path. `serve` refuses to start with it on unless `OIDC_ISSUER` is plain `http://`, so it cannot be enabled in an https deployment. The admin listener never serves them, whatever this says. Off, they return `404` and response bodies carry no `$schema` link. Anywhere else, use `tempogate gen-oas` (public spec) and `tempogate gen-oas --admin` (admin spec), which work either way. |
+| `API_DOCS_ENABLED` | `false` | Dev only. Serves the OpenAPI document (`/openapi.json`, `/openapi.yaml`), the docs page (`/docs`) and the JSON schemas (`/schemas/*`) on the public listener, under the OIDC base path. `serve` refuses to start with it on unless `OIDC_ISSUER` is plain `http://`, so an https deployment cannot enable it. The admin listener never serves them. When off, they return `404`, and response bodies have no `$schema` link. In all other cases, use `tempogate gen-oas` (public spec) and `tempogate gen-oas --admin` (admin spec), which always work. |
 
 ### Admin API
 
-The admin API (`/admin/keys` for integration keys, `/admin/signing-keys` for [signing-key retirement](#revocation-and-signing-key-retirement), `/admin/sessions` for [refresh-token sessions](#refresh-token-sessions), plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
+The admin API has its own listener, never the public one.
+It serves `/admin/keys` for integration keys, `/admin/signing-keys` for [signing-key retirement](#revocation-and-signing-key-retirement), `/admin/sessions` for [refresh-token sessions](#refresh-token-sessions), and the `/admin/healthz` liveness probe.
 Every `/admin/*` route except `/admin/healthz` requires `Authorization: Bearer <admin token>`.
-The same listener serves Prometheus [`GET /metrics`](#metrics), outside `/admin/*` and without the token.
-Only the token's SHA-256 digest is configured, so the token itself never sits in env, yaml, or a ConfigMap.
+The same listener serves Prometheus [`GET /metrics`](#metrics), outside `/admin/*` and with no token.
+You configure only the SHA-256 digest of the token, so the token itself is never in env, YAML or a ConfigMap.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `ADMIN_LISTENER` | `127.0.0.1:8081` | `host:port` for the admin listener. Keep it on loopback unless you must manage keys from another host; a non-loopback bind also needs `ADMIN_ALLOWED_HOSTS`. |
-| `ADMIN_TOKEN_SHA256` | _(empty)_ | Comma-separated lowercase-hex SHA-256 digests of the accepted admin tokens. List two during a rotation, then drop the old one. **Empty locks the admin API:** every route but `/admin/healthz` answers 401 and tempogate logs a startup warning. A malformed entry makes `serve` refuse to boot. |
-| `ADMIN_ALLOWED_HOSTS` | `127.0.0.1:<port>,localhost:<port>,[::1]:<port>` | Comma-separated `host[:port]` values accepted in the `Host` header; an entry without a port matches any port. Other hosts get **421 Misdirected Request** before the token is checked, which defeats DNS rebinding from a browser. The default takes `<port>` from `ADMIN_LISTENER` and names only loopback, even for a `0.0.0.0` bind: **set it to the names your callers use** (e.g. `tempogate-admin.tempogate.svc:8081`). |
-| `ADMIN_ALLOW_SYSTEM_GRANTS` | `false` | Allow minting keys for the `temporal-system` namespace. Temporal treats a `temporal-system` role as cluster-wide, so these grants answer 403 unless this is `true`. Enable it only while you mint the keys that need it. |
-| `ADMIN_KEYS_MAX_TTL` | `2160h` (90 days) | Go duration; the furthest in the future an integration key's `expires_at` may lie. `expires_at` is required, and a value in the past or beyond this cap answers 400. Temporal ignores revocation, so this cap bounds how long a leaked key keeps working there unless you [retire its signing key](#revocation-and-signing-key-retirement). Must be positive. |
+| `ADMIN_TOKEN_SHA256` | _(empty)_ | Comma-separated lowercase-hex SHA-256 digests of the accepted admin tokens. During a rotation, list two, then remove the old one. **Empty locks the admin API:** every route except `/admin/healthz` answers 401, and tempogate logs a startup warning. A malformed entry stops `serve` at boot. |
+| `ADMIN_ALLOWED_HOSTS` | `127.0.0.1:<port>,localhost:<port>,[::1]:<port>` | Comma-separated `host[:port]` values accepted in the `Host` header; an entry without a port matches any port. Other hosts get **421 Misdirected Request** before the token check, which defeats DNS rebinding from a browser. The default takes `<port>` from `ADMIN_LISTENER` and names only loopback, even for a `0.0.0.0` bind: **set it to the names your callers use** (e.g. `tempogate-admin.tempogate.svc:8081`). |
+| `ADMIN_ALLOW_SYSTEM_GRANTS` | `false` | Allow keys for the `temporal-system` namespace. Temporal treats a `temporal-system` role as cluster-wide, so these grants answer 403 unless this is `true`. Enable it only while you mint the keys that need it. |
+| `ADMIN_KEYS_MAX_TTL` | `2160h` (90 days) | Go duration; the latest `expires_at` that an integration key can have. `expires_at` is required, and a value in the past or beyond this cap answers 400. Temporal ignores revocation, so this cap limits how long a leaked key works there, unless you [retire its signing key](#revocation-and-signing-key-retirement). Must be positive. |
 
 Generate a token and its digest:
 
@@ -175,75 +186,86 @@ curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
   http://127.0.0.1:8081/admin/keys
 ```
 
-Every mint and revoke is logged as one `admin audit` line (`action`, `outcome`, `id`, `jti`, `namespace`, `role`, `owner`, `caller`, `remote_addr`).
-Every signing-key retirement is logged the same way with `action=retire_signing_key`, the `kid` and `force`.
-Every session revoke is logged with `action=revoke_sessions`, the selector (`email`, `subject` or `family_id`) and `revoked`, the number of live sessions it ended.
-Rejected requests are logged as `admin request rejected` at warn level with a `reason`.
+tempogate logs each admin change as one `admin audit` line:
+
+- A key mint or revoke has `action`, `outcome`, `id`, `jti`, `namespace`, `role`, `owner`, `caller` and `remote_addr`.
+- A signing-key retirement has `action=retire_signing_key`, the `kid` and `force`.
+- A session revoke has `action=revoke_sessions`, the selector (`email`, `subject` or `family_id`) and `revoked`, the number of live sessions it ended.
+
+A rejected request logs `admin request rejected` at warn level, with a `reason`.
 `caller` is the first 8 hex characters of the matched digest, so you can tell rotated tokens apart without logging them.
 
 ### Signing keys
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `KEYS_RETIREMENT_GRACE` | `4h` | Go duration; how long a retired signing key stays in `/.well-known/jwks.json` and keeps verifying. After it, every token signed by that key stops verifying, at tempogate and (once it refreshes its JWKS) at Temporal, whatever its `exp`. The default matches the 4 h access-token TTL, so tokens minted just before a retirement live out their natural life. `0` unpublishes a key the moment it is retired. Must not be negative. |
-| `KEYS_RELOAD_INTERVAL` | `30s` | Go duration; how often `serve` re-reads signing keys from the state store, so `tempogate keys generate --force` and `tempogate keys retire` run from another process take effect without a restart. A retire through the admin API applies immediately. Must be positive. |
-| `KEYS_PUBLISH_DELAY` | `5m` | Go duration; how long a new signing key is published in `/.well-known/jwks.json` before it signs. Until then the previous non-retired key keeps signing; when there is no other non-retired key (fresh install, or every key retired) the new key signs at once. **Must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`** (see [below](#why-new-keys-wait-before-signing)). `0` signs with a new key as soon as `serve` loads it. Must not be negative. |
+| `KEYS_RETIREMENT_GRACE` | `4h` | Go duration; how long a retired signing key stays in `/.well-known/jwks.json` and keeps verifying. After it, no token signed by that key verifies, whatever its `exp` ([details](#revocation-and-signing-key-retirement)). The default equals the 4 h access-token TTL, so tokens minted just before a retirement live out their natural life. `0` unpublishes a key at retirement. Must not be negative. |
+| `KEYS_RELOAD_INTERVAL` | `30s` | Go duration; how often `serve` re-reads signing keys from the state store, so `tempogate keys generate --force` and `tempogate keys retire` from another process apply with no restart. A retire through the admin API applies at once. Must be positive. |
+| `KEYS_PUBLISH_DELAY` | `5m` | Go duration; how long a new signing key is in `/.well-known/jwks.json` before it signs. Until then the previous non-retired key signs; with no other non-retired key (fresh install, or every key retired) the new key signs at once. **Must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`** ([why](#why-new-keys-wait-before-signing)). `0` signs as soon as `serve` loads the key. Must not be negative. |
 
 ### State store
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STATE_DRIVER` | `sqlite` | `sqlite` (one replica, a file on a volume) or `postgres` (one or more replicas over a shared PostgreSQL database). Every subcommand that opens the store (`serve`, `migrate`, `keys`, `sessions`) uses the same setting. |
+| `STATE_DRIVER` | `sqlite` | `sqlite` (one replica, a file on a volume) or `postgres` (one or more replicas on a shared PostgreSQL database). Every subcommand that opens the store (`serve`, `migrate`, `keys`, `sessions`) uses this setting. |
 | `STATE_REAPER_INTERVAL` | `5m` | Go duration; how often `serve` deletes expired state (see below). `0` disables the reaper. |
 
 Both backends hold the same data with the same guarantees (the contract in `state/doc.go`, checked against both by the `state/storetest` suite), and `tempogate migrate` creates or upgrades either schema.
-Moving an existing installation from one backend to the other is not supported yet.
+You cannot yet move an installation from one backend to the other.
 
-Refresh tokens (including consumed ones), authorization codes, device codes and verification-page session ids are stored only as their SHA-256, so a copy of the database (a backup, a volume snapshot) holds nothing a client could present.
-The device flow's `user_code` is the exception: it is short enough that its hash would be reversed by trying every code, and approving it needs a signed-in browser session anyway.
+**Secrets at rest.**
+Refresh tokens (consumed ones included), authorization codes, device codes and verification-page session ids are stored only as their SHA-256, so a database copy (a backup, a volume snapshot) holds nothing a client can present.
+The device flow's `user_code` is the exception: it is short enough to reverse its hash by trying every code, and its approval needs a signed-in browser session anyway.
 
-`serve` deletes expired rows every `STATE_REAPER_INTERVAL`, starting at boot: pending authorization requests, authorization codes, device codes and verification-page sessions once they expire, and denylisted integration-key ids an hour after the key's `expires_at` (keys without one stay denylisted).
-Refresh tokens go a whole session (family) at a time, and only once every token in it is dead: the session is past `OIDC_REFRESH_MAX_LIFETIME`, or every token has expired and was rotated or revoked.
-Until then rotated tokens are kept, so presenting one is still detected as reuse.
-Rows are deleted in batches so a large sweep does not hold up sign-ins; counts are logged at `debug`, failures at `warn`.
-With Postgres every replica runs the reaper; each batch skips rows another replica (or a request) has locked, so they share the work without coordination.
+**Reaper.**
+`serve` deletes expired rows every `STATE_REAPER_INTERVAL`, starting at boot:
+
+- pending authorization requests, authorization codes, device codes and verification-page sessions, when they expire;
+- denylisted integration-key ids, one hour after the key's `expires_at` (keys without one stay denylisted);
+- refresh tokens, one whole session (family) at a time, only when every token in it is dead: the session is past `OIDC_REFRESH_MAX_LIFETIME`, or every token expired and was rotated or revoked.
+  Until then tempogate keeps rotated tokens, so it still detects their reuse.
+
+The reaper deletes in batches, so a large sweep does not delay sign-ins, and logs counts at `debug` and failures at `warn`.
+With Postgres every replica runs it, and each batch skips rows that another replica (or a request) has locked, so they share the work with no coordination.
 
 #### SQLite
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. See below for how its contents are protected. |
-| `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise; to run more than one replica use `STATE_DRIVER=postgres`. |
-| `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before erroring. |
+| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (consumed ones included, kept to detect reuse). Use durable storage: if you lose it, the signing keys rotate and every issued refresh token becomes invalid. See below for how tempogate protects its contents. |
+| `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise it; for more than one replica, use `STATE_DRIVER=postgres`. |
+| `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before it fails. |
 
-The database file and its `-wal` / `-shm` companions are created (and on every start, reset to) mode `0600`, whatever the umask.
+The database file and its `-wal` / `-shm` companions are created with, and reset on every start to, mode `0600`, whatever the umask.
 A missing state directory is created `0700`.
-An existing directory, such as a mounted volume, is left as it is; tempogate logs a warning if other users can enter it (group access, as a Kubernetes `fsGroup` grants, is expected and not reported).
+An existing directory, such as a mounted volume, stays as it is; tempogate warns if other users can enter it (group access, as a Kubernetes `fsGroup` grants, is expected and not reported).
 
-Upgrading to migration `0012` deletes the existing rows of the tables whose secrets became hashes, because SQLite cannot compute the hashes: every user signs in once more after the upgrade.
+Migration `0012` deletes the existing rows of the tables whose secrets became hashes, because SQLite cannot compute the hashes: every user signs in again after the upgrade.
 
 #### PostgreSQL
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `STATE_POSTGRES_DSN` | _(empty)_ | Connection string, URL (`postgres://user:pass@host:5432/db?sslmode=verify-full`) or keyword/value form. Set this or `STATE_POSTGRES_DSN_FILE`, not both. |
-| `STATE_POSTGRES_DSN_FILE` | _(empty)_ | Path to a file holding the connection string (surrounding whitespace ignored), e.g. a mounted Kubernetes Secret. It is read again for every new connection, so a rotated password applies without a restart; the pool settings below are read at startup. |
+| `STATE_POSTGRES_DSN_FILE` | _(empty)_ | Path to a file that holds the connection string (surrounding whitespace ignored), e.g. a mounted Kubernetes Secret. tempogate reads it again for each new connection, so a rotated password applies with no restart. It reads the pool settings below only at startup. |
 | `STATE_POSTGRES_MAX_CONNS` | `10` | Connections per replica, at least `2`. Size the server's `max_connections` (or the pooler) for replicas × this, plus one LISTEN connection per replica. |
-| `STATE_POSTGRES_CONN_MAX_IDLE_TIME` | `30m` | Go duration; pooled connections idle longer than this are closed. |
-| `STATE_POSTGRES_LISTEN_DSN` | the main DSN | Connection string for the one long-lived `LISTEN` connection each replica holds (see below). Set it to reach Postgres directly when the main DSN goes through a transaction-mode pooler. |
-| `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE` | `false` | Development only: let tempogate connect to a non-loopback host without `sslmode=verify-full`. Logs a warning at startup. |
+| `STATE_POSTGRES_CONN_MAX_IDLE_TIME` | `30m` | Go duration; tempogate closes pooled connections that stay idle for longer than this. |
+| `STATE_POSTGRES_LISTEN_DSN` | the main DSN | Connection string for the one long-lived `LISTEN` connection of each replica (see below). Set it to reach Postgres directly when the main DSN goes through a transaction-mode pooler. |
+| `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE` | `false` | Development only: lets tempogate connect to a non-loopback host without `sslmode=verify-full`. Logs a warning at startup. |
 
 PostgreSQL 15 is the minimum; CI tests 15 and 18, the oldest and newest majors with community support.
 Managed services (RDS, Cloud SQL, Azure Database for PostgreSQL) work like any other server.
-CockroachDB and other Postgres-compatible databases are not supported.
+tempogate does not support CockroachDB or other Postgres-compatible databases.
 
-Run `tempogate migrate` before `serve`, with a role that may create tables in the database's default schema; `serve`, `keys` and `sessions` only need to read and write rows.
-Migrations run in one transaction under a Postgres advisory lock, so replicas (or init containers) racing to migrate apply each version once, and a migration that fails leaves the schema as it was.
+Run `tempogate migrate` before `serve`, with a role that can create tables in the database's default schema; `serve`, `keys` and `sessions` only read and write rows.
+Migrations run in one transaction under a Postgres advisory lock, so concurrent runs (replicas, init containers) apply each version once, and a failed migration leaves the schema as it was.
 
 **Connection security.**
-`serve`, `migrate` and every other subcommand refuse a connection string that could reach a remote server without authenticating it: every host must use `sslmode=verify-full`, with the server's CA available (`sslrootcert=/path/ca.pem`, or the system roots).
+`serve`, `migrate` and every other subcommand refuse a connection string that can reach a remote server without authenticating it.
+Every host must use `sslmode=verify-full`, with the server's CA available (`sslrootcert=/path/ca.pem`, or the system roots).
 `require` and `verify-ca` encrypt but accept an impostor, and `prefer` (the libpq default) silently falls back to plain text.
-Unix sockets and loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) are exempt, and `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE=true` relaxes the check for development stacks, where the database is a container on a private network.
+Unix sockets and loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) are exempt.
+For development stacks, where the database is a container on a private network, `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE=true` relaxes the check.
 Also add `require_auth=scram-sha-256`, so a server (or an attacker in the middle) cannot downgrade the login to MD5 or a cleartext password:
 
 ```text
@@ -251,81 +273,83 @@ postgres://tempogate@db.example.com:5432/tempogate?sslmode=verify-full&sslrootce
 ```
 
 **Change notifications.**
-Key generation and retirement and integration-key revocation send a Postgres `NOTIFY` in the same transaction, and every replica holds one `LISTEN` connection, so all replicas reload keys and refuse a revoked integration key within moments instead of within `KEYS_RELOAD_INTERVAL` and the 30 s denylist cache.
+Key generation, key retirement and integration-key revocation send a Postgres `NOTIFY` in the same transaction, and every replica holds one `LISTEN` connection.
+All replicas thus reload keys and refuse a revoked integration key within moments, not within `KEYS_RELOAD_INTERVAL` and the 30 s denylist cache.
 Token requests never notify.
-The listener reconnects with backoff (logged at `warn`) and then re-reads what it may have missed; the periodic reloads stay in place either way, so a lost listener only makes changes slower to arrive, never lost.
+A lost listener reconnects with backoff (logged at `warn`) and re-reads what it may have missed; the periodic reloads stay as a backstop, so changes can arrive later but are never lost.
 
 **Behind PgBouncer.**
-In transaction pooling mode, set `max_prepared_statements` (PgBouncer 1.21 or later) to a non-zero value, or add `default_query_exec_mode=exec` to `STATE_POSTGRES_DSN`, because tempogate's driver prepares statements.
-Transaction pooling cannot hold a `LISTEN`, so point `STATE_POSTGRES_LISTEN_DSN` at the database directly (or at a session-mode pool).
-Migrations and first-boot key generation use transaction-level advisory locks, which work through a transaction pooler.
+
+- In transaction pooling mode, set `max_prepared_statements` (PgBouncer 1.21 or later) to a non-zero value, or add `default_query_exec_mode=exec` to `STATE_POSTGRES_DSN`, because tempogate's driver prepares statements.
+- Transaction pooling cannot hold a `LISTEN`, so point `STATE_POSTGRES_LISTEN_DSN` at the database directly (or at a session-mode pool).
+- Migrations and first-boot key generation use transaction-level advisory locks, which work through a transaction pooler.
 
 **Several replicas.**
-Every replica must share `OIDC_SESSION_SIGNING_KEY` and the rest of the configuration; no sticky sessions are needed, because all flow state is in the database.
-On an empty database, replicas starting together generate one signing key between them.
-Rate limits (`HTTP_RATE_LIMIT_*`) are counted per replica, so the effective limit is replicas × the configured value.
-The Helm chart does not offer this mode yet: it still runs one replica on SQLite.
+
+- Every replica must share `OIDC_SESSION_SIGNING_KEY` and the rest of the configuration. You need no sticky sessions, because all flow state is in the database.
+- On an empty database, replicas that start together generate one signing key between them.
+- Each replica counts rate limits (`HTTP_RATE_LIMIT_*`) separately, so the effective limit is replicas × the configured value.
+- The Helm chart does not offer this mode yet: it still runs one replica on SQLite.
 
 ### Signing-key encryption
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `KEYS_ENCRYPTION_KEY` | _(empty)_ | Base64-encoded 32-byte key-encryption key (KEK). When set, the private signing key is stored AES-256-GCM encrypted under it instead of as plain PEM. Generate once with `openssl rand -base64 32` and supply via a Secret. |
-| `KEYS_ENCRYPTION_KEY_FILE` | _(empty)_ | Path to a file holding the same base64 value (surrounding whitespace ignored), e.g. a mounted Kubernetes Secret. Set at most one of the two. |
+| `KEYS_ENCRYPTION_KEY` | _(empty)_ | Base64-encoded 32-byte key-encryption key (KEK). When set, tempogate stores the private signing key AES-256-GCM encrypted under it, not as plain PEM. Generate it once with `openssl rand -base64 32` and supply it through a Secret. |
+| `KEYS_ENCRYPTION_KEY_FILE` | _(empty)_ | Path to a file that holds the same base64 value (surrounding whitespace ignored), e.g. a mounted Kubernetes Secret. Set at most one of the two. |
 
-Without a KEK the signing key is readable by anyone who can read the database, and with it they can mint tokens Temporal accepts.
-With a KEK, the database alone is not enough: keep the KEK somewhere a database backup does not go.
+Without a KEK, anyone who can read the database can mint tokens that Temporal accepts.
+With one, the database alone is not enough: keep the KEK where database backups do not go.
 
-- New keys (the first boot, `tempogate keys generate`) are written encrypted.
-- Keys stored before the KEK was set keep working, and `tempogate serve` warns about them. Encrypt them once with `tempogate keys encrypt` (safe to repeat; run it in the serving pod in Kubernetes, e.g. `kubectl exec deploy/tempogate -- /tempogate keys encrypt`).
-- Once a key is encrypted, `tempogate serve` refuses to start without the KEK, or with a different one, and says so.
-  `tempogate keys generate`, `keys list` and `keys retire` read the stored keys too, so they need the same KEK, and a running server keeps its loaded keys if a reload cannot open them.
-- Encrypted rows are bound to their key id, so they cannot be swapped between rows.
-- There is no KEK rotation yet. Losing the KEK loses the signing keys: remove the `keypairs` rows and restart to mint a new key, after which every token issued before stops validating.
-- Rolling back to a release without KEK support fails at startup once a key is encrypted.
+- tempogate writes new keys (the first boot, `tempogate keys generate`) encrypted.
+- Keys stored before you set the KEK keep working, and `tempogate serve` warns about them. Encrypt them once with `tempogate keys encrypt`, which is safe to repeat. In Kubernetes, run it in the serving pod, e.g. `kubectl exec deploy/tempogate -- /tempogate keys encrypt`.
+- When a key is encrypted, `tempogate serve` refuses to start without the KEK, or with a different one, and tells you why.
+  `tempogate keys generate`, `keys list` and `keys retire` also read the stored keys, so they need the same KEK. A running server keeps its loaded keys if a reload cannot open them.
+- Encrypted rows are bound to their key id, so nobody can swap them between rows.
+- There is no KEK rotation yet. If you lose the KEK, you lose the signing keys: remove the `keypairs` rows and restart to mint a new key. After that, no token issued before validates.
+- A rollback to a release without KEK support fails at startup when a key is encrypted.
 
 ### OIDC — server identity and Google federation
 
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `OIDC_ISSUER` | for real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer`, derives `jwks_uri`. May include a path for [sub-path hosting](#sub-path-hosting). **Must be `https://`** unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`): `tempogate serve` refuses to start otherwise. |
-| `OIDC_ALLOW_INSECURE_ISSUER` | no | `false` | **Development only.** Lets `serve` start with a plain-http `OIDC_ISSUER` on a non-loopback host (e.g. the docker-compose demo's `http://tempogate:8000`), logging a warning. Relying parties fetch the discovery document and signing keys from the issuer, so over plain http anyone on the path can substitute keys. `migrate`, `keys` and `version` never check the issuer. |
-| `OIDC_CLIENTS` | for any login | _(empty)_ | Comma-separated `id:redirect_uri`. The first `:` splits id from URI, so the URI keeps its scheme. Each value is an **exact** redirect URI, never a prefix: see [Redirect URI registration](#redirect-uri-registration). Repeat an id to register several URIs. An empty value (`tempogate-device:`) registers a device-only client. **Every client here is public - PKCE is mandatory.** Register the loopback CLI as `tempogate-cli:http://127.0.0.1/callback`; the device flow additionally needs `tempogate-device:` and `tempogate-device-ui:<issuer>/device/sso-callback` (see [docs/cli-device-login.md](cli-device-login.md)); the server refuses to start if `tempogate-device-ui` is not registered for that exact callback. Invalid entries stop the server at startup. |
-| `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | no | `false` | Dev only. Allows plain-`http` redirect URIs for non-loopback hosts in `OIDC_CLIENTS` (e.g. `http://temporal-ui:8080/auth/sso/callback` in a local Docker Compose stack). Leave it off in production: a code sent over plain http to a remote host can be read on the network. |
-| `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. The deliberately-separate, auditable opt-in that promotes a registered client to **confidential** (the PKCE carve-out) — e.g. the Temporal Web UI, which does not implement PKCE; also `tempogate-device-ui`, which tempogate uses as a client of itself when bouncing the verification page through Google SSO. An entry for an unregistered id fails fast. See [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md). |
-| `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated, exact-match email-domain gate applied to Google's verified email after sign-in, and re-applied to the session's email on every refresh: removing a domain ends its users' sessions at their next refresh (and revokes them). **Empty means nobody is admitted.** |
-| `OIDC_ALLOWED_HOSTED_DOMAINS` | recommended | _(empty)_ | Comma-separated Google Workspace domains ("Workspace mode"). When set, Google's `id_token` must carry an `hd` (hosted domain) claim in this list, on top of `email_verified` and `OIDC_ALLOWED_DOMAINS`. Exact, case-insensitive match. Empty keeps the email-domain-only gate and logs a warning at startup. See [Hosted domain (Workspace mode)](#hosted-domain-workspace-mode). |
-| `OIDC_AUTHZ_RULES_<n>` | this or the next | _(none)_ | Indexed list (`OIDC_AUTHZ_RULES_0`, `OIDC_AUTHZ_RULES_1`, ...; YAML `oidc.authz.rules`) of rules `"<selector>=<namespace>:<role>[,...]"` that decide which Temporal permissions a signed-in person's access token carries. See [Authorization](#authorization). |
-| `OIDC_AUTHZ_DEFAULT_PERMISSIONS` | this or the previous | _(empty)_ | Comma-separated permissions for admitted people no rule matches; empty denies them (`access_denied`, no token). **`serve` refuses to start when this and the rules are both empty.** `temporal-system:admin` keeps the behaviour of releases without rules and logs a warning. See [Upgrading to deny-by-default authorization](#upgrading-to-deny-by-default-authorization). |
-| `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; lifetime of each access token. This is also the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. ID tokens always live 5 minutes. |
-| `OIDC_ACCESS_TOKEN_AUDIENCE` | no | `temporal` | The `aud` of every access token, integration keys included. Set Temporal's `global.authorization.audience` (Temporal v1.29.0+) to the same value so the frontend refuses tokens minted for anything else. Must not be empty. See [Access tokens and ID tokens](#access-tokens-and-id-tokens). |
+| `OIDC_ISSUER` | for real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer`, and the base of `jwks_uri`. Can include a path ([sub-path hosting](#sub-path-hosting)). **Must be `https://`** unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`), or `tempogate serve` refuses to start. |
+| `OIDC_ALLOW_INSECURE_ISSUER` | no | `false` | **Development only.** Lets `serve` start, with a warning, on a plain-http `OIDC_ISSUER` with a non-loopback host (e.g. the docker-compose demo's `http://tempogate:8000`). Over plain http, anyone on the path can substitute the discovery document and signing keys. `migrate`, `keys` and `version` never check the issuer. |
+| `OIDC_CLIENTS` | for any login | _(empty)_ | Comma-separated `id:redirect_uri`; the first `:` splits the id from the URI. Each value is an **exact** redirect URI, never a prefix ([Redirect URI registration](#redirect-uri-registration)). Repeat an id for several URIs; an empty value (`tempogate-device:`) registers a device-only client. **Every client here is public, and PKCE is mandatory.** Register the loopback CLI as `tempogate-cli:http://127.0.0.1/callback`. The [device flow](cli-device-login.md) also needs `tempogate-device:` and `tempogate-device-ui:<issuer>/device/sso-callback`, and `serve` refuses to start without the latter. Invalid entries stop the server at startup. |
+| `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | no | `false` | Dev only. Allows plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. `http://temporal-ui:8080/auth/sso/callback` in a local Docker Compose stack). Keep it off in production: anyone on the network can read a code sent over plain http. |
+| `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. A separate, auditable opt-in that makes a registered client **confidential** (the [PKCE carve-out](pkce-and-confidential-clients.md)): the Temporal Web UI, which does not implement PKCE, and `tempogate-device-ui`, tempogate's own client for the device verification page's Google SSO. An entry for an unregistered id fails fast. |
+| `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated email domains, exact match, checked on Google's verified email at sign-in and on every [refresh](#refresh-token-sessions). **Empty admits nobody.** |
+| `OIDC_ALLOWED_HOSTED_DOMAINS` | recommended | _(empty)_ | Comma-separated Google Workspace domains. When set, Google's `id_token` must have an `hd` claim in this list (exact, case-insensitive). See [Hosted domain (Workspace mode)](#hosted-domain-workspace-mode). |
+| `OIDC_AUTHZ_RULES_<n>` | this or the next | _(none)_ | Indexed list (`OIDC_AUTHZ_RULES_0`, `OIDC_AUTHZ_RULES_1`, ...; YAML `oidc.authz.rules`) of rules `"<selector>=<namespace>:<role>[,...]"` that set the Temporal permissions of a person's access token. See [Authorization](#authorization). |
+| `OIDC_AUTHZ_DEFAULT_PERMISSIONS` | this or the previous | _(empty)_ | Comma-separated permissions for admitted people that no rule matches; empty denies them. **`serve` refuses to start when this and the rules are both empty.** See [Upgrading to deny-by-default authorization](#upgrading-to-deny-by-default-authorization). |
+| `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; access-token lifetime, and so the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. ID tokens always live 5 minutes. |
+| `OIDC_ACCESS_TOKEN_AUDIENCE` | no | `temporal` | The `aud` of every access token, integration keys included; match it in Temporal's `global.authorization.audience` ([Access tokens and ID tokens](#access-tokens-and-id-tokens)). Must not be empty. |
 | `OIDC_REFRESH_TOKEN_TTL` | no | `168h` | Go duration (7 days); idle lifetime of each rotated refresh token. A session not refreshed for this long ends. Must not exceed `OIDC_REFRESH_MAX_LIFETIME`. |
-| `OIDC_REFRESH_MAX_LIFETIME` | no | `168h` | Go duration (7 days); absolute session lifetime counted from the original sign-in. Rotation never extends it: no refresh token outlives sign-in + this value, so every user goes back through Google at least this often. Refresh never calls Google, so this also bounds how long a user suspended upstream keeps an unrevoked session. At the defaults it equals `OIDC_REFRESH_TOKEN_TTL`, so it is the limit that ends a session. Not to be confused with `OIDC_SESSION_TTL`, which is the device-flow verification page's cookie. See [Refresh-token sessions](#refresh-token-sessions). |
-| `OIDC_SESSION_SIGNING_KEY` | yes | _(empty)_ | Base64url-encoded 32-byte HMAC key. Signs the verification-page session cookie and the SSO-bounce `state` parameter used by the [device flow](cli-device-login.md), each under its own domain-separation label so neither verifies as the other, and derives the per-login PKCE verifier, nonce and browser-binding cookie of the [Google leg](#google-leg). Rotating it fails logins that are in flight (at most the 5-minute auth request lifetime). Generate once with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`, keep stable across rolling restarts, and supply via a Secret. **Tempogate refuses to boot** if this is empty, not base64url, or does not decode to exactly 32 bytes. |
-| `OIDC_SESSION_TTL` | no | `5m` | Go duration; TTL of the verification-page session cookie used by the [device flow](cli-device-login.md). The cookie is path-scoped to the device-flow routes (`/device` at a root issuer, `<issuer-path>/device` under [sub-path hosting](#sub-path-hosting)) and is not a general-purpose login session; keeping it short bounds how long an approval window stays open. It is `Secure` unless `OIDC_ISSUER` is plain `http://` (local or compose setups), because browsers never send a `Secure` cookie back over http. |
+| `OIDC_REFRESH_MAX_LIFETIME` | no | `168h` | Go duration (7 days); absolute session lifetime from the original sign-in, never extended by rotation. Every user goes back through Google at least this often, and, because refresh never calls Google, a user suspended upstream keeps an unrevoked session at most this long. At the defaults it equals `OIDC_REFRESH_TOKEN_TTL`, so it is the limit that ends a session. Not `OIDC_SESSION_TTL`, the device-flow page cookie. |
+| `OIDC_SESSION_SIGNING_KEY` | yes | _(empty)_ | Base64url-encoded 32-byte HMAC key. Signs the [device flow](cli-device-login.md)'s page session cookie and SSO-bounce `state`, each under its own domain-separation label, and derives the [Google leg](#google-leg)'s PKCE verifier, nonce and browser-binding cookie. A rotation fails logins in flight (at most the 5-minute auth request lifetime). Generate once with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`, keep it stable across rolling restarts, and supply it through a Secret. **tempogate refuses to boot** if it is empty, not base64url, or not 32 bytes decoded. |
+| `OIDC_SESSION_TTL` | no | `5m` | Go duration; TTL of the [device flow](cli-device-login.md)'s verification-page cookie, which bounds an approval window. Its path is `/device` (`<issuer-path>/device` under [sub-path hosting](#sub-path-hosting)). It is `Secure` unless `OIDC_ISSUER` is plain `http://`, because browsers never send a `Secure` cookie back over http. |
 | `OIDC_GOOGLE_CLIENT_ID` | for any login | _(empty)_ | Upstream Google OAuth client id. |
-| `OIDC_GOOGLE_CLIENT_SECRET` | for any login | _(empty)_ | Upstream Google OAuth client secret. Supply via a Secret; never commit it. |
+| `OIDC_GOOGLE_CLIENT_SECRET` | for any login | _(empty)_ | Upstream Google OAuth client secret. Supply it through a Secret; never commit it. |
 | `OIDC_GOOGLE_AUTH_ENDPOINT` | no | `https://accounts.google.com/o/oauth2/v2/auth` | Override only to point the flow at a mock IdP (testing/examples). |
 | `OIDC_GOOGLE_TOKEN_ENDPOINT` | no | `https://oauth2.googleapis.com/token` | Where the callback exchanges the code for Google's `id_token`. Override for a mock IdP. |
-| `OIDC_GOOGLE_ISSUER_URL` | no | `https://accounts.google.com` | Expected `iss` of Google's `id_token` and the OIDC-discovery/JWKS base the callback verifies its signature against. Override for a mock IdP. |
+| `OIDC_GOOGLE_ISSUER_URL` | no | `https://accounts.google.com` | Expected `iss` of Google's `id_token`, and the discovery/JWKS base for its signature check. Override for a mock IdP. |
 
-**Minimum for real SSO:** `OIDC_ISSUER`, `OIDC_CLIENTS`,
-`OIDC_ALLOWED_DOMAINS`, `OIDC_SESSION_SIGNING_KEY`,
-`OIDC_GOOGLE_CLIENT_ID`, `OIDC_GOOGLE_CLIENT_SECRET`, and at least one
-`OIDC_AUTHZ_RULES_<n>` (or `OIDC_AUTHZ_DEFAULT_PERMISSIONS`).
-If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
+The [quick reference](#quick-reference) lists the minimum settings for real SSO.
 
-**Device verification rate limits** have no configuration keys.
-Failed user-code attempts on the verification pages are limited to 20 per minute per client IP and 5 per minute per verification session, in memory on each replica (see [docs/cli-device-login.md](cli-device-login.md#security-notes)).
-The client IP is the TCP peer; `X-Forwarded-For` is not read, so behind a reverse proxy all clients share the proxy's IP budget (one client spending it throttles code entry for the rest for up to a minute) and the per-session budget still applies.
+**Device verification rate limits** have no configuration keys:
+
+- The verification pages allow 20 failed user-code attempts per minute per client IP, and 5 per minute per verification session. The limits are in memory on each replica (see [docs/cli-device-login.md](cli-device-login.md#security-notes)).
+- The client IP is the TCP peer; tempogate does not read `X-Forwarded-For` here. Behind a reverse proxy, all clients thus share the IP budget of the proxy: one client that spends it blocks code entry for the others for up to a minute. The per-session budget still applies.
 
 ### Hosted domain (Workspace mode)
 
-`OIDC_ALLOWED_DOMAINS` only checks the domain of the email address.
-That is not proof that your organization controls the Google account: anyone who can receive mail at an address can create a consumer Google account for it, and Google then reports `email_verified: true`.
-Google's guidance is to restrict access to an organization with the `hd` (hosted domain) claim, which Google sets only for accounts managed by a Google Workspace or Cloud organization ([OpenID Connect docs](https://developers.google.com/identity/openid-connect/openid-connect)).
+`OIDC_ALLOWED_DOMAINS` checks only the domain of the email address.
+That does not prove that your organization controls the Google account.
+Anyone who can receive mail at an address can create a consumer Google account for it, and Google then reports `email_verified: true`.
+Google recommends that you restrict access to an organization with the `hd` (hosted domain) claim.
+Google sets it only for accounts that a Google Workspace or Cloud organization manages ([OpenID Connect docs](https://developers.google.com/identity/openid-connect/openid-connect)).
 
-Set `OIDC_ALLOWED_HOSTED_DOMAINS` to your Workspace primary domain (or several, comma-separated) to require it:
+To require it, set `OIDC_ALLOWED_HOSTED_DOMAINS` to your Workspace primary domain (or several, comma-separated):
 
 | Google account | `OIDC_ALLOWED_HOSTED_DOMAINS` empty | `OIDC_ALLOWED_HOSTED_DOMAINS=example.com` |
 | --- | --- | --- |
@@ -333,17 +357,15 @@ Set `OIDC_ALLOWED_HOSTED_DOMAINS` to your Workspace primary domain (or several, 
 | Consumer account for `alice@example.com` (no `hd`) | admitted | **rejected (403)** |
 | Account in another Workspace (`hd=other.test`) with an allowed email | admitted | **rejected (403)** |
 
-Both lists apply: the email domain must still be in `OIDC_ALLOWED_DOMAINS`.
-`hd` is the organization's primary domain, so list it even when users sign in with a secondary or alias domain.
-Leave the setting empty only when your email is not on Google Workspace; tempogate then logs a warning at startup.
-
-tempogate also sends Google the `hd` request parameter (the domain when one is configured, `*` when several), so the account chooser offers the right account.
-That parameter is only a UI hint: the user can edit the request, so the `hd` claim check above is the control.
+- All checks apply: `email_verified`, the email domain in `OIDC_ALLOWED_DOMAINS`, and the `hd` claim.
+- `hd` is the primary domain of the organization. List it even when users sign in with a secondary or alias domain.
+- Leave the setting empty only when your email is not on Google Workspace. tempogate then logs a warning at startup.
+- tempogate also sends Google the `hd` request parameter (the domain when you configure one, `*` when several), so the account chooser shows the correct account. That parameter is only a UI hint, because the user can edit the request; the `hd` claim check is the control.
 
 ### Authorization
 
-`OIDC_ALLOWED_DOMAINS` and [Workspace mode](#hosted-domain-workspace-mode) decide who may sign in.
-Authorization rules decide what each person's access token may do in Temporal, and **the default is deny**: a person no rule grants anything to gets no token.
+`OIDC_ALLOWED_DOMAINS` and [Workspace mode](#hosted-domain-workspace-mode) decide who can sign in.
+Authorization rules decide what the access token of each person can do in Temporal, and **the default is deny**: a person that no rule grants anything gets no token.
 
 ```bash
 OIDC_AUTHZ_RULES_0='email:alice@example.com=temporal-system:admin'
@@ -363,38 +385,57 @@ oidc:
     default_permissions: ""
 ```
 
-As with every list, the environment replaces the YAML list as a whole rather than merging it entry by entry.
+As for every list, the environment replaces the YAML list as a whole; it does not merge the entries.
 In the Helm chart, set `authz.rules` and `authz.defaultPermissions`.
 
 **Grammar.** A rule is `<selector>=<permission>[,<permission>...]`.
 
 | Selector | Matches |
 | --- | --- |
-| `email:<address>` | The signed-in Google account's verified email, exactly, case-insensitively. |
-| `domain:<domain>` | The domain of that email, exactly (subdomains are other domains), case-insensitively. Without Workspace mode a consumer Google account created for an address at the domain matches too, so tempogate logs a warning for `domain:` rules when `OIDC_ALLOWED_HOSTED_DOMAINS` is empty. |
+| `email:<address>` | The verified email of the signed-in Google account, exactly, case-insensitively. |
+| `domain:<domain>` | The domain of that email, exactly (subdomains are other domains), case-insensitively. Without Workspace mode, a consumer Google account for an address at the domain also matches, so tempogate logs a warning for `domain:` rules when `OIDC_ALLOWED_HOSTED_DOMAINS` is empty. |
 
-A permission is `<namespace>:<role>`, the shape of Temporal's `permissions` claim, with role `read`, `write` or `admin`.
+A permission is `<namespace>:<role>`, the shape of Temporal's `permissions` claim, with the role `read`, `write` or `admin`.
 `temporal-system:<role>` grants that role on every namespace, and is the only way to grant cluster-level APIs such as `ListNamespaces`.
-`group:` selectors (Google Workspace groups) are reserved and refused for now.
+`group:` selectors (Google Workspace groups) are reserved, and tempogate refuses them for now.
 
 **Semantics.**
 
-- Every matching rule applies. Their permissions are merged, and a namespace named by several rules gets the highest role, emitted as one claim entry.
-- `OIDC_AUTHZ_DEFAULT_PERMISSIONS` applies only to an admitted person no rule matches.
-- An empty result is a denial. At sign-in the Google callback sends the client `error=access_denied` (`tempogate login` prints it and exits; the device verification page denies the device code, so `tempogate login --device` stops polling with `access_denied`), and no authorization code or token is minted. A sign-in session on the device verification page is re-checked before every approval.
-- Only the access token carries the permissions; the ID token never does (see [Access tokens and ID tokens](#access-tokens-and-id-tokens)).
-- Integration keys from the admin API do not go through the rules: each carries the one namespace and role it was minted with.
+- Every matching rule applies. tempogate merges their permissions, and a namespace that several rules name gets the highest role, in one claim entry.
+- `OIDC_AUTHZ_DEFAULT_PERMISSIONS` applies only to an admitted person that no rule matches.
+- An empty result is a denial, and tempogate mints no authorization code or token:
+  - At sign-in, the Google callback sends the client `error=access_denied`. `tempogate login` prints it and exits.
+  - The device verification page denies the device code, so `tempogate login --device` stops polling with `access_denied`.
+  - On the device verification page, tempogate checks a sign-in session again before every approval.
+- Only the access token has the permissions; the ID token never has them (see [Access tokens and ID tokens](#access-tokens-and-id-tokens)).
+- Integration keys from the admin API do not go through the rules. Each has the one namespace and role that it was minted with.
 
-**Startup checks.** `tempogate serve` refuses to start when a rule or the default is malformed, uses an unknown selector or `group:`, names the `*` namespace (Temporal treats it as a namespace literally named `*`; use `temporal-system`), or grants `worker`.
-`worker` grants nothing under Temporal's default authorizer: Worker sits below Reader in Temporal's role bitmask ([`roles.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/roles.go#L9-L12)), every API but health checks needs at least Reader, and task-queue polling needs Writer ([`getRequiredRole`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L67-L77)); grant workers `write`.
-It also refuses to start when neither rules nor a default are configured.
-At startup it logs how many rules grant a `temporal-system` role, warns about rules whose domain is not in `OIDC_ALLOWED_DOMAINS` (nobody they select can sign in), and warns when the default grants a `temporal-system` role (`every admitted user is cluster admin` for `admin`).
+**Startup checks.** `tempogate serve` refuses to start when:
 
-**Changes take effect at the next refresh.** Rules are configuration, so a change needs a restart.
-Every refresh then resolves the permissions again, after the [domain re-check](#refresh-token-sessions): a narrower grant mints a narrower token, and an empty one revokes the whole session (`invalid_grant`, logged as a `refresh_authz_denied` warning with the family id and email).
-Access tokens already issued keep their permissions until they expire, so a change reaches a signed-in user within `OIDC_ACCESS_TOKEN_TTL` (4h) of the restart; to end someone's sessions at once (their refresh tokens, not the access tokens already issued), run `tempogate sessions revoke --email <e>` or call `POST /admin/sessions/revoke` (see [Refresh-token sessions](#refresh-token-sessions)).
+- a rule or the default is malformed, uses an unknown selector or `group:`, or names the `*` namespace (Temporal treats it as a namespace literally named `*`; use `temporal-system`);
+- a rule or the default grants `worker`;
+- neither rules nor a default are configured.
 
-**Checking a rule set.** `tempogate authz explain --email <e>` reads the same configuration as `serve` and prints the rules that match, whether the default applied, and the permissions the access token would carry (or that the sign-in is denied).
+`worker` grants nothing under Temporal's default authorizer.
+Worker is below Reader in Temporal's role bitmask ([`roles.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/roles.go#L9-L12)), and every API except health checks needs at least Reader.
+Task-queue polling needs Writer ([`getRequiredRole`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L67-L77)), so grant workers `write`.
+
+At startup, tempogate also:
+
+- logs how many rules grant a `temporal-system` role;
+- warns about rules whose domain is not in `OIDC_ALLOWED_DOMAINS` (nobody they select can sign in);
+- warns when the default grants a `temporal-system` role (`every admitted user is cluster admin` for `admin`).
+
+**Changes take effect at the next refresh.**
+Rules are configuration, so a change needs a restart.
+After that, every refresh resolves the permissions again, after the [domain re-check](#refresh-token-sessions).
+A narrower grant mints a narrower token, and an empty one revokes the whole session (`invalid_grant`, logged as a `refresh_authz_denied` warning with the family id and email).
+Access tokens already issued keep their permissions until they expire, so a change reaches a signed-in user within `OIDC_ACCESS_TOKEN_TTL` (4h) after the restart.
+To end someone's sessions at once, [revoke them](#refresh-token-sessions) with `tempogate sessions revoke --email <e>` or `POST /admin/sessions/revoke`; access tokens already issued stay valid.
+
+**Check a rule set.**
+`tempogate authz explain --email <e>` reads the same configuration as `serve`.
+It prints the matching rules, whether the default applied, and the permissions that the access token gets (or that the sign-in is denied).
 It also flags an email whose domain is not in `OIDC_ALLOWED_DOMAINS`.
 
 ```bash
@@ -405,11 +446,13 @@ matched:      rule 0  email:alice@example.com=temporal-system:admin
 permissions:  orders:read,payments:read,temporal-system:admin
 ```
 
-**Namespace-scoped users and the Temporal Web UI.** Temporal grants `ListNamespaces` only through a `temporal-system:<role>` permission: it is a cluster-scoped API, so the default authorizer checks only the system role for it ([`metadata.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/api/metadata.go#L73), [`default_authorizer.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L47-L57), unchanged since v1.25).
-A user granted only `orders:read` therefore cannot list namespaces, and the Web UI's namespace dropdown stays empty for them.
-They reach their namespace by URL (`https://<temporal-ui>/namespaces/orders/workflows`), or set the UI's default namespace (`TEMPORAL_DEFAULT_NAMESPACE` for the `temporalio/ui` image) to the namespace most users work in.
-Granting `temporal-system:read` to fix the dropdown is not a narrow fix: it is read access to every namespace, workflow payloads included.
-Revisit this if Temporal adds a grant that allows listing namespaces without reaching into them.
+**Namespace-scoped users and the Temporal Web UI.**
+Temporal grants `ListNamespaces` only through a `temporal-system:<role>` permission.
+It is a cluster-scoped API, so the default authorizer checks only the system role for it ([`metadata.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/api/metadata.go#L73), [`default_authorizer.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L47-L57), unchanged since v1.25).
+A user with only `orders:read` thus cannot list namespaces, and the namespace dropdown of the Web UI stays empty for them.
+They open their namespace by URL (`https://<temporal-ui>/namespaces/orders/workflows`), or you set the default namespace of the UI (`TEMPORAL_DEFAULT_NAMESPACE` for the `temporalio/ui` image) to the namespace that most users work in.
+Do not grant `temporal-system:read` to fix the dropdown: it is read access to every namespace, workflow payloads included.
+Revisit this if Temporal adds a grant that lists namespaces without access to their contents.
 
 ### Upgrading to deny-by-default authorization
 
@@ -419,33 +462,36 @@ That is no longer the default: with no rules and no default, `tempogate serve` s
 - To keep the previous behaviour while you write rules, set `OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin` (chart: `authz.defaultPermissions: "temporal-system:admin"`).
   tempogate logs a warning at every start that every admitted user is cluster admin.
 - To move to rules, list the people who need cluster admin with `email:` rules, grant everyone else what they need per namespace, and leave the default empty.
-  Check the result with `tempogate authz explain --email <e>` before restarting.
-- Existing sessions keep working: their next refresh mints a token with the new permissions, or ends the session if the person is granted nothing.
-  Access tokens issued before the upgrade keep `temporal-system:admin` until they expire (`OIDC_ACCESS_TOKEN_TTL`); revoking sessions (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) only stops their renewal.
+  Check the result with `tempogate authz explain --email <e>` before you restart.
+- Existing sessions keep working: their next refresh mints a token with the new permissions, or ends the session if the person gets nothing.
+  Access tokens issued before the upgrade keep `temporal-system:admin` until they expire (`OIDC_ACCESS_TOKEN_TTL`); a session revoke (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) only stops their renewal.
 
 ### Token subject
 
-The `sub` of every token tempogate mints for a person is `<connector>:<upstream sub>`, for Google `google:<Google sub>`: the connector the person signed in through, then the account's `sub` there, an opaque, stable id that Google never reuses.
-The same token carries the connector alone in an `idp` claim (`google`), and `/userinfo` returns both.
-The connector is part of the identity because the same upstream `sub` at two identity providers is two people; Google is the only connector today.
-The email is in the `email` claim (the ID token also carries `email_verified: true`).
-Do not key users on the email: Google can re-issue an address to a different account, which would otherwise inherit the previous holder's identity.
+The `sub` of every token that tempogate mints for a person is `<connector>:<upstream sub>`; for Google, `google:<Google sub>`.
+The connector is the one that the person signed in through.
+The upstream `sub` is an opaque, stable id that Google never reuses.
+The token also has the connector alone in an `idp` claim (`google`), and `/userinfo` returns both.
+The connector is part of the identity, because the same upstream `sub` at two identity providers is two people; Google is the only connector today.
+
+The email is in the `email` claim (the ID token also has `email_verified: true`).
+Do not key users on the email: Google can give an address again to a different account, which then gets the identity of the previous holder.
 Temporal's default claim mapper authorizes from `permissions`, not `sub`.
-Integration keys are unchanged: their `sub` is still the key's owner, and they carry no `idp` claim.
+Integration keys do not change: their `sub` is still the owner of the key, and they have no `idp` claim.
 
 ### Google leg
 
-tempogate is itself an OAuth client of Google, and protects that leg independently of what the downstream client does.
-Google is tempogate's one upstream connector (id `google`); the server keeps the state, the browser binding and the admission gates, and the connector speaks Google's protocol, so the protections below apply to any future connector too.
+tempogate is itself an OAuth client of Google, and protects that leg independently of the downstream client.
+Google is its one upstream connector (id `google`): the server keeps the state, browser binding and admission gates, and the connector speaks Google's protocol, so these protections apply to any future connector too.
 
-- **PKCE and nonce.** Every redirect to Google carries tempogate's own S256 `code_challenge` and `nonce`. The code exchange presents the matching `code_verifier`, and the `id_token` is rejected unless its `nonce` matches. A Google code or `id_token` minted for another login therefore cannot be injected into this one. No Google Cloud console setting is needed.
-- **Browser binding.** `/authorize` sets a short-lived (5 minutes), HttpOnly, `SameSite=Lax` cookie that binds the internal `state` to the browser that started the login. `/callback/google` refuses a `state` that arrives without it (`400 invalid_request`, logged as `state_not_bound_to_browser`), so an attacker cannot finish their own Google login in a victim's browser. This covers the Web UI and CLI logins and the device-flow verification page, which signs in through the same `/authorize`.
-- **Cookie shape.** With an `https` issuer the cookie is `__Host-tempogate_upstream_<id>`: `Secure`, `Path=/`, no `Domain`, so a sibling subdomain cannot plant one. Browsers refuse `__Host-` and `Secure` cookies over plain http, so with an `http://` issuer (local or compose setups) it is an unprefixed `tempogate_upstream_<id>` scoped to the callback path (e.g. `/callback/google`, or `<issuer-path>/callback/google` under [sub-path hosting](#sub-path-hosting)). `<id>` differs per login, so parallel logins in one browser do not collide.
-- **Derived, not stored.** The verifier, nonce and cookie value are HMAC-SHA256 derivations of the connector id and the internal `state` under `OIDC_SESSION_SIGNING_KEY`, so nothing new is persisted, and a `state` started for one connector is refused at another connector's callback.
-- **Discovery.** Google's discovery document is fetched on the first callback after boot and cached once it succeeds. A failure is retried on a later callback after a backoff that starts at 1s and doubles up to 30s, so a transient outage heals without a restart.
-- **Issuer check.** When Google names itself in the authorization response (`iss`, RFC 9207), it must equal `OIDC_GOOGLE_ISSUER_URL`; any other issuer fails the sign-in.
-- **Logging.** A failed Google sign-in (shown to the user as `502 upstream_error`) logs one warning with `op=oidc.callback`, `connector=google` and a `cause` of `discovery_unavailable`, `code_exchange_failed` (plus the token endpoint's `oauth_error`, e.g. `invalid_grant`), `id_token_invalid`, `nonce_mismatch`, `claims_incomplete` or `issuer_mismatch`, plus `timeout=true` when a call or the whole callback got no answer in time. Codes and tokens are never logged.
-- **Upstream timeout.** Each call to Google (discovery, the code exchange, and id_token verification including a JWKS fetch) is bounded at 10 seconds, with 5 seconds of that for connecting and the TLS handshake, and the whole callback at 25 seconds, under the server's 30-second `SERVER_WRITE_TIMEOUT`. A Google that stalls fails the sign-in with the same `502 upstream_error` instead of holding the callback open or having the connection reset. A discovery timeout is retried after the usual backoff, never cached. The bounds are fixed, not configurable.
+- **PKCE and nonce.** Every redirect to Google has tempogate's own S256 `code_challenge` and `nonce`; the code exchange sends the matching `code_verifier`, and an `id_token` with another `nonce` is rejected. So a Google code or `id_token` from another login cannot be injected into this one. No Google Cloud console setting is needed.
+- **Browser binding.** `/authorize` sets a short-lived (5 minutes), HttpOnly, `SameSite=Lax` cookie that binds the internal `state` to the browser that started the login. `/callback/google` refuses a `state` that arrives without it (`400 invalid_request`, logged as `state_not_bound_to_browser`), so an attacker cannot finish their own Google login in the browser of a victim. This covers the Web UI and CLI logins, and the device-flow verification page, which signs in through the same `/authorize`.
+- **Cookie shape.** With an `https` issuer, the cookie is `__Host-tempogate_upstream_<id>`: `Secure`, `Path=/`, no `Domain`, so a sibling subdomain cannot plant one. Browsers refuse `__Host-` and `Secure` cookies over plain http. With an `http://` issuer (local or compose setups), it is thus an unprefixed `tempogate_upstream_<id>` scoped to the callback path (e.g. `/callback/google`, or `<issuer-path>/callback/google` under [sub-path hosting](#sub-path-hosting)). `<id>` is different for each login, so parallel logins in one browser do not collide.
+- **Derived, not stored.** The verifier, nonce and cookie value are HMAC-SHA256 derivations of the connector id and the internal `state` under `OIDC_SESSION_SIGNING_KEY`. tempogate thus stores nothing new, and refuses a `state` started for one connector at the callback of another connector.
+- **Discovery.** Google's discovery document is fetched on the first callback after boot and cached once it succeeds. A failure is retried on a later callback after a backoff from 1s, doubling up to 30s, so a transient outage heals with no restart.
+- **Issuer check.** When Google names itself in the authorization response (`iss`, RFC 9207), the value must equal `OIDC_GOOGLE_ISSUER_URL`; any other issuer fails the sign-in.
+- **Logging.** A failed Google sign-in (`502 upstream_error` for the user) logs one warning with `op=oidc.callback`, `connector=google` and a `cause`: `discovery_unavailable`, `code_exchange_failed` (plus the token endpoint's `oauth_error`, e.g. `invalid_grant`), `id_token_invalid`, `nonce_mismatch`, `claims_incomplete` or `issuer_mismatch`. It adds `timeout=true` when a call or the whole callback got no answer in time. tempogate never logs codes or tokens.
+- **Upstream timeout.** Each call to Google (discovery, code exchange, id_token verification with its JWKS fetch) times out after 10 seconds, 5 of them for connect and TLS handshake, and the whole callback after 25 seconds, under the 30-second `SERVER_WRITE_TIMEOUT`. A stalled Google fails the sign-in with the same `502 upstream_error` instead of a hung callback or a reset connection. A discovery timeout is retried after the usual backoff, never cached. These limits are fixed.
 
 ### Access tokens and ID tokens
 
@@ -459,17 +505,19 @@ Google is tempogate's one upstream connector (id `google`); the server keeps the
 | Claims | `sub`, `idp`, `email`, `permissions`, `client_id` | `sub`, `idp`, `email`, `email_verified`, `auth_time`, `nonce` (when sent at `/authorize`) |
 | Lifetime | `OIDC_ACCESS_TOKEN_TTL` (`4h`) | 5 minutes |
 
-The ID token has no `permissions` claim, and Temporal's default ClaimMapper grants roles only from `permissions`, so an ID token presented to Temporal is refused.
-A relying party that receives or leaks an ID token holds nothing Temporal would authorize.
-Integration keys minted on the admin API are access tokens with the same `typ` and `aud` (no `client_id`).
-`/userinfo` accepts access tokens for `OIDC_ACCESS_TOKEN_AUDIENCE` only; it refuses ID tokens, tokens for another audience, and tokens minted before this split.
+The ID token has no `permissions` claim, and Temporal's default ClaimMapper grants roles only from `permissions`, so Temporal refuses an ID token.
+A relying party that receives or leaks an ID token holds nothing that Temporal authorizes.
+Integration keys from the admin API are access tokens with the same `typ` and `aud` (no `client_id`).
+`/userinfo` accepts only access tokens for `OIDC_ACCESS_TOKEN_AUDIENCE`; it refuses ID tokens, tokens for another audience, and tokens minted before this split.
 
-**Temporal Web UI.** The UI already sends the access token as its bearer and the ID token only in the `Authorization-Extras` header, which Temporal's default ClaimMapper ignores (temporalio/ui v2.32.0, `src/lib/utilities/request-from-api.ts`).
+**Temporal Web UI.**
+The UI already sends the access token as its bearer, and the ID token only in the `Authorization-Extras` header, which Temporal's default ClaimMapper ignores (temporalio/ui v2.32.0, `src/lib/utilities/request-from-api.ts`).
 No UI setting changes.
 Do not configure a custom ClaimMapper that authorizes from `Authorization-Extras`.
 
-**Temporal audience (defense in depth).** Temporal v1.29.0 added `global.authorization.audience` ([temporalio/temporal#8067](https://github.com/temporalio/temporal/pull/8067)); when set, the frontend refuses any token whose `aud` does not contain it.
-Set it to `OIDC_ACCESS_TOKEN_AUDIENCE` in the server config (it is not templated from an environment variable):
+**Temporal audience (defense in depth).**
+Temporal v1.29.0 added `global.authorization.audience` ([temporalio/temporal#8067](https://github.com/temporalio/temporal/pull/8067)); when it is set, the frontend refuses any token whose `aud` does not contain it.
+Set it to `OIDC_ACCESS_TOKEN_AUDIENCE` in the server config (no environment variable templates it):
 
 ```yaml
 global:
@@ -482,17 +530,25 @@ global:
     audience: temporal   # = OIDC_ACCESS_TOKEN_AUDIENCE
 ```
 
-Temporal v1.28 and earlier (including the `1.25.2` the examples and e2e tests run) have no audience setting and ignore `aud`; they keep working unchanged with any value.
-Once the audience is enforced, integration keys minted before this release (no `aud`) stop working and must be minted again.
+Temporal v1.28 and earlier (including the `1.25.2` that the examples and e2e tests run) have no audience setting and ignore `aud`; they keep working with any value.
+When Temporal enforces the audience, integration keys minted before this release (no `aud`) stop working, and you must mint them again.
 
 ### Refresh-token sessions
 
 Each sign-in starts a session: a family of single-use refresh tokens that rotate on every exchange.
-A refresh is refused with `invalid_grant` when the session is idle past `OIDC_REFRESH_TOKEN_TTL`, older than `OIDC_REFRESH_MAX_LIFETIME`, revoked, its email domain is no longer in `OIDC_ALLOWED_DOMAINS`, the [authorization rules](#authorization) no longer grant the person anything, or the connector the person signed in through is no longer configured.
-Presenting a token that was already rotated revokes the whole family ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)) and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`; a domain refusal logs `refresh_domain_not_allowed`, an authorization refusal `refresh_authz_denied`, and a session from a connector that is no longer configured `refresh_connector_removed`, each revoking the family.
-Token values are never logged.
+tempogate refuses a refresh with `invalid_grant` when:
 
-Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
+- the session is idle for longer than `OIDC_REFRESH_TOKEN_TTL`, or older than `OIDC_REFRESH_MAX_LIFETIME`;
+- the session is revoked;
+- the email domain is no longer in `OIDC_ALLOWED_DOMAINS` (logs `refresh_domain_not_allowed`);
+- the [authorization rules](#authorization) no longer grant the person anything (logs `refresh_authz_denied`);
+- the connector that the person signed in through is no longer configured (logs `refresh_connector_removed`).
+
+The last three cases also revoke the family.
+A token that was already rotated revokes the whole family too ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)), and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`.
+tempogate never logs token values.
+
+Operators manage sessions with the server binary, with the same state store settings as `serve`:
 
 ```bash
 tempogate sessions list [--email alice@example.com] [--subject google:<sub>]   # family id, client, email, token sub, sign-in, last rotation, expiry
@@ -502,8 +558,7 @@ tempogate sessions revoke --family <family-id>        # one session; fails if no
 ```
 
 In Kubernetes, run them in the serving pod, e.g. `kubectl exec deploy/tempogate -- /tempogate sessions revoke --email alice@example.com`.
-
-The [admin API](#admin-api) offers the same operations over HTTP, so you need not exec into the pod:
+The [admin API](#admin-api) offers the same operations over HTTP, with no exec into the pod:
 
 ```bash
 curl -H "Authorization: Bearer $token" 'http://127.0.0.1:8081/admin/sessions?email=alice@example.com'   # also ?subject=
@@ -511,42 +566,45 @@ curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
   -d '{"email":"alice@example.com"}' http://127.0.0.1:8081/admin/sessions/revoke   # or {"subject":...} or {"family_id":...}
 ```
 
-`GET /admin/sessions` returns `{"items": [...]}` with `family_id`, `client_id`, `email`, `subject`, `connector`, `auth_time`, `last_rotation_at` and `expires_at`; it never returns a token or its hash.
-`POST /admin/sessions/revoke` takes exactly one of `email`, `subject` or `family_id` (anything else is 400) and answers `{"revoked": <n>}`, the number of live sessions it ended.
-A `subject`, as a filter or a selector, is the token's `sub` in the form `<connector>:<upstream sub>` (e.g. `google:1234`), exactly as `subject` is listed; a bare upstream `sub` is refused with 400 (and by `--subject` on the command line).
-Revoking is idempotent: a selector that matches nothing live answers 0, except a `family_id` that never existed, which answers 404 like an unknown integration key.
+- `GET /admin/sessions` returns `{"items": [...]}` with `family_id`, `client_id`, `email`, `subject`, `connector`, `auth_time`, `last_rotation_at` and `expires_at`. It never returns a token or its hash.
+- `POST /admin/sessions/revoke` takes exactly one of `email`, `subject` or `family_id` (anything else is 400), and answers `{"revoked": <n>}`, the number of live sessions it ended.
+- A `subject`, as a filter or a selector, is the token's `sub` in the form `<connector>:<upstream sub>` (e.g. `google:1234`), exactly as the list shows it. tempogate refuses a bare upstream `sub` with 400, and `--subject` on the command line refuses it too.
+- Revocation is idempotent: a selector that matches nothing live answers 0. The exception is a `family_id` that never existed, which answers 404, like an unknown integration key.
 
-Revocation stops refreshes immediately; access tokens already issued remain valid, at tempogate's `/userinfo` and at Temporal, until they expire (`OIDC_ACCESS_TOKEN_TTL`).
-The integration-key jti denylist is not consulted for refresh tokens.
+Revocation stops refreshes at once.
+Access tokens already issued stay valid, at tempogate's `/userinfo` and at Temporal, until they expire (`OIDC_ACCESS_TOKEN_TTL`).
+The integration-key jti denylist does not apply to refresh tokens.
 
-Redeeming an authorization code twice is refused, and the session the first redemption started is revoked ([RFC 6749 §4.1.2](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2)), logged as `auth_code_reuse`.
-Redeemed codes are kept (hashed) until they expire so a replay is recognised; the access token already issued stays valid at Temporal until it expires.
+tempogate refuses a second redemption of an authorization code, and revokes the session that the first redemption started ([RFC 6749 §4.1.2](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2)); it logs `auth_code_reuse`.
+tempogate keeps redeemed codes (hashed) until they expire, so it recognises a replay.
+The access token already issued stays valid at Temporal until it expires.
 
-Upgrading to migration `0011` keeps existing sessions: each existing refresh token becomes its own family, with its sign-in time set to when it was last refreshed, so it ends at most `OIDC_REFRESH_MAX_LIFETIME` later.
+**Upgrades.**
 
-The default `OIDC_REFRESH_MAX_LIFETIME` was 30 days (`720h`) before it became 7 days.
-Upgrading with the default ends every session signed in more than 7 days ago at its next refresh (`invalid_grant`); those users sign in again.
-Set `OIDC_REFRESH_MAX_LIFETIME=720h` to keep the old lifetime.
+- Migration `0011` keeps existing sessions. Each existing refresh token becomes its own family, with its sign-in time set to its last refresh, so it ends at most `OIDC_REFRESH_MAX_LIFETIME` later.
+- The default `OIDC_REFRESH_MAX_LIFETIME` was 30 days (`720h`) before it became 7 days. With the default, an upgrade ends every session signed in more than 7 days ago at its next refresh (`invalid_grant`), and those users sign in again. To keep the old lifetime, set `OIDC_REFRESH_MAX_LIFETIME=720h`.
 
 ### Redirect URI registration
 
-`/authorize` only sends a code to a `redirect_uri` that matches a registered value, following [RFC 9700 §2.1](https://datatracker.ietf.org/doc/html/rfc9700#section-2.1) and [RFC 8252 §7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3).
+`/authorize` sends a code only to a `redirect_uri` that matches a registered value, as [RFC 9700 §2.1](https://datatracker.ietf.org/doc/html/rfc9700#section-2.1) and [RFC 8252 §7.3](https://datatracker.ietf.org/doc/html/rfc8252#section-7.3) recommend.
 
 | Entry | Kind | Matches |
 | --- | --- | --- |
 | `temporal-ui:https://temporal.example.com/auth/sso/callback` | exact | Only that exact string. No case, percent-encoding, trailing-slash or `..` variations. |
 | `tempogate-cli:http://127.0.0.1/callback` | loopback | `http://127.0.0.1:<any port>/callback`, with no query. Also `http://[::1]/<path>`. `localhost` is **not** loopback: it gets exact matching. |
-| `tempogate-device:` | device-only | Nothing at `/authorize`. The client may only use the device authorization grant (and refresh). |
+| `tempogate-device:` | device-only | Nothing at `/authorize`. The client can only use the device authorization grant (and refresh). |
 
-Every registered URI must be absolute, with a host and a path, and no userinfo or fragment.
-Loopback entries must omit the port, because any port is accepted.
-Non-loopback entries must use `https` unless `OIDC_ALLOW_INSECURE_REDIRECT_URIS=true`.
-A client with redirect URIs cannot use `/device_authorization`, and a device-only entry cannot be combined with redirect URI entries for the same id.
-Prefix-shaped values from older releases (`tempogate-cli:http://127.0.0.1:`, `ui:https://ui.example.com`) are rejected at startup with an error naming the entry.
+Rules for each registered URI:
 
-Errors at `/authorize` before the client and `redirect_uri` are validated (unknown client, unregistered URI, oversized parameters) are shown to the browser as JSON.
-After that, errors (an unsupported `response_type`, a missing `openid` scope, missing or malformed PKCE) are sent back to the client's `redirect_uri` as `error` and `error_description`, with the client's `state` ([RFC 6749 §4.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1)).
-Every authorization response, success or error, carries `iss` ([RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207)), as discovery advertises with `authorization_response_iss_parameter_supported`.
+- It must be absolute, with a host and a path, and no userinfo or fragment.
+- A loopback entry must omit the port, because any port is accepted.
+- A non-loopback entry must use `https`, unless `OIDC_ALLOW_INSECURE_REDIRECT_URIS=true`.
+- A client with redirect URIs cannot use `/device_authorization`, and a device-only entry cannot share its id with redirect URI entries.
+- tempogate rejects prefix-shaped values from older releases (`tempogate-cli:http://127.0.0.1:`, `ui:https://ui.example.com`) at startup, with an error that names the entry.
+
+The browser shows `/authorize` errors as JSON when they occur before tempogate validates the client and `redirect_uri` (unknown client, unregistered URI, oversized parameters).
+tempogate sends later errors (an unsupported `response_type`, a missing `openid` scope, missing or malformed PKCE) back to the client's `redirect_uri` as `error` and `error_description`, with the client's `state` ([RFC 6749 §4.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1)).
+Every authorization response, success or error, has `iss` ([RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207)), as discovery advertises with `authorization_response_iss_parameter_supported`.
 
 ### Client-side (the `tempogate` CLI, not the server)
 
@@ -566,86 +624,74 @@ That sets what each lever can do:
 | `exp` (`expires_at`, capped by `ADMIN_KEYS_MAX_TTL`) | Rejected after `exp`. | Rejected after `exp`. |
 | Retiring the signing key | Rejected once `KEYS_RETIREMENT_GRACE` has passed. | Rejected once the kid has left JWKS and Temporal has refreshed its JWKS cache. |
 
-Retiring a signing key is the hard kill switch: it invalidates **every** token that key signed (human tokens, CLI tokens, integration keys), not one key.
+Retiring a signing key is the hard kill switch: it invalidates **every** token that the key signed (human tokens, CLI tokens, integration keys), not one key.
 Use it when a key leaked and its `exp` is too far away, or for routine rotation.
 The `kid` of a token is in its JWT header.
 
 ### Why new keys wait before signing
 
-Temporal's JWT key provider looks a token's `kid` up only in the JWKS it fetched on its last refresh, and it does not refetch on an unknown `kid` ([`common/authorization/default_token_key_provider.go`](https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_token_key_provider.go): `RsaKey` returns "RSA key not found" from the cached map; only the `refreshInterval` ticker calls `updateKeys`).
-If tempogate signed with a new key the moment it saw it, every token minted before Temporal's next refresh would be rejected by temporal-frontend: login appears to succeed, Temporal calls fail.
+Temporal's JWT key provider looks up the `kid` of a token only in the JWKS from its last refresh, and does not fetch again on an unknown `kid`.
+See [`common/authorization/default_token_key_provider.go`](https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_token_key_provider.go): `RsaKey` returns "RSA key not found" from the cached map, and only the `refreshInterval` ticker calls `updateKeys`.
+If tempogate signed with a new key at once, temporal-frontend would reject every token minted before its next refresh: login appears to succeed, but Temporal calls fail.
 
-So a new key is published in JWKS at once but signs only from `created_at + KEYS_PUBLISH_DELAY`.
-Set `KEYS_PUBLISH_DELAY` above the longest time Temporal can take to see a new key:
+tempogate thus publishes a new key in JWKS at once, but signs with it only from `created_at + KEYS_PUBLISH_DELAY`.
+Set `KEYS_PUBLISH_DELAY` above the longest time that Temporal can need to see a new key, which is the sum of:
 
 - Temporal's `global.authorization.jwtKeyProvider.refreshInterval` (`TEMPORAL_JWT_KEY_REFRESH` in Temporal's Docker config template, default `1m`; `server.config.authorization.jwtKeyProvider.refreshInterval` in the Temporal Helm chart, see [`examples/kind/temporal-values.yaml`](../examples/kind/temporal-values.yaml)).
-  With `refreshInterval` unset or `0`, Temporal never refreshes and every rotation needs a temporal-frontend restart.
-- plus `KEYS_RELOAD_INTERVAL`, since `serve` publishes a key generated by `tempogate keys generate` only on its next reload,
-- plus up to 300 s if an HTTP cache that honours tempogate's `Cache-Control: max-age=300` sits between Temporal and `/.well-known/jwks.json` (raise the delay to `10m` in that case).
+  With `refreshInterval` unset or `0`, Temporal never refreshes, and every rotation needs a temporal-frontend restart.
+- `KEYS_RELOAD_INTERVAL`, because `serve` publishes a key from `tempogate keys generate` only on its next reload;
+- up to 300 s if an HTTP cache that obeys tempogate's `Cache-Control: max-age=300` is between Temporal and `/.well-known/jwks.json` (in that case, raise the delay to `10m`).
 
-The default `5m` covers Temporal's default `1m` refresh and the default `30s` reload with margin.
+The default `5m` covers Temporal's default `1m` refresh and the default `30s` reload, with margin.
 
 ### Rotation runbook
 
-1. **Generate** a new key: `tempogate keys generate --force` (against the same `STATE_SQLITE_PATH`, e.g. `kubectl exec deploy/tempogate -- /tempogate keys generate --force`).
-   The output says when it starts signing.
-   `serve` publishes it in `/.well-known/jwks.json` within `KEYS_RELOAD_INTERVAL`; the old key keeps signing.
-2. **Wait `KEYS_PUBLISH_DELAY`.** Relying parties fetch the new key; then it signs every new token.
-   `tempogate keys list` and `GET /admin/signing-keys` show every key with its `created_at` and `retired_at`, which one is signing (`signing` / `"active": true`), and when a pending key starts signing (`pending, signs from ...` / `activates_at`).
-3. **Retire** the old key once the new one signs: `tempogate keys retire <old-kid>` (a `kid` may start with `-`; no `--` needed), or `POST /admin/signing-keys/<old-kid>/retire` with the admin token.
-   The only active key cannot be retired (409 / an error naming `keys generate --force`).
-   Retiring the signing key while its replacement is still inside `KEYS_PUBLISH_DELAY` is refused (409 / an error naming the replacement and when it signs).
+1. **Generate** a new key: `tempogate keys generate --force`, on the same state store (e.g. `kubectl exec deploy/tempogate -- /tempogate keys generate --force`).
+   The output tells when it starts to sign.
+   `serve` publishes it in `/.well-known/jwks.json` within `KEYS_RELOAD_INTERVAL`, and the old key keeps signing.
+2. **Wait `KEYS_PUBLISH_DELAY`.** Relying parties fetch the new key, and then it signs every new token.
+   `tempogate keys list` and `GET /admin/signing-keys` show every key with its `created_at` and `retired_at`, the key that signs (`signing` / `"active": true`), and when a pending key starts to sign (`pending, signs from ...` / `activates_at`).
+3. **Retire** the old key after the new one signs: `tempogate keys retire <old-kid>` (a `kid` can start with `-`; no `--` needed), or `POST /admin/signing-keys/<old-kid>/retire` with the admin token.
+   You cannot retire the only active key (409 / an error that names `keys generate --force`).
+   You cannot retire the signing key while its replacement is still inside `KEYS_PUBLISH_DELAY` (409 / an error that names the replacement and when it signs).
 4. **Grace.** The retired key keeps verifying for `KEYS_RETIREMENT_GRACE`, then leaves JWKS.
-   Tokens it signed stop working at tempogate at that moment and at Temporal after its next JWKS refresh.
-   Users re-authenticate and get tokens from the new key; integration keys must be re-minted.
+   Tokens that it signed then stop working at tempogate, and at Temporal after its next JWKS refresh.
+   Users sign in again and get tokens from the new key; integration keys must be minted again.
 
-In an emergency (a leaked key) retire right after step 1 with `tempogate keys retire --force <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
-The new key then signs at once, so Temporal rejects new tokens until its next JWKS refresh (at most `refreshInterval`); that is the price of stopping the leaked key immediately.
-The grace still applies, so if 4 h is too long, lower `KEYS_RETIREMENT_GRACE` (it is read at `serve` start) before retiring.
+**Emergency (a leaked key).**
+Retire right after step 1 with `tempogate keys retire --force <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
+The new key then signs at once, so Temporal rejects new tokens until its next JWKS refresh (at most `refreshInterval`); that is the cost of an immediate stop of the leaked key.
+The grace still applies: if 4 h is too long, lower `KEYS_RETIREMENT_GRACE` before you retire (`serve` reads it at start).
 
 ### Upgrading to required key expiry
 
-`POST /admin/keys` now refuses a body without `expires_at` (400), and `expires_at` may be at most `ADMIN_KEYS_MAX_TTL` (default 90 days) away.
-Callers that relied on long-lived keys must send an expiry and re-mint before it.
-Keys minted earlier without `expires_at` are not touched: their JWT has no `exp`, so they stay valid at Temporal until their signing key is retired.
-To end them, run the rotation runbook above; `GET /admin/keys` lists them with no `expires_at`.
-`tempogate migrate` adds the `retired_at` column (migration 0013) and leaves existing keys active.
+`POST /admin/keys` now refuses a body without `expires_at` (400), and `expires_at` can be at most `ADMIN_KEYS_MAX_TTL` (default 90 days) in the future.
+Callers that relied on long-lived keys must send an expiry, and mint again before it.
+tempogate does not change keys minted earlier without `expires_at`: their JWT has no `exp`, so they stay valid at Temporal until you retire their signing key.
+To end them, follow the rotation runbook above; `GET /admin/keys` lists them with no `expires_at`.
+`tempogate migrate` adds the `retired_at` column (migration 0013), and keeps existing keys active.
 
 ## Sub-path hosting
 
-`OIDC_ISSUER` may contain a path, so tempogate can share a hostname with
-another app:
+`OIDC_ISSUER` can contain a path, so tempogate can share a hostname with another app:
 
 ```
 OIDC_ISSUER=https://tempogate.example.com/idp
 ```
 
-The **entire OIDC surface** then serves under that prefix
-(`/idp/.well-known/openid-configuration`, `/idp/authorize`, `/idp/token`,
-`/idp/userinfo`, `/idp/callback/google`, …), and the discovery document
-advertises issuer-relative endpoints, so the `iss` claim, the advertised
-endpoints, and the served routes stay in lockstep. Route the prefix to
-tempogate at your proxy and **strip nothing** — tempogate owns the prefix
-natively.
+The **entire OIDC surface** then serves under that prefix (`/idp/.well-known/openid-configuration`, `/idp/authorize`, `/idp/token`, `/idp/userinfo`, `/idp/callback/google`, …).
+The discovery document advertises issuer-relative endpoints, so the `iss` claim, the advertised endpoints and the served routes always agree.
+At your proxy, route the prefix to tempogate and **strip nothing**: tempogate owns the prefix natively.
 
-Two consequences:
+- **Health probes stay at the root.** `/healthz` and `/readyz` do *not* move under the prefix, because they are infrastructure probes, not part of the public OIDC surface. Point Kubernetes liveness and readiness probes at `/healthz` and `/readyz`, whatever the issuer path. You do not need to route them through the shared-host proxy.
+- **The Google redirect URI must include the prefix.** Register `https://tempogate.example.com/idp/callback/google` (issuer + `/callback/google`) in the Google OAuth client. See [examples/google-oauth-setup.md](../examples/google-oauth-setup.md).
+- **The device-flow session cookie follows the prefix.** Its path is `/idp/device`, so the proxy must keep the path as it is.
 
-- **Health probes stay at the root.** `/healthz` and `/readyz` are *not*
-  moved under the prefix — they are infra probes, not part of the public
-  OIDC surface. Point Kubernetes liveness/readiness at `/healthz` / `/readyz`
-  regardless of the issuer path.
-- **The Google redirect URI must include the prefix:** register
-  `https://tempogate.example.com/idp/callback/google` (issuer +
-  `/callback/google`) in the Google OAuth client. See
-  [examples/google-oauth-setup.md](../examples/google-oauth-setup.md).
-- **The device-flow session cookie follows the prefix:** it is scoped to
-  `/idp/device`, so the proxy must preserve the path as-is.
-
-A root issuer (no path) behaves exactly as a path-less deployment always has.
+A root issuer (no path) behaves as it always did.
 
 ## Security headers
 
-Every response from both listeners carries:
+Every response from both listeners has these headers:
 
 | Header | Value |
 | --- | --- |
@@ -654,26 +700,28 @@ Every response from both listeners carries:
 | `X-Content-Type-Options` | `nosniff` |
 | `Referrer-Policy` | `no-referrer` |
 
-A few pages replace the defaults with their own, and all of them keep `frame-ancestors 'none'`:
+Some pages replace the defaults with their own, and all of them keep `frame-ancestors 'none'`:
 
-- The device verification pages send their own CSP, which allows their inline stylesheet by hash and, on the code entry page, adds the upstream IdP's origin to `form-action`. They also send `Referrer-Policy: same-origin`, because under `no-referrer` the browser sends `Origin: null` on the Approve/Deny POST and the origin check rejects it.
-- With `API_DOCS_ENABLED=true`, `/docs` sends Huma's own CSP, which allows the renderer script and stylesheet it loads from `unpkg.com`.
+- The device verification pages send their own CSP. It allows their inline stylesheet by hash and, on the code entry page, adds the origin of the upstream IdP to `form-action`. They also send `Referrer-Policy: same-origin`: under `no-referrer`, the browser sends `Origin: null` on the Approve/Deny POST, and the origin check rejects it.
+- With `API_DOCS_ENABLED=true`, `/docs` sends Huma's own CSP, which allows the renderer script and stylesheet that it loads from `unpkg.com`.
 
 tempogate does not send `Strict-Transport-Security`.
-TLS terminates at your proxy or ingress, which knows whether the hostname is HTTPS-only, so set HSTS there.
-Keep the headers above intact at the proxy: the anti-framing protection for the device approval page depends on them.
+TLS terminates at your proxy or ingress, which knows if the hostname is HTTPS-only, so set HSTS there.
+Keep the headers above at the proxy: the anti-framing protection of the device approval page depends on them.
 
-The public `/healthz` answers `{"status":"ok"}` only.
-The build version is on the admin listener's `/admin/healthz` and from `tempogate version`.
+The public `/healthz` answers only `{"status":"ok"}`.
+The build version is on `/admin/healthz` of the admin listener, and in the output of `tempogate version`.
 
 ## Observability
 
 ### Metrics
 
-`GET /metrics` on the **admin listener** serves Prometheus metrics.
-It is deliberately absent from the public listener (that returns 404) and sits outside `/admin/*`, so a scraper needs network access to the admin listener but no admin credentials.
-It is also exempt from `ADMIN_ALLOWED_HOSTS`: Prometheus addresses a target by its pod IP, which an allowlist of names would refuse, and the response carries nothing a DNS-rebinding page could use (no identities, tokens or keys).
-That makes the admin listener's bind the access control: keep it on loopback or a cluster-internal address restricted by a NetworkPolicy, never behind a public Service or Ingress.
+The **admin listener** serves Prometheus metrics at `GET /metrics`.
+The public listener does not serve them (it returns 404), by design.
+The endpoint is outside `/admin/*`, so a scraper needs network access to the admin listener, but no admin credentials.
+`ADMIN_ALLOWED_HOSTS` does not apply to it: Prometheus addresses a target by its pod IP, which a list of names refuses, and the response has nothing that a DNS-rebinding page can use (no identities, tokens or keys).
+The bind address of the admin listener is thus the access control.
+Keep it on loopback, or on a cluster-internal address that a NetworkPolicy restricts; never put it behind a public Service or Ingress.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
@@ -688,34 +736,35 @@ That makes the admin listener's bind the access control: keep it on loopback or 
 | `tempogate_db_errors_total` | counter | `op` (the store operation, e.g. `consume_refresh`, `probe`, `reap`) | State-store operations that failed. A miss (unknown or replayed code or token) is not an error. |
 | `tempogate_build_info` | gauge | `version`, `commit` | Always `1`; identifies the running build. |
 
-The Go runtime (`go_*`) and process (`process_*`) collectors are exposed too.
-Every label value comes from a fixed set chosen by tempogate: emails, client IDs, tokens and raw request input never become labels.
+The Go runtime (`go_*`) and process (`process_*`) collectors are also exposed.
+tempogate takes every label value from a fixed set: emails, client IDs, tokens and raw request input never become labels.
 
 Tracing (OpenTelemetry) is not implemented yet.
 
 ### Request logs
 
-With `LOG_REQUESTS=true` (the default) each request on either listener emits one structured line through the server logger:
+With `LOG_REQUESTS=true` (the default), each request on either listener writes one structured line through the server logger:
 
 ```
 INFO	http	http request	{"listener": "public", "method": "POST", "path": "/token", "status": 200, "duration": "3.1ms", "bytes": 1234, "remote_addr": "10.0.0.7:51234", "user_agent": "tempogate-cli/0.3.0", "request_id": "..."}
 ```
 
-- **Allowlisted fields only.** The query string (OAuth codes, `state`, PKCE parameters), request headers (`Authorization`, cookies) and bodies (refresh tokens, client secrets) are never logged; `path` is the URL path alone.
-- **`request_id`** is copied from the `X-Request-Id` response header when one is set, and omitted otherwise.
-- **`remote_addr`** is the TCP peer. Behind a proxy that is the proxy; `X-Forwarded-For` is not logged, even from an `HTTP_TRUSTED_PROXIES` peer.
-- **Not an audit log.** The admin API's `admin audit` and `admin request rejected` lines record who did what; the access log records only that a request happened, so it carries no caller, token fingerprint or Host.
-- **Level.** Requests log at `info`, so they are an audit trail at the default `LOG_LEVEL`. Kubelet probes and scrapes (`/healthz`, `/readyz`, `/admin/healthz`, `/metrics`) log at `debug`: they arrive every few seconds per pod and would drown the real traffic.
+- **Allowlisted fields only.** tempogate never logs the query string (OAuth codes, `state`, PKCE parameters), request headers (`Authorization`, cookies) or bodies (refresh tokens, client secrets). `path` is only the URL path.
+- **`request_id`** is a copy of the `X-Request-Id` response header when one is set; otherwise it is absent.
+- **`remote_addr`** is the TCP peer, which behind a proxy is the proxy. tempogate does not log `X-Forwarded-For`, even from an `HTTP_TRUSTED_PROXIES` peer.
+- **Not an audit log.** The `admin audit` and `admin request rejected` lines of the admin API record who did what. The access log records only that a request occurred, so it has no caller, token fingerprint or Host.
+- **Level.** Requests log at `info`, so they are a request trail at the default `LOG_LEVEL`. Kubelet probes and scrapes (`/healthz`, `/readyz`, `/admin/healthz`, `/metrics`) log at `debug`, because they arrive every few seconds per pod and would hide the real traffic.
 
 ### Health probes
 
-- **`/healthz`** (liveness) only says the process serves HTTP. It never touches the state store: restarting cannot bring back a lost volume, it would only turn a storage outage into a crash loop.
-- **`/readyz`** (readiness) is `503` until the public listener is bound, and on every call checks the state store with a 500 ms budget (inside the kubelet's default 1 s probe timeout). With SQLite the check pings the serving connection and also opens the database file at `STATE_SQLITE_PATH` read-only and reads the schema table, because the long-lived connection keeps working on a file that has been deleted, truncated or replaced underneath it.
-With Postgres it reads the schema table over a pooled connection. While it fails, `/readyz` answers `503` with a generic body (the cause is logged at `warn` and counted in `tempogate_db_errors_total{op="probe"}`), so the pod leaves the Service endpoints until the store is back.
+- **`/healthz`** (liveness) only tells that the process serves HTTP. It never touches the state store: a restart cannot bring back a lost volume, and would only turn a storage outage into a crash loop.
+- **`/readyz`** (readiness) is `503` until the public listener is bound. On every call, it checks the state store with a 500 ms budget (inside the kubelet's default 1 s probe timeout):
+  - With SQLite, it pings the serving connection, and also opens the database file at `STATE_SQLITE_PATH` read-only and reads the schema table. The long-lived connection keeps working on a file that was deleted, truncated or replaced, so the ping alone is not sufficient.
+  - With Postgres, it reads the schema table over a pooled connection.
+
+  While the check fails, `/readyz` answers `503` with a generic body (the cause is logged at `warn` and counted in `tempogate_db_errors_total{op="probe"}`), so the pod leaves the Service endpoints until the store is back.
 
 ## See also
 
-- [Helm chart values](../charts/tempogate/README.md#values) — the same
-  settings as chart `values.yaml` keys, plus Secret wiring.
-- [docs/getting-started.md](getting-started.md) — these settings in a working
-  end-to-end context.
+- [Helm chart values](../charts/tempogate/README.md#values) - the same settings as chart `values.yaml` keys, plus Secret wiring.
+- [docs/getting-started.md](getting-started.md) - these settings in a working end-to-end context.
