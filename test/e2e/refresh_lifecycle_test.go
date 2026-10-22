@@ -34,6 +34,10 @@ import (
 // familyIDPattern lifts family ids out of `tempogate sessions list` output.
 var familyIDPattern = regexp.MustCompile(`(?m)^([0-9a-f]{32})\s`)
 
+// sessionRowPattern lifts the SUBJECT column out of a `sessions list` row
+// (FAMILY_ID CLIENT_ID EMAIL SUBJECT ...).
+var sessionRowPattern = regexp.MustCompile(`(?m)^[0-9a-f]{32}\s+\S+\s+\S+\s+(\S+)\s`)
+
 func TestRefreshLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
@@ -124,9 +128,12 @@ func TestRefreshLifecycle(t *testing.T) {
 	t.Run("sessions revoke --subject ends every session of that account", func(t *testing.T) {
 		r.t = t
 		rt := r.cliRefreshToken(mockBase)
-		require.Contains(t, tg.exec(t, "sessions", "list", "--subject", allowedSub), allowedEmail)
+		row := sessionRowPattern.FindStringSubmatch(tg.exec(t, "sessions", "list", "--email", allowedEmail))
+		require.NotNil(t, row, "the new session is listed")
+		subject := row[1]
+		require.Contains(t, tg.exec(t, "sessions", "list", "--subject", subject), allowedEmail)
 
-		require.Contains(t, tg.exec(t, "sessions", "revoke", "--subject", allowedSub), "revoked")
+		require.Contains(t, tg.exec(t, "sessions", "revoke", "--subject", subject), "revoked")
 		requireInvalidGrant(t, refresh(rt), "a session of the revoked subject")
 		require.NotRegexp(t, familyIDPattern, tg.exec(t, "sessions", "list"), "no session of the only test account is left")
 	})
