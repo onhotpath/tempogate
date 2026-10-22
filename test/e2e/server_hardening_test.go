@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +136,7 @@ func startHardenedTempogate(ctx context.Context, t *testing.T, extra map[string]
 		"ADMIN_LISTENER":             "0.0.0.0:8081",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                tempogateIssuer,
+		"OIDC_ALLOW_INSECURE_ISSUER": "true", // plain-http issuer on the test network
 		"OIDC_ALLOWED_DOMAINS":       "example.com",
 		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
 		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
@@ -148,8 +148,7 @@ func startHardenedTempogate(ctx context.Context, t *testing.T, extra map[string]
 	for k, v := range extra {
 		env[k] = v
 	}
-	stateVol := fmt.Sprintf("tempogate-hardening-e2e-state-%d", time.Now().UnixNano())
-	t.Cleanup(func() { removeVolume(ctx, t, stateVol) })
+	stateVol := stateVolume(t, "tempogate-hardening-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -183,14 +182,6 @@ func startHardenedTempogate(ctx context.Context, t *testing.T, extra map[string]
 	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
 	return tempogate
-}
-
-// removeVolume drops the named state volume; Terminate only removes
-// anonymous volumes.
-func removeVolume(ctx context.Context, t *testing.T, name string) {
-	if out, err := exec.CommandContext(ctx, "docker", "volume", "rm", "-f", name).CombinedOutput(); err != nil {
-		t.Logf("e2e: volume %s not removed: %v: %s", name, err, out)
-	}
 }
 
 func dial(t *testing.T, addr string) net.Conn {
