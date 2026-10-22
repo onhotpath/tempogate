@@ -65,6 +65,27 @@ func (s *StoreSuite) TestIsCurrent() {
 	s.Contains(err.Error(), "tempogate migrate")
 }
 
+func (s *StoreSuite) TestIsCurrentRejectsGapBelowMax() {
+	// Migrations merged out of numeric order leave a lower embedded version
+	// unapplied while the max is recorded; MAX(version) alone hides that.
+	_, err := s.store.db.ExecContext(s.ctx, `DELETE FROM schema_migrations WHERE version IN (3, 5)`)
+	s.Require().NoError(err)
+
+	err = s.store.IsCurrent(s.ctx)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "schema is missing migrations 3, 5")
+	s.Contains(err.Error(), "tempogate migrate")
+}
+
+func (s *StoreSuite) TestIsCurrentAllowsUnknownNewerVersions() {
+	// A newer binary migrated this DB; an older binary must still serve.
+	_, err := s.store.db.ExecContext(s.ctx,
+		`INSERT INTO schema_migrations (version, name) VALUES (999, 'from_newer_binary')`)
+	s.Require().NoError(err)
+
+	s.Require().NoError(s.store.IsCurrent(s.ctx))
+}
+
 func (s *StoreSuite) TestIsCurrentOnFreshDB() {
 	fresh, err := New(WithPath(filepath.Join(s.T().TempDir(), "fresh.db")))
 	s.Require().NoError(err)
