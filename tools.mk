@@ -18,6 +18,11 @@ GCI_VERSION           ?= v0.14.0
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.9.0
 ACTIONLINT_VERSION    ?= v1.7.12
+# Deployment test tools (lint-chart, test-chart, test-deploy-kind), built
+# from source like gci.
+KIND_VERSION          ?= v0.33.0
+KUBECONFORM_VERSION   ?= v0.8.0
+YQ_VERSION            ?= v4.54.1
 
 GOLANGCI_LINT_SHA256_linux_amd64  := ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
 GOLANGCI_LINT_SHA256_linux_arm64  := ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae

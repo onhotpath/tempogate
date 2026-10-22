@@ -1,0 +1,116 @@
+# Helm values for test/deploy/chart-lint.sh: turns on every optional template
+# and value block so `helm lint --strict` and kubeconform see each rendered
+# field at least once. Not a deployment template.
+imagePullSecrets:
+  - name: registry-credentials
+
+serviceAccount:
+  annotations:
+    example.com/owner: platform
+
+podAnnotations:
+  example.com/scrape: "true"
+podLabels:
+  example.com/team: platform
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: tempogate.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: tempogate-tls
+      hosts:
+        - tempogate.example.com
+
+httpRoute:
+  enabled: true
+  annotations:
+    example.com/route: "true"
+
+service:
+  admin:
+    enabled: true
+
+trustedProxies:
+  - 10.0.0.0/8
+
+persistence:
+  storageClass: standard
+  annotations:
+    example.com/backup: daily
+
+log:
+  level: debug
+
+keys:
+  encryptionKeySecretRef:
+    name: tempogate
+    key: keys-encryption-key
+
+oidc:
+  issuer: https://tempogate.example.com
+  sessionSigningKeySecretRef:
+    name: tempogate
+    key: session-signing-key
+  sessionTtl: 10m
+
+auth:
+  clients: temporal-ui:https://temporal.example.com/auth/sso/callback,tempogate-device-ui:https://tempogate.example.com/device/sso-callback
+  allowedDomains:
+    - example.com
+  clientSecretsSecretRef:
+    name: tempogate
+    key: client-secrets
+  upstream:
+    google:
+      clientIdSecretRef:
+        name: tempogate-google
+        key: client-id
+      clientSecretSecretRef:
+        name: tempogate-google
+        key: client-secret
+      authEndpoint: https://idp.example.com/auth
+      tokenEndpoint: https://idp.example.com/token
+      issuerUrl: https://idp.example.com
+
+admin:
+  tokenSha256SecretRef:
+    name: tempogate
+    key: admin-token-sha256
+  allowedHosts:
+    - tempogate-admin.example.com
+  allowSystemGrants: true
+
+extraEnv:
+  - name: STATE_SQLITE_BUSY_TIMEOUT
+    value: 7s
+
+volumes:
+  - name: tmp
+    emptyDir: {}
+volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+
+nodeSelector:
+  kubernetes.io/os: linux
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: tempogate
+    effect: NoSchedule
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+            - key: kubernetes.io/arch
+              operator: In
+              values: [amd64, arm64]
