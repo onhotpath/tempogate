@@ -41,6 +41,7 @@ type Result struct {
 	OIDCClientSecrets     string        `name:"oidc_client_secrets"`
 	OIDCAllowInsecureURIs bool          `name:"oidc_allow_insecure_redirect_uris"`
 	OIDCAllowedDomains    string        `name:"oidc_allowed_domains"`
+	OIDCAllowedHDs        string        `name:"oidc_allowed_hosted_domains"`
 	OIDCSessionTTL        time.Duration `name:"oidc_session_ttl"`
 	OIDCSessionSigningKey string        `name:"oidc_session_signing_key"`
 	OIDCAccessTokenTTL    time.Duration `name:"oidc_access_token_ttl"`
@@ -102,6 +103,7 @@ func project(cfg *Config) Result {
 		OIDCClientSecrets:     cfg.OIDC.ClientSecrets,
 		OIDCAllowInsecureURIs: cfg.OIDC.AllowInsecureRedirectURIs,
 		OIDCAllowedDomains:    cfg.OIDC.AllowedDomains,
+		OIDCAllowedHDs:        cfg.OIDC.AllowedHostedDomains,
 		OIDCSessionTTL:        cfg.OIDC.SessionTTL,
 		OIDCSessionSigningKey: cfg.OIDC.SessionSigningKey,
 		OIDCAccessTokenTTL:    cfg.OIDC.AccessTokenTTL,

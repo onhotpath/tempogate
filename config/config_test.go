@@ -460,10 +460,11 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "callback allowlist and google credentials overridden by env",
 			env: map[string]string{
-				"OIDC_ALLOWED_DOMAINS":       "example.com,corp.example.org",
-				"OIDC_GOOGLE_CLIENT_SECRET":  "gocspx-secret",
-				"OIDC_GOOGLE_TOKEN_ENDPOINT": "http://127.0.0.1:9999/mock/token",
-				"OIDC_GOOGLE_ISSUER_URL":     "http://127.0.0.1:9999",
+				"OIDC_ALLOWED_DOMAINS":        "example.com,corp.example.org",
+				"OIDC_ALLOWED_HOSTED_DOMAINS": "example.com",
+				"OIDC_GOOGLE_CLIENT_SECRET":   "gocspx-secret",
+				"OIDC_GOOGLE_TOKEN_ENDPOINT":  "http://127.0.0.1:9999/mock/token",
+				"OIDC_GOOGLE_ISSUER_URL":      "http://127.0.0.1:9999",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info"},
@@ -495,13 +496,14 @@ func (s *ConfigSuite) TestNew() {
 					ReaperInterval: 5 * time.Minute,
 				},
 				OIDC: OIDCConfig{
-					Issuer:              "http://127.0.0.1:8000",
-					AllowedDomains:      "example.com,corp.example.org",
-					SessionTTL:          5 * time.Minute,
-					AccessTokenTTL:      4 * time.Hour,
-					AccessTokenAudience: "temporal",
-					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					Issuer:               "http://127.0.0.1:8000",
+					AllowedDomains:       "example.com,corp.example.org",
+					AllowedHostedDomains: "example.com",
+					SessionTTL:           5 * time.Minute,
+					AccessTokenTTL:       4 * time.Hour,
+					AccessTokenAudience:  "temporal",
+					RefreshTokenTTL:      7 * 24 * time.Hour,
+					RefreshMaxLifetime:   30 * 24 * time.Hour,
 					Google: GoogleConfig{
 						ClientSecret:  "gocspx-secret",
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",

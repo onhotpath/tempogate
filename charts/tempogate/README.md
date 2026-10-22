@@ -152,6 +152,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `auth.clients` | `""` | `OIDC_CLIENTS` - `id:redirect_uri` allowlist of exact redirect URIs (loopback `http://127.0.0.1/<path>` matches any port; `id:` registers a device-only client). See [docs/configuration.md](../../docs/configuration.md#redirect-uri-registration). |
 | `auth.allowInsecureRedirectUris` | `false` | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` - dev only; allow plain-http non-loopback redirect URIs. |
 | `auth.allowedDomains` | `[]` | `OIDC_ALLOWED_DOMAINS` — SSO email-domain gate. |
+| `auth.allowedHostedDomains` | `[]` | `OIDC_ALLOWED_HOSTED_DOMAINS` - Google Workspace `hd` gate ("Workspace mode"); recommended for Workspace organizations. |
 | `auth.clientSecretsSecretRef` | `{name,key}` empty | Secret holding `OIDC_CLIENT_SECRETS`. |
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |
 | `auth.upstream.google.clientSecretSecretRef` | `{name,key}` empty | Secret holding the Google client secret. |

@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	testSessionSID   = "fixed-session-sid"
-	testSessionEmail = "alice@example.com"
-	testSessionTTL   = 5 * time.Minute
-	testCookieName   = "tempogate_session"
+	testSessionSID     = "fixed-session-sid"
+	testSessionEmail   = "alice@example.com"
+	testSessionSubject = "google-sub-alice"
+	testSessionTTL     = 5 * time.Minute
+	testCookieName     = "tempogate_session"
 	// The default path is the device-flow UI at a root issuer; the fx wiring
 	// prefixes the issuer base path (see TestSessionCookieFollowsIssuer).
 	testCookiePath     = oidc.DevicePath
@@ -30,6 +31,8 @@ const (
 )
 
 var testSessionNow = time.Unix(1700000000, 0).UTC()
+
+var testSessionIdentity = oidc.Identity{Subject: testSessionSubject, Email: testSessionEmail}
 
 // memBrowserSessionStore satisfies oidc.BrowserSessionStore structurally —
 // the consumer-side interface convention means oidc_test owns its own stub.
@@ -135,7 +138,7 @@ func (s *SessionSuite) signedCookie(sid string) string {
 func (s *SessionSuite) TestIssueSetsCookieAndPersistsRow() {
 	rec := httptest.NewRecorder()
 
-	sid, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	sid, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 	s.Equal(testSessionSID, sid)
 
@@ -143,6 +146,7 @@ func (s *SessionSuite) TestIssueSetsCookieAndPersistsRow() {
 	s.Equal(1, s.store.count())
 	saved := s.store.only()
 	s.Equal(testSessionSID, saved.SID)
+	s.Equal(testSessionSubject, saved.Subject)
 	s.Equal(testSessionEmail, saved.Email)
 	s.True(saved.CreatedAt.Equal(testSessionNow), "createdAt: want %v, got %v", testSessionNow, saved.CreatedAt)
 	s.True(saved.ExpiresAt.Equal(testSessionNow.Add(testSessionTTL)),
@@ -170,7 +174,7 @@ func (s *SessionSuite) TestIssueSurfacesSIDGeneratorError() {
 	)
 	rec := httptest.NewRecorder()
 
-	_, err := mgr.Issue(s.ctx, rec, testSessionEmail)
+	_, err := mgr.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, boom), "expected sid-generator error to wrap %v, got %v", boom, err)
 	s.Zero(s.store.saveCalls)
@@ -182,7 +186,7 @@ func (s *SessionSuite) TestIssueSurfacesStoreError() {
 	s.store.saveErr = boom
 	rec := httptest.NewRecorder()
 
-	_, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	_, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, boom), "expected store save error to wrap %v, got %v", boom, err)
 	// No cookie should be set if persistence failed — otherwise the browser
@@ -192,7 +196,7 @@ func (s *SessionSuite) TestIssueSurfacesStoreError() {
 
 func (s *SessionSuite) TestGetRoundTrip() {
 	rec := httptest.NewRecorder()
-	_, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	_, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 
 	req := httptest.NewRequest(http.MethodGet, "https://tempogate.example.com"+testCookiePath, http.NoBody)
@@ -203,14 +207,32 @@ func (s *SessionSuite) TestGetRoundTrip() {
 	got, err := s.manager.Get(s.ctx, req)
 	s.Require().NoError(err)
 	s.Equal(testSessionSID, got.SID)
+	s.Equal(testSessionSubject, got.Subject)
 	s.Equal(testSessionEmail, got.Email)
+}
+
+// TestGetRejectsLegacySessionWithoutSubject covers a row written before
+// schema 0010: a validly signed cookie whose session has no subject is
+// treated as no session, so the verification UI restarts the sign-in.
+func (s *SessionSuite) TestGetRejectsLegacySessionWithoutSubject() {
+	rec := httptest.NewRecorder()
+	_, err := s.manager.Issue(s.ctx, rec, oidc.Identity{Email: testSessionEmail})
+	s.Require().NoError(err)
+
+	req := httptest.NewRequest(http.MethodGet, "https://tempogate.example.com"+testCookiePath, http.NoBody)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+
+	_, err = s.manager.Get(s.ctx, req)
+	s.ErrorIs(err, oidc.ErrNoSession)
 }
 
 func (s *SessionSuite) TestGetRejectsBadInputs() {
 	// Seed a valid row so only the cookie variations are responsible for
 	// each failure mode the test asserts.
 	rec := httptest.NewRecorder()
-	_, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	_, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 	validValue := rec.Result().Cookies()[0].Value
 
@@ -252,7 +274,7 @@ func (s *SessionSuite) TestGetRejectsBadInputs() {
 
 func (s *SessionSuite) TestGetRejectsDeletedRow() {
 	rec := httptest.NewRecorder()
-	_, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	_, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 
 	s.Require().NoError(s.store.DeleteBrowserSession(s.ctx, testSessionSID))
@@ -269,7 +291,7 @@ func (s *SessionSuite) TestGetRejectsDeletedRow() {
 
 func (s *SessionSuite) TestGetRejectsExpiredRow() {
 	rec := httptest.NewRecorder()
-	_, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	_, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 
 	// Build a manager that sees a clock past the row's ExpiresAt so the TTL
@@ -310,7 +332,7 @@ func (s *SessionSuite) TestGetSurfacesUnexpectedLookupError() {
 
 func (s *SessionSuite) TestClearRemovesRowAndExpiresCookie() {
 	rec := httptest.NewRecorder()
-	_, err := s.manager.Issue(s.ctx, rec, testSessionEmail)
+	_, err := s.manager.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 	s.Require().Equal(1, s.store.count())
 
@@ -371,7 +393,7 @@ func (s *SessionSuite) TestCookieAttributesAreFixed() {
 		oidc.WithSessionSIDGenerator(func() (string, error) { return testSessionSID, nil }),
 	)
 	rec := httptest.NewRecorder()
-	_, err := mgr.Issue(s.ctx, rec, testSessionEmail)
+	_, err := mgr.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 
 	cookies := rec.Result().Cookies()
@@ -392,7 +414,7 @@ func (s *SessionSuite) TestCookieNameAndPathOverride() {
 		oidc.WithCookiePath("/some/path"),
 	)
 	rec := httptest.NewRecorder()
-	_, err := mgr.Issue(s.ctx, rec, testSessionEmail)
+	_, err := mgr.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 
 	c := rec.Result().Cookies()[0]
@@ -415,7 +437,7 @@ func (s *SessionSuite) TestCookieSecureOptOut() {
 		oidc.WithCookieSecure(false),
 	)
 	rec := httptest.NewRecorder()
-	_, err := mgr.Issue(s.ctx, rec, testSessionEmail)
+	_, err := mgr.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 	issued := rec.Result().Cookies()
 	s.Require().Len(issued, 1)
@@ -439,7 +461,7 @@ func (s *SessionSuite) TestDefaultTTLIsFiveMinutes() {
 		// No WithSessionTTL → must default to 5m per the architecture decision.
 	)
 	rec := httptest.NewRecorder()
-	_, err := mgr.Issue(s.ctx, rec, testSessionEmail)
+	_, err := mgr.Issue(s.ctx, rec, testSessionIdentity)
 	s.Require().NoError(err)
 
 	saved := s.store.only()

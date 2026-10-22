@@ -48,10 +48,10 @@ func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 					return err
 				}
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "FAMILY_ID\tCLIENT_ID\tEMAIL\tAUTH_TIME\tLAST_ROTATION\tEXPIRES_AT")
+				_, _ = fmt.Fprintln(w, "FAMILY_ID\tCLIENT_ID\tEMAIL\tSUBJECT\tAUTH_TIME\tLAST_ROTATION\tEXPIRES_AT")
 				for _, s := range sessions {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-						s.FamilyID, s.ClientID, s.Email,
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						s.FamilyID, s.ClientID, s.Email, s.Subject,
 						rfc3339(s.AuthTime), rfc3339(s.RotatedAt), rfc3339(s.ExpiresAt))
 				}
 				return w.Flush()

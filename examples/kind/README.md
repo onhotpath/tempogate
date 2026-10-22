@@ -47,7 +47,8 @@ is the docker-compose example and the getting-started guide.
 - **Real Google SSO:** create an upstream client
   ([`../google-oauth-setup.md`](../google-oauth-setup.md)), put its
   credentials in a Secret, and set `oidc.issuer`, `auth.clients`,
-  `auth.allowedDomains`, and the Google `*SecretRef` chart values — see the
+  `auth.allowedDomains` (plus `auth.allowedHostedDomains` for a Google
+  Workspace organization), and the Google `*SecretRef` chart values - see the
   [chart README](../../charts/tempogate/README.md).
 - **Point Temporal at tempogate's JWKS:**
   [`temporal-values.yaml`](./temporal-values.yaml) — both the Temporal Helm

@@ -76,8 +76,9 @@ func (u *UserInfo) handle(ctx context.Context, in *userInfoInput) (*userInfoOutp
 
 	sub, _ := tok.Subject()
 	if sub == "" {
-		// Every tempogate-minted token sets sub = the verified email; one
-		// without a subject is not a user we can describe.
+		// Every tempogate-minted human token sets sub = the upstream
+		// (Google) subject; one without a subject is not a user we can
+		// describe.
 		return nil, huma.Error401Unauthorized("token has no subject")
 	}
 
@@ -114,7 +115,8 @@ func bearerToken(header string) (string, bool) {
 }
 
 // displayName derives the session label: the email local-part when present
-// (v1 carries no name from Google), falling back to the subject.
+// (v1 carries no name from Google), falling back to the subject, which is an
+// opaque account id for human tokens and the owner for integration keys.
 func displayName(email, sub string) string {
 	if at := strings.IndexByte(email, '@'); at > 0 {
 		return email[:at]

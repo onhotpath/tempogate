@@ -108,7 +108,11 @@ func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values, authHeader
 		return nil, fmt.Errorf("oidc: consume device code: %w", err)
 	}
 
+	if final.Subject == "" {
+		return nil, errLegacyGrant("device code")
+	}
+
 	// RFC 8628 has no nonce concept; minting with empty nonce is the correct
 	// behaviour and matches authorization_code on every other claim.
-	return t.issue(ctx, final.Email, final.ClientID, "", lineage{})
+	return t.issue(ctx, Identity{Subject: final.Subject, Email: final.Email}, final.ClientID, "", lineage{})
 }

@@ -137,6 +137,37 @@ func (s *AuthorizeSuite) TestValidRequestRedirectsToGoogle() {
 	s.Equal(fixedState, q.Get("state"))
 }
 
+// TestHostedDomainHint covers the `hd` parameter sent to Google. It is a UX
+// hint only (Google pre-selects the Workspace account); the callback's `hd`
+// claim check is the security control.
+func (s *AuthorizeSuite) TestHostedDomainHint() {
+	cases := []struct {
+		name    string
+		hosted  string
+		wantHD  string
+		present bool
+	}{
+		{name: "workspace off: no hd", hosted: "", present: false},
+		{name: "one hosted domain: exact hint", hosted: " Example.COM ", wantHD: "example.com", present: true},
+		{name: "several hosted domains: wildcard hint", hosted: "example.com,corp.example.org", wantHD: "*", present: true},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			srv := s.serverFor(&memAuthStore{}, oidc.WithHostedDomainHint(tc.hosted))
+			defer srv.Close()
+
+			resp := s.get(srv, validParams())
+			defer resp.Body.Close()
+			s.Require().Equal(http.StatusFound, resp.StatusCode)
+
+			loc, err := url.Parse(resp.Header.Get("Location"))
+			s.Require().NoError(err)
+			s.Equal(tc.present, loc.Query().Has("hd"))
+			s.Equal(tc.wantHD, loc.Query().Get("hd"))
+		})
+	}
+}
+
 // TestPathIssuerRedirectURICarriesPrefix is the contract that makes sub-path
 // hosting work: oidc.New already trims/uses the issuer verbatim, so a
 // path-prefixed issuer (e.g. https://h/idp) yields a prefixed Google

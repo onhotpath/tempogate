@@ -157,6 +157,7 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | no | `false` | Dev only. Allows plain-`http` redirect URIs for non-loopback hosts in `OIDC_CLIENTS` (e.g. `http://temporal-ui:8080/auth/sso/callback` in a local Docker Compose stack). Leave it off in production: a code sent over plain http to a remote host can be read on the network. |
 | `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. The deliberately-separate, auditable opt-in that promotes a registered client to **confidential** (the PKCE carve-out) — e.g. the Temporal Web UI, which does not implement PKCE; also `tempogate-device-ui`, which tempogate uses as a client of itself when bouncing the verification page through Google SSO. An entry for an unregistered id fails fast. See [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md). |
 | `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated, exact-match email-domain gate applied to Google's verified email after sign-in, and re-applied to the session's email on every refresh: removing a domain ends its users' sessions at their next refresh (and revokes them). **Empty means nobody is admitted.** |
+| `OIDC_ALLOWED_HOSTED_DOMAINS` | recommended | _(empty)_ | Comma-separated Google Workspace domains ("Workspace mode"). When set, Google's `id_token` must carry an `hd` (hosted domain) claim in this list, on top of `email_verified` and `OIDC_ALLOWED_DOMAINS`. Exact, case-insensitive match. Empty keeps the email-domain-only gate and logs a warning at startup. See [Hosted domain (Workspace mode)](#hosted-domain-workspace-mode). |
 | `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; lifetime of each access token. This is also the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. ID tokens always live 5 minutes. |
 | `OIDC_ACCESS_TOKEN_AUDIENCE` | no | `temporal` | The `aud` of every access token, integration keys included. Set Temporal's `global.authorization.audience` (Temporal v1.29.0+) to the same value so the frontend refuses tokens minted for anything else. Must not be empty. See [Access tokens and ID tokens](#access-tokens-and-id-tokens). |
 | `OIDC_REFRESH_TOKEN_TTL` | no | `168h` | Go duration (7 days); idle lifetime of each rotated refresh token. A session not refreshed for this long ends. Must not exceed `OIDC_REFRESH_MAX_LIFETIME`. |
@@ -172,10 +173,40 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 **Minimum for real SSO:** `OIDC_ISSUER`, `OIDC_CLIENTS`,
 `OIDC_ALLOWED_DOMAINS`, `OIDC_SESSION_SIGNING_KEY`,
 `OIDC_GOOGLE_CLIENT_ID`, `OIDC_GOOGLE_CLIENT_SECRET`.
+If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 **Device verification rate limits** have no configuration keys.
 Failed user-code attempts on the verification pages are limited to 20 per minute per client IP and 5 per minute per verification session, in memory on each replica (see [docs/cli-device-login.md](cli-device-login.md#security-notes)).
 The client IP is the TCP peer; `X-Forwarded-For` is not read, so behind a reverse proxy all clients share the proxy's IP budget (one client spending it throttles code entry for the rest for up to a minute) and the per-session budget still applies.
+
+### Hosted domain (Workspace mode)
+
+`OIDC_ALLOWED_DOMAINS` only checks the domain of the email address.
+That is not proof that your organization controls the Google account: anyone who can receive mail at an address can create a consumer Google account for it, and Google then reports `email_verified: true`.
+Google's guidance is to restrict access to an organization with the `hd` (hosted domain) claim, which Google sets only for accounts managed by a Google Workspace or Cloud organization ([OpenID Connect docs](https://developers.google.com/identity/openid-connect/openid-connect)).
+
+Set `OIDC_ALLOWED_HOSTED_DOMAINS` to your Workspace primary domain (or several, comma-separated) to require it:
+
+| Google account | `OIDC_ALLOWED_HOSTED_DOMAINS` empty | `OIDC_ALLOWED_HOSTED_DOMAINS=example.com` |
+| --- | --- | --- |
+| Workspace user `alice@example.com` (`hd=example.com`) | admitted | admitted |
+| Consumer account for `alice@example.com` (no `hd`) | admitted | **rejected (403)** |
+| Account in another Workspace (`hd=other.test`) with an allowed email | admitted | **rejected (403)** |
+
+Both lists apply: the email domain must still be in `OIDC_ALLOWED_DOMAINS`.
+`hd` is the organization's primary domain, so list it even when users sign in with a secondary or alias domain.
+Leave the setting empty only when your email is not on Google Workspace; tempogate then logs a warning at startup.
+
+tempogate also sends Google the `hd` request parameter (the domain when one is configured, `*` when several), so the account chooser offers the right account.
+That parameter is only a UI hint: the user can edit the request, so the `hd` claim check above is the control.
+
+### Token subject
+
+The `sub` of every token tempogate mints for a person is the Google account's `sub`: an opaque, stable id that Google never reuses.
+The email is in the `email` claim (the ID token also carries `email_verified: true`).
+Do not key users on the email: Google can re-issue an address to a different account, which would otherwise inherit the previous holder's identity.
+Temporal's default claim mapper authorizes from `permissions`, not `sub`.
+Integration keys are unchanged: their `sub` is still the key's owner.
 
 ### Access tokens and ID tokens
 
@@ -225,7 +256,7 @@ Token values are never logged.
 Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
 
 ```bash
-tempogate sessions list [--email alice@example.com]   # family id, client, email, sign-in, last rotation, expiry
+tempogate sessions list [--email alice@example.com]   # family id, client, email, Google subject, sign-in, last rotation, expiry
 tempogate sessions revoke --email alice@example.com   # every session of a user
 tempogate sessions revoke --family <family-id>        # one session
 ```

@@ -126,8 +126,9 @@ func TestCLILogin(t *testing.T) {
 	ctx := context.Background()
 	st := setupCLIStack(ctx, t)
 
-	// Identity the mock asserts; example.com is tempogate's allowed domain.
-	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedEmail, true)
+	// Identity the mock asserts: a Workspace user of example.com, which is
+	// both tempogate's allowed email domain and its allowed hosted domain.
+	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedIdentity())
 
 	// --- tempogate login: real binary, real loopback, browser-driven consent.
 	loginDone := make(chan loginResult, 1)
@@ -209,6 +210,7 @@ func TestCLILogin(t *testing.T) {
 	})
 	refreshed := st.runToken(ctx, t)
 	require.NotEqual(t, tok.AccessToken, refreshed, "an expiring token must be refreshed to a new JWT")
+	// assertTempogateJWT pins sub to the Google sub: a refresh keeps it.
 	assertTempogateJWT(t, refreshed)
 
 	after := st.readToken(ctx, t)
@@ -258,7 +260,10 @@ func assertTempogateJWT(t *testing.T, raw string) {
 	iss, _ := parsed.Issuer()
 	require.Equal(t, tempogateIssuer, iss)
 	sub, _ := parsed.Subject()
-	require.Equal(t, allowedEmail, sub)
+	require.Equal(t, allowedSub, sub, "sub must be Google's stable account id, not the email")
+	email, ok := parsed.Field("email")
+	require.True(t, ok, "email stays a claim")
+	require.Equal(t, allowedEmail, email)
 	aud, _ := parsed.Audience()
 	require.Equal(t, []string{temporalAudience}, aud, "the CLI holds the access token, for the Temporal audience")
 	perms, ok := parsed.Field("permissions")
@@ -418,16 +423,17 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 	// reuse this stack; addDeviceUIServerEnv adds the verification-UI's
 	// internal client + session signing key the server fx graph requires.
 	tgEnv := map[string]string{
-		"HTTP_LISTENER":              "0.0.0.0:8000",
-		"STATE_SQLITE_PATH":          "/state/state.db",
-		"OIDC_ISSUER":                tempogateIssuer,
-		"OIDC_CLIENTS":               cliClientID + ":http://127.0.0.1/callback," + deviceClientID + ":",
-		"OIDC_ALLOWED_DOMAINS":       "example.com",
-		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
-		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC_GOOGLE_AUTH_ENDPOINT":  mockIssuer + "/auth",
-		"OIDC_GOOGLE_TOKEN_ENDPOINT": mockIssuer + "/token",
-		"OIDC_GOOGLE_ISSUER_URL":     mockIssuer,
+		"HTTP_LISTENER":               "0.0.0.0:8000",
+		"STATE_SQLITE_PATH":           "/state/state.db",
+		"OIDC_ISSUER":                 tempogateIssuer,
+		"OIDC_CLIENTS":                cliClientID + ":http://127.0.0.1/callback," + deviceClientID + ":",
+		"OIDC_ALLOWED_DOMAINS":        "example.com",
+		"OIDC_ALLOWED_HOSTED_DOMAINS": hostedDomain,
+		"OIDC_GOOGLE_CLIENT_ID":       "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":   "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":   mockIssuer + "/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT":  mockIssuer + "/token",
+		"OIDC_GOOGLE_ISSUER_URL":      mockIssuer,
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	cfg := cliStackConfig{env: tgEnv}

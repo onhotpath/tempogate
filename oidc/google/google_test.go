@@ -26,8 +26,10 @@ const (
 
 type idp struct {
 	priv         *rsa.PrivateKey
+	sub          string
 	email        string
 	verified     bool
+	hd           string
 	omitIDToken  bool
 	failExchange bool
 	discoveryN   int32
@@ -39,7 +41,7 @@ func newIDP(t *testing.T) *idp {
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
 	}
-	return &idp{priv: priv, email: "user@example.com", verified: true}
+	return &idp{priv: priv, sub: "sub-1", email: "user@example.com", verified: true}
 }
 
 func (i *idp) server(t *testing.T) *httptest.Server {
@@ -86,15 +88,20 @@ func (i *idp) signedIDToken(t *testing.T, issuer string) string {
 	_ = priv.Set(jwk.KeyIDKey, testKID)
 	_ = priv.Set(jwk.AlgorithmKey, jwa.RS256())
 	now := time.Now()
-	tok, err := jwt.NewBuilder().
+	b := jwt.NewBuilder().
 		Issuer(issuer).
 		Audience([]string{testClientID}).
-		Subject("sub-1").
 		IssuedAt(now).
 		Expiration(now.Add(time.Hour)).
 		Claim("email", i.email).
-		Claim("email_verified", i.verified).
-		Build()
+		Claim("email_verified", i.verified)
+	if i.sub != "" {
+		b = b.Subject(i.sub)
+	}
+	if i.hd != "" {
+		b = b.Claim("hd", i.hd)
+	}
+	tok, err := b.Build()
 	if err != nil {
 		t.Fatalf("build token: %v", err)
 	}
@@ -131,10 +138,45 @@ func (s *GoogleSuite) TestHappyPath() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	email, verified, err := c.ExchangeAndVerify(s.ctx, "code")
+	id, err := c.ExchangeAndVerify(s.ctx, "code")
 	s.Require().NoError(err)
-	s.Equal("user@example.com", email)
-	s.True(verified)
+	s.Equal("sub-1", id.Subject)
+	s.Equal("user@example.com", id.Email)
+	s.True(id.EmailVerified)
+	s.Empty(id.HostedDomain, "a consumer account carries no hd claim")
+}
+
+func (s *GoogleSuite) TestHostedDomainIsDecoded() {
+	i := newIDP(s.T())
+	i.hd = "example.com"
+	srv := i.server(s.T())
+	c := s.clientFor(srv)
+
+	id, err := c.ExchangeAndVerify(s.ctx, "code")
+	s.Require().NoError(err)
+	s.Equal("example.com", id.HostedDomain)
+}
+
+func (s *GoogleSuite) TestMissingSubjectIsRejected() {
+	i := newIDP(s.T())
+	i.sub = ""
+	srv := i.server(s.T())
+	c := s.clientFor(srv)
+
+	_, err := c.ExchangeAndVerify(s.ctx, "code")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "sub")
+}
+
+func (s *GoogleSuite) TestMissingEmailIsRejected() {
+	i := newIDP(s.T())
+	i.email = ""
+	srv := i.server(s.T())
+	c := s.clientFor(srv)
+
+	_, err := c.ExchangeAndVerify(s.ctx, "code")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "email")
 }
 
 func (s *GoogleSuite) TestExchangeFailure() {
@@ -143,7 +185,7 @@ func (s *GoogleSuite) TestExchangeFailure() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, _, err := c.ExchangeAndVerify(s.ctx, "code")
+	_, err := c.ExchangeAndVerify(s.ctx, "code")
 	s.Require().Error(err)
 	s.Contains(err.Error(), "code exchange")
 }
@@ -154,7 +196,7 @@ func (s *GoogleSuite) TestMissingIDToken() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, _, err := c.ExchangeAndVerify(s.ctx, "code")
+	_, err := c.ExchangeAndVerify(s.ctx, "code")
 	s.Require().Error(err)
 	s.Contains(err.Error(), "missing id_token")
 }
@@ -171,11 +213,11 @@ func (s *GoogleSuite) TestDiscoveryFailureIsCached() {
 	c := google.New(testClientID, "secret", srv.URL+"/token",
 		"https://tempogate.example.com/callback/google", srv.URL)
 
-	_, _, err1 := c.ExchangeAndVerify(s.ctx, "code")
+	_, err1 := c.ExchangeAndVerify(s.ctx, "code")
 	s.Require().Error(err1)
 	s.Contains(err1.Error(), "discovery")
 
-	_, _, err2 := c.ExchangeAndVerify(s.ctx, "code")
+	_, err2 := c.ExchangeAndVerify(s.ctx, "code")
 	s.Require().Error(err2)
 	s.Contains(err2.Error(), "discovery")
 }

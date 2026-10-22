@@ -38,6 +38,14 @@ in *Testing* you must add each user under *Test users*.
 > `OIDC_ALLOWED_DOMAINS`, applied to Google's verified email **after**
 > sign-in — not this screen. Consent-screen *Internal* and
 > `ALLOWED_DOMAINS` are independent layers; set both.
+>
+> If your users are in Google Workspace, also set
+> `OIDC_ALLOWED_HOSTED_DOMAINS` to your Workspace primary domain.
+> The email domain alone does not prove your organization manages the
+> account: anyone can create a consumer Google account for an address
+> they receive mail at. With it set, tempogate requires Google's `hd`
+> claim to match. See
+> [Hosted domain (Workspace mode)](../docs/configuration.md#hosted-domain-workspace-mode).
 
 ## 3. Create an OAuth client ID
 
@@ -81,7 +89,8 @@ Never commit the client secret.
 
 Set the four required SSO env vars (`OIDC_ISSUER`, `OIDC_CLIENTS`,
 `OIDC_ALLOWED_DOMAINS`, and the two `OIDC_GOOGLE_*` credentials — full
-reference in [docs/configuration.md](../docs/configuration.md)), start
+reference in [docs/configuration.md](../docs/configuration.md)), plus
+`OIDC_ALLOWED_HOSTED_DOMAINS` for a Workspace organization, start
 tempogate, and complete a Web UI or `tempogate login` sign-in. A
 `redirect_uri_mismatch` from Google means step 3's URI does not exactly equal
 `OIDC_ISSUER` + `/callback/google`.

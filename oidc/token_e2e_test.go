@@ -199,7 +199,7 @@ func (s *TokenE2ESuite) TestFullFlowMintsJWTVerifiableAgainstPublishedJWKS() {
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-123", sub, "sub is the upstream Google sub, not the email")
 
 	perms, ok := tok.Field("permissions")
 	s.Require().True(ok)
@@ -228,7 +228,7 @@ func (s *TokenE2ESuite) TestFullFlowMintsJWTVerifiableAgainstPublishedJWKS() {
 		Name          string `json:"name"`
 	}
 	s.Require().NoError(json.NewDecoder(uiResp.Body).Decode(&ui))
-	s.Equal("alice@example.com", ui.Sub)
+	s.Equal("google-sub-123", ui.Sub)
 	s.Equal("alice@example.com", ui.Email)
 	s.True(ui.EmailVerified)
 	s.Equal("alice", ui.Name)
@@ -411,7 +411,8 @@ func (s *TokenE2ESuite) TestDeviceCodeFlowMintsJWTVerifiableAgainstPublishedJWKS
 	// and slow_down state-machine branches are exercised by sibling tests —
 	// here we want the success path uncluttered by interval-window timing.
 	canonical := strings.ReplaceAll(da.UserCode, "-", "")
-	s.Require().NoError(s.store.ApproveDeviceCode(context.Background(), canonical, "alice@example.com", time.Now().UTC()))
+	s.Require().NoError(s.store.ApproveDeviceCode(context.Background(), canonical,
+		oidc.Identity{Subject: "google-sub-123", Email: "alice@example.com"}, time.Now().UTC()))
 
 	// Approved poll: the row is consumed and a fresh JWT comes back.
 	resp := s.deviceTokenPoll(da.DeviceCode)
@@ -432,7 +433,7 @@ func (s *TokenE2ESuite) TestDeviceCodeFlowMintsJWTVerifiableAgainstPublishedJWKS
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
-	s.Equal("alice@example.com", sub)
+	s.Equal("google-sub-123", sub, "sub is the upstream Google sub, not the email")
 	clientID, _ := tok.Field("client_id")
 	s.Equal("tempogate-device", clientID)
 	perms, _ := tok.Field("permissions")

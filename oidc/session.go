@@ -152,12 +152,12 @@ func NewSessionManager(store BrowserSessionStore, signingKey []byte, opts ...Ses
 	return m
 }
 
-// Issue mints a new session for email, persists it, and sets the signed
+// Issue mints a new session for id, persists it, and sets the signed
 // cookie on w. The returned sid is the same value embedded in the cookie —
 // callers that need to correlate audit logs with the cookie can stash it
 // without re-parsing the response.
-func (m *SessionManager) Issue(ctx context.Context, w http.ResponseWriter, email string) (string, error) {
-	sid, cookie, err := m.IssueCookie(ctx, email)
+func (m *SessionManager) Issue(ctx context.Context, w http.ResponseWriter, id Identity) (string, error) {
+	sid, cookie, err := m.IssueCookie(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +170,7 @@ func (m *SessionManager) Issue(ctx context.Context, w http.ResponseWriter, email
 // typed handlers don't own the raw http.ResponseWriter, so they assemble the
 // Set-Cookie header through their typed output struct using this method.
 // The two paths cannot drift because Issue is a thin wrapper around it.
-func (m *SessionManager) IssueCookie(ctx context.Context, email string) (string, *http.Cookie, error) {
+func (m *SessionManager) IssueCookie(ctx context.Context, id Identity) (string, *http.Cookie, error) {
 	sid, err := m.newSID()
 	if err != nil {
 		return "", nil, fmt.Errorf("oidc: generate session sid: %w", err)
@@ -179,7 +179,8 @@ func (m *SessionManager) IssueCookie(ctx context.Context, email string) (string,
 	now := m.now()
 	bs := BrowserSession{
 		SID:       sid,
-		Email:     email,
+		Subject:   id.Subject,
+		Email:     id.Email,
 		CreatedAt: now,
 		ExpiresAt: now.Add(m.ttl),
 	}
@@ -200,9 +201,11 @@ func (m *SessionManager) IssueCookie(ctx context.Context, email string) (string,
 
 // Get reads the session cookie off r, verifies its signature, looks up the
 // backing row, and enforces TTL against the injected clock. Any of: missing
-// cookie, malformed encoding, failed MAC, missing row, expired row collapse
-// into ErrNoSession so a probe cannot distinguish them; unexpected store
-// errors propagate so they aren't silently swallowed as "no session".
+// cookie, malformed encoding, failed MAC, missing row, expired row, or a row
+// from before schema 0010 (no subject) collapse into ErrNoSession so a probe
+// cannot distinguish them and a legacy session restarts the sign-in;
+// unexpected store errors propagate so they aren't silently swallowed as
+// "no session".
 func (m *SessionManager) Get(ctx context.Context, r *http.Request) (BrowserSession, error) {
 	sid, ok := m.sidFromRequest(r)
 	if !ok {
@@ -217,7 +220,7 @@ func (m *SessionManager) Get(ctx context.Context, r *http.Request) (BrowserSessi
 		return BrowserSession{}, fmt.Errorf("oidc: lookup browser session: %w", err)
 	}
 
-	if !m.now().Before(bs.ExpiresAt) {
+	if !m.now().Before(bs.ExpiresAt) || bs.Subject == "" {
 		return BrowserSession{}, ErrNoSession
 	}
 	return bs, nil

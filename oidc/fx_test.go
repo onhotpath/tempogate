@@ -98,6 +98,7 @@ func (s *FxSuite) supplyConfigAt(issuer, basePath string, plainHTTP bool, client
 			fx.Annotated{Name: "oidc_client_secrets", Target: secrets},
 			fx.Annotated{Name: "oidc_allow_insecure_redirect_uris", Target: allowInsecureRedirectURIs},
 			fx.Annotated{Name: "oidc_allowed_domains", Target: "example.com"},
+			fx.Annotated{Name: "oidc_allowed_hosted_domains", Target: "example.com"},
 			fx.Annotated{Name: "oidc_session_ttl", Target: 5 * time.Minute},
 			fx.Annotated{Name: "oidc_session_signing_key", Target: signingKeyB64},
 			fx.Annotated{Name: "oidc_access_token_ttl", Target: s.accessTTL},
@@ -323,7 +324,7 @@ func (s *FxSuite) TestSessionCookieFollowsIssuer() {
 			defer app.RequireStop()
 
 			rec := httptest.NewRecorder()
-			_, err := sm.Issue(s.T().Context(), rec, "alice@example.com")
+			_, err := sm.Issue(s.T().Context(), rec, oidc.Identity{Subject: "google-sub-alice", Email: "alice@example.com"})
 			s.Require().NoError(err)
 			cookies := rec.Result().Cookies()
 			s.Require().Len(cookies, 1)

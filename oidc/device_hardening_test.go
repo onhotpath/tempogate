@@ -241,7 +241,7 @@ func (s *DeviceUISuite) TestBounceStateRejectsSessionCookieMAC() {
 		oidc.WithSessionClock(func() time.Time { return deviceUINow }),
 		oidc.WithSessionSIDGenerator(func() (string, error) { return string(payload), nil }),
 	)
-	_, cookie, err := minting.IssueCookie(s.T().Context(), deviceUITestEmail)
+	_, cookie, err := minting.IssueCookie(s.T().Context(), deviceUITestIdentity)
 	s.Require().NoError(err)
 
 	resp, err := s.client.Do(s.req(http.MethodGet, "/device/sso-callback?code=auth-code&state="+url.QueryEscape(cookie.Value)))
@@ -296,7 +296,7 @@ func TestNewDeviceUIRejectsCallbackNotRegisteredForIssuer(t *testing.T) {
 				t.Fatal(err)
 			}
 			sessions := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-			_, err = oidc.NewDeviceUI(newStatefulDeviceCodeStore(), sessions, reg, newFakeAuthCodeRedeemer(deviceUITestEmail),
+			_, err = oidc.NewDeviceUI(newStatefulDeviceCodeStore(), sessions, reg, newFakeAuthCodeRedeemer(deviceUITestIdentity),
 				[]byte("0123456789abcdef0123456789abcdef"), tc.issuer)
 			if tc.ok && err != nil {
 				t.Fatalf("want success, got %v", err)
@@ -333,12 +333,12 @@ func newDeviceUIHarness(t *testing.T, issuer string) *deviceUIHarness {
 		oidc.WithSessionClock(func() time.Time { return deviceUINow }),
 		oidc.WithSessionSIDGenerator(func() (string, error) { return deviceUITestSID, nil }),
 	)
-	_, cookie, err := sessions.IssueCookie(t.Context(), deviceUITestEmail)
+	_, cookie, err := sessions.IssueCookie(t.Context(), deviceUITestIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := newStatefulDeviceCodeStore()
-	ui, err := oidc.NewDeviceUI(store, sessions, reg, newFakeAuthCodeRedeemer(deviceUITestEmail), key, issuer,
+	ui, err := oidc.NewDeviceUI(store, sessions, reg, newFakeAuthCodeRedeemer(deviceUITestIdentity), key, issuer,
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 	)
 	if err != nil {

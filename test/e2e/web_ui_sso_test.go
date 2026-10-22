@@ -63,6 +63,13 @@ const (
 	allowedEmail = "alice@example.com"
 	deniedEmail  = "intruder@evil.test"
 
+	// allowedSub is the stable, non-email Google account id the mock asserts
+	// for allowedEmail; tempogate must mint it as the token's sub.
+	allowedSub = "google-sub-alice-0001"
+	// hostedDomain is the Workspace `hd` the Web UI and CLI stacks require
+	// via OIDC_ALLOWED_HOSTED_DOMAINS ("Workspace mode").
+	hostedDomain = "example.com"
+
 	tempogateIssuer = "http://tempogate:8000"
 	// temporalAudience is OIDC_ACCESS_TOKEN_AUDIENCE's default: the aud of
 	// every access token and integration key.
@@ -111,7 +118,7 @@ func TestWebUISSO(t *testing.T) {
 	st := setupStack(ctx, t)
 
 	t.Run("happy path: the UI calls Temporal with the access token; the ID token grants nothing", func(t *testing.T) {
-		st.setIdentity(t, allowedEmail, true)
+		st.setIdentity(t, allowedIdentity())
 		login := st.driveLogin(ctx, t)
 
 		// (1) The SPA's bearer is the access token: Temporal UI sends
@@ -131,7 +138,10 @@ func TestWebUISSO(t *testing.T) {
 		clientIDClaim, _ := access.Field("client_id")
 		require.Equal(t, clientID, clientIDClaim)
 		sub, _ := access.Subject()
-		require.Equal(t, allowedEmail, sub)
+		require.Equal(t, allowedSub, sub, "sub must be Google's stable account id, not the email")
+		email, ok := access.Field("email")
+		require.True(t, ok, "email stays a claim")
+		require.Equal(t, allowedEmail, email)
 
 		// (2) The UI's proxied calls to temporal-frontend succeeded with it.
 		require.NotEmpty(t, login.okTemporalCalls, "no UI call to temporal-frontend succeeded")
@@ -147,6 +157,8 @@ func TestWebUISSO(t *testing.T) {
 		require.Equal(t, []string{clientID}, aud, "OIDC aud must be the UI's client_id")
 		require.True(t, id.Has("nonce"), "nonce must round-trip so the UI accepts the token")
 		require.False(t, id.Has("permissions"), "the ID token must grant nothing")
+		idSub, _ := id.Subject()
+		require.Equal(t, allowedSub, idSub, "the ID token carries the same Google sub")
 
 		// (4) The access token authenticates a gRPC call to temporal-frontend.
 		client, conn := dialFrontend(t, st.frontendAddr)
@@ -180,11 +192,28 @@ func TestWebUISSO(t *testing.T) {
 	})
 
 	t.Run("disallowed domain bounces to 403", func(t *testing.T) {
-		st.setIdentity(t, deniedEmail, true)
+		st.setIdentity(t, mockIdentity{Email: deniedEmail, Verified: true, HD: "evil.test"})
 		body := st.driveLoginExpectingForbidden(ctx, t)
 		require.Contains(t, body, "Access denied")
 		require.Contains(t, body, "not in an allowed domain")
 	})
+
+	// M5: a consumer Google account can exist for an allowed address and be
+	// email_verified; only the Workspace `hd` claim proves the account is
+	// managed by the allowed organization.
+	for _, tc := range []struct {
+		name string
+		hd   string
+	}{
+		{name: "workspace mode: allowed email without hd is rejected", hd: ""},
+		{name: "workspace mode: allowed email with a foreign hd is rejected", hd: "evil.test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st.setIdentity(t, mockIdentity{Sub: "google-sub-consumer", Email: allowedEmail, Verified: true, HD: tc.hd})
+			body := st.driveLoginExpectingForbidden(ctx, t)
+			require.Contains(t, body, "Access denied")
+		})
+	}
 }
 
 // ---------- stack bring-up ----------
@@ -220,17 +249,18 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 
 	// --- tempogate: migrate (one-shot) then serve, sharing a volume ---
 	tgEnv := map[string]string{
-		"HTTP_LISTENER":              "0.0.0.0:8000",
-		"STATE_SQLITE_PATH":          "/state/state.db",
-		"OIDC_ISSUER":                tempogateIssuer,
-		"OIDC_CLIENTS":               clientID + ":" + uiCallback,
-		"OIDC_CLIENT_SECRETS":        clientID + ":" + clientSecret,
-		"OIDC_ALLOWED_DOMAINS":       "example.com",
-		"OIDC_GOOGLE_CLIENT_ID":      "tempogate-upstream",
-		"OIDC_GOOGLE_CLIENT_SECRET":  "tempogate-upstream-secret",
-		"OIDC_GOOGLE_AUTH_ENDPOINT":  mockIssuer + "/auth",
-		"OIDC_GOOGLE_TOKEN_ENDPOINT": mockIssuer + "/token",
-		"OIDC_GOOGLE_ISSUER_URL":     mockIssuer,
+		"HTTP_LISTENER":               "0.0.0.0:8000",
+		"STATE_SQLITE_PATH":           "/state/state.db",
+		"OIDC_ISSUER":                 tempogateIssuer,
+		"OIDC_CLIENTS":                clientID + ":" + uiCallback,
+		"OIDC_CLIENT_SECRETS":         clientID + ":" + clientSecret,
+		"OIDC_ALLOWED_DOMAINS":        "example.com",
+		"OIDC_ALLOWED_HOSTED_DOMAINS": hostedDomain,
+		"OIDC_GOOGLE_CLIENT_ID":       "tempogate-upstream",
+		"OIDC_GOOGLE_CLIENT_SECRET":   "tempogate-upstream-secret",
+		"OIDC_GOOGLE_AUTH_ENDPOINT":   mockIssuer + "/auth",
+		"OIDC_GOOGLE_TOKEN_ENDPOINT":  mockIssuer + "/token",
+		"OIDC_GOOGLE_ISSUER_URL":      mockIssuer,
 	}
 	// The temporal-UI SSO surface this test exercises doesn't touch the
 	// device flow, but the server fx graph now requires the verification
@@ -438,13 +468,15 @@ func (s *stack) driveLogin(ctx context.Context, t *testing.T) uiLogin {
 }
 
 // driveLoginExpectingForbidden runs the chain for a disallowed identity and
-// returns the body text the browser ends on (tempogate's 403 page).
+// returns the body text the browser ends on (tempogate's 403 page). It also
+// asserts the browser stopped on tempogate's callback: no authorization code
+// was handed back to the Temporal UI.
 func (s *stack) driveLoginExpectingForbidden(ctx context.Context, t *testing.T) string {
 	t.Helper()
 	browserCtx, cancel := s.browser(ctx, t)
 	defer cancel()
 
-	var body string
+	var body, location string
 	err := chromedp.Run(browserCtx,
 		network.Enable(),
 		network.ClearBrowserCookies(),
@@ -453,8 +485,11 @@ func (s *stack) driveLoginExpectingForbidden(ctx context.Context, t *testing.T) 
 		chromedp.Click(`#approve`, chromedp.ByID),
 		chromedp.Sleep(3*time.Second), // let the redirect chain settle on tempogate's 403
 		chromedp.Text(`body`, &body, chromedp.ByQuery),
+		chromedp.Location(&location),
 	)
 	require.NoError(t, err, "forbidden browser flow")
+	require.Truef(t, strings.HasPrefix(location, tempogateIssuer+"/callback/google"),
+		"a rejected login must end on tempogate's callback, not the UI's (no code issued); got %q", location)
 	return body
 }
 
@@ -534,9 +569,29 @@ func (c *apiCatcher) statusLog() []string {
 
 // ---------- helpers ----------
 
-func (s *stack) setIdentity(t *testing.T, email string, verified bool) {
+// mockIdentity is the identity mockgoogle asserts in its next id_token. An
+// empty HD models a consumer (non-Workspace) Google account; an empty Sub
+// lets the mock derive a stable default.
+type mockIdentity struct {
+	Sub      string
+	Email    string
+	Verified bool
+	HD       string
+}
+
+// allowedIdentity is the Workspace user every happy path signs in as.
+func allowedIdentity() mockIdentity {
+	return mockIdentity{Sub: allowedSub, Email: allowedEmail, Verified: true, HD: hostedDomain}
+}
+
+func (s *stack) setIdentity(t *testing.T, id mockIdentity) {
 	t.Helper()
-	form := url.Values{"email": {email}, "verified": {fmt.Sprintf("%t", verified)}}
+	form := url.Values{
+		"sub":      {id.Sub},
+		"email":    {id.Email},
+		"verified": {fmt.Sprintf("%t", id.Verified)},
+		"hd":       {id.HD},
+	}
 	req, err := http.NewRequest(http.MethodPut, s.mockBaseURL+"/_control/identity",
 		strings.NewReader(form.Encode()))
 	require.NoError(t, err)

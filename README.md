@@ -330,6 +330,7 @@ separator.
 | `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri` allowlist of **exact** redirect URIs (repeat an id for several). Loopback `http://127.0.0.1/<path>` entries match any port. Register the CLI as `tempogate-cli:http://127.0.0.1/callback` and the device CLI as `tempogate-device:` |
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
 | `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in and again on every refresh |
+| `OIDC_ALLOWED_HOSTED_DOMAINS` | Recommended | _(empty)_ | Comma-separated Google Workspace domains; when set, Google's `hd` claim must match ("Workspace mode"). See [docs/configuration.md](docs/configuration.md#hosted-domain-workspace-mode) |
 | `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access token (ID tokens live 5 minutes) |
 | `OIDC_ACCESS_TOKEN_AUDIENCE` | No | `temporal` | `aud` of every access token and integration key; set Temporal's `global.authorization.audience` (v1.29.0+) to match. See [Access tokens and ID tokens](docs/configuration.md#access-tokens-and-id-tokens) |
 | `OIDC_REFRESH_TOKEN_TTL` | No | `168h` (7 days) | Idle lifetime of each rotated refresh token |

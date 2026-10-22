@@ -22,7 +22,7 @@ var ErrDuplicateRefreshToken = errors.New("sqlite: refresh token with this value
 // hash: the token itself is never stored (migration 0012), so the caller
 // passes it in and gets it back on the returned Refresh.
 const (
-	refreshFields  = `jti, client_id, email, family_id, auth_time, created_at, expires_at`
+	refreshFields  = `jti, client_id, subject, email, family_id, auth_time, created_at, expires_at`
 	refreshColumns = `token_hash, ` + refreshFields
 )
 
@@ -32,11 +32,11 @@ const (
 func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO refresh_tokens (`+refreshColumns+`)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (
 		     SELECT 1 FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NOT NULL
 		 )`,
-		secretHash(r.Token), r.JTI, r.ClientID, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
+		secretHash(r.Token), r.JTI, r.ClientID, r.Subject, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
 		r.FamilyID,
 	)
 	if err != nil {
@@ -139,6 +139,7 @@ func (s *Store) revokeRefresh(ctx context.Context, where, arg string, at time.Ti
 type RefreshSession struct {
 	FamilyID  string
 	ClientID  string
+	Subject   string
 	Email     string
 	AuthTime  time.Time
 	RotatedAt time.Time // when the live token was minted
@@ -152,7 +153,7 @@ type RefreshSession struct {
 // writers.
 func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.Time) ([]RefreshSession, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT family_id, client_id, email, auth_time, created_at, expires_at
+		`SELECT family_id, client_id, subject, email, auth_time, created_at, expires_at
 		 FROM refresh_tokens
 		 WHERE consumed_at IS NULL AND revoked_at IS NULL
 		   AND (? = '' OR lower(email) = lower(?))
@@ -167,7 +168,7 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 	var out []RefreshSession
 	for rows.Next() {
 		var rs RefreshSession
-		if err := rows.Scan(&rs.FamilyID, &rs.ClientID, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt); err != nil {
+		if err := rows.Scan(&rs.FamilyID, &rs.ClientID, &rs.Subject, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt); err != nil {
 			return nil, fmt.Errorf("sqlite: scan refresh session: %w", err)
 		}
 		if now.Before(rs.ExpiresAt) {
@@ -182,6 +183,6 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 
 func scanRefresh(token string, row *sql.Row) (oidc.Refresh, error) {
 	r := oidc.Refresh{Token: token}
-	err := row.Scan(&r.JTI, &r.ClientID, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
+	err := row.Scan(&r.JTI, &r.ClientID, &r.Subject, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
 	return r, err
 }

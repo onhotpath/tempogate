@@ -694,7 +694,7 @@ func (u *DeviceUI) handleSSOCallback(ctx context.Context, in *deviceSSOCallbackI
 		return u.errorPage("That sign-in could not be completed. Restart the sign-in from your device."), nil
 	}
 
-	email, err := u.redeemAuthCode(ctx, in.Code)
+	id, err := u.redeemAuthCode(ctx, in.Code)
 	if err != nil {
 		// Error: the loopback /token call is supposed to succeed
 		// unconditionally once the upstream bounce completes — so any
@@ -709,7 +709,7 @@ func (u *DeviceUI) handleSSOCallback(ctx context.Context, in *deviceSSOCallbackI
 		return u.errorPage("That sign-in could not be completed. Restart the sign-in from your device."), nil
 	}
 
-	_, cookie, err := u.sessions.IssueCookie(ctx, email)
+	_, cookie, err := u.sessions.IssueCookie(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: device-ui session issue: %w", err)
 	}
@@ -808,7 +808,7 @@ func (u *DeviceUI) handleDecision(ctx context.Context, in *deviceDecisionInput, 
 	}
 	now := u.now()
 	if approve {
-		err = u.devices.ApproveDeviceCode(ctx, canonical, bs.Email, now)
+		err = u.devices.ApproveDeviceCode(ctx, canonical, Identity{Subject: bs.Subject, Email: bs.Email}, now)
 	} else {
 		err = u.devices.DenyDeviceCode(ctx, canonical, now)
 	}
@@ -832,13 +832,13 @@ func (u *DeviceUI) handleDecision(ctx context.Context, in *deviceDecisionInput, 
 }
 
 // redeemAuthCode turns the auth code the upstream callback minted into the
-// email claim by running the same single-use consumption + proof check the
+// authenticated identity by running the same single-use consumption + proof check the
 // public /token endpoint runs — but in-process, against the shared *Token
-// instance. No HTTPS round-trip, no JWT decode dance: the email comes back
+// instance. No HTTPS round-trip, no JWT decode dance: the identity comes back
 // directly from the consumed AuthCode row. Eliminating the loopback also
 // eliminates the TLS-chain, DNS-resolution, and hairpin-routing failure
 // surfaces a deployment's ingress would otherwise contribute.
-func (u *DeviceUI) redeemAuthCode(ctx context.Context, code string) (string, error) {
+func (u *DeviceUI) redeemAuthCode(ctx context.Context, code string) (Identity, error) {
 	r, err := u.redeemer.RedeemAuthorizationCode(ctx, AuthCodeRedemptionRequest{
 		Code:         code,
 		ClientID:     u.internalClientID,
@@ -846,9 +846,9 @@ func (u *DeviceUI) redeemAuthCode(ctx context.Context, code string) (string, err
 		RedirectURI:  u.issuer + DeviceSSOCallbackPath,
 	})
 	if err != nil {
-		return "", fmt.Errorf("oidc: in-process auth code redemption: %w", err)
+		return Identity{}, fmt.Errorf("oidc: in-process auth code redemption: %w", err)
 	}
-	return r.Email, nil
+	return r.Identity, nil
 }
 
 // signBounceState wraps a canonical user_code into the HMAC-signed,

@@ -1,7 +1,9 @@
 package oidc
 
 import (
+	"bytes"
 	"encoding/base64"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,6 +35,37 @@ func TestSessionSigningKeyRejectsInvalidKeys(t *testing.T) {
 			key, err := newSessionSigningKey(sessionSigningKeyParams{SigningKeyB64: tc.key})
 			require.Nil(t, key)
 			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+// TestCallbackRegistrarWarnsWithoutHostedDomains pins the startup warning
+// for the email-suffix-only gate: it fires when OIDC_ALLOWED_HOSTED_DOMAINS
+// is unset (or only separators) and stays quiet in Workspace mode.
+func TestCallbackRegistrarWarnsWithoutHostedDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		hosted string
+		warn   bool
+	}{
+		{"unset", "", true},
+		{"only separators", " , ", true},
+		{"workspace mode", "example.com", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			registrar := newCallbackRegistrar(callbackParams{
+				Logger:         slog.New(slog.NewTextHandler(&buf, nil)),
+				AllowedDomains: "example.com",
+				HostedDomains:  tc.hosted,
+			})
+			require.NotNil(t, registrar)
+			if tc.warn {
+				require.Contains(t, buf.String(), "level=WARN")
+				require.Contains(t, buf.String(), "OIDC_ALLOWED_HOSTED_DOMAINS is not set")
+				return
+			}
+			require.Empty(t, buf.String())
 		})
 	}
 }

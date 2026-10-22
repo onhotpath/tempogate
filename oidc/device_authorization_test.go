@@ -71,7 +71,7 @@ func (m *memDeviceCodeStore) PollDeviceCode(_ context.Context, _ string, _ time.
 	return false, oidc.ErrDeviceCodeNotFound
 }
 
-func (m *memDeviceCodeStore) ApproveDeviceCode(_ context.Context, _, _ string, _ time.Time) error {
+func (m *memDeviceCodeStore) ApproveDeviceCode(_ context.Context, _ string, _ oidc.Identity, _ time.Time) error {
 	return oidc.ErrDeviceCodeNotPending
 }
 
