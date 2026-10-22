@@ -90,10 +90,14 @@ func (s *AuthorizeSuite) TearDownTest() {
 }
 
 func (s *AuthorizeSuite) serverFor(store oidc.AuthRequestStore, opts ...oidc.Option) *httptest.Server {
+	return s.serverForConnectors(store, googleConnectors(s.T(), nil, ""), opts...)
+}
+
+func (s *AuthorizeSuite) serverForConnectors(store oidc.AuthRequestStore, conns *oidc.Connectors, opts ...oidc.Option) *httptest.Server {
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI + ",cli:http://127.0.0.1/callback,tempogate-device:")
 	s.Require().NoError(err)
 
-	a := oidc.New(store, reg, newTestBinding(s.T(), testIssuer), testIssuer, testGoogleCID, testGoogleAuth, opts...)
+	a := oidc.New(store, reg, newTestBinding(s.T(), testIssuer), conns, testIssuer, opts...)
 
 	mux := http.NewServeMux()
 	a.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -181,7 +185,7 @@ func (s *AuthorizeSuite) TestBindsStateToBrowser() {
 	defer resp.Body.Close()
 	s.Require().Equal(http.StatusFound, resp.StatusCode)
 
-	want := newTestBinding(s.T(), testIssuer).Cookie(fixedState)
+	want := newTestBinding(s.T(), testIssuer).Cookie("google", fixedState)
 	var got *http.Cookie
 	for _, c := range resp.Cookies() {
 		if c.Name == want.Name {
@@ -213,7 +217,7 @@ func (s *AuthorizeSuite) TestHostedDomainHint() {
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {
-			srv := s.serverFor(&memAuthStore{}, oidc.WithHostedDomainHint(tc.hosted))
+			srv := s.serverForConnectors(&memAuthStore{}, googleConnectors(s.T(), nil, tc.hosted))
 			defer srv.Close()
 
 			resp := s.get(srv, validParams())
@@ -236,7 +240,7 @@ func (s *AuthorizeSuite) TestHostedDomainHint() {
 func (s *AuthorizeSuite) TestPathIssuerRedirectURICarriesPrefix() {
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
-	a := oidc.New(s.store, reg, newTestBinding(s.T(), testIssuer+"/idp"), testIssuer+"/idp", testGoogleCID, testGoogleAuth,
+	a := oidc.New(s.store, reg, newTestBinding(s.T(), testIssuer+"/idp"), googleConnectors(s.T(), nil, ""), testIssuer+"/idp",
 		oidc.WithClock(func() time.Time { return fixedNow }),
 		oidc.WithStateGenerator(func() (string, error) { return fixedState, nil }),
 	)
@@ -281,7 +285,7 @@ func (s *AuthorizeSuite) confidentialSrv() *httptest.Server {
 	s.Require().NoError(err)
 	s.Require().NoError(reg.WithSecrets("webui:ui-secret"))
 
-	a := oidc.New(s.store, reg, newTestBinding(s.T(), testIssuer), testIssuer, testGoogleCID, testGoogleAuth,
+	a := oidc.New(s.store, reg, newTestBinding(s.T(), testIssuer), googleConnectors(s.T(), nil, ""), testIssuer,
 		oidc.WithClock(func() time.Time { return fixedNow }),
 		oidc.WithStateGenerator(func() (string, error) { return fixedState, nil }),
 	)
@@ -619,14 +623,10 @@ func (s *AuthorizeSuite) TestDefaultStateGeneratorProducesOpaqueState() {
 	s.Equal(state, store.only().InternalState)
 }
 
-func (s *AuthorizeSuite) TestMalformedGoogleEndpointIsServerError() {
-	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
-	s.Require().NoError(err)
-	a := oidc.New(&memAuthStore{}, reg, newTestBinding(s.T(), testIssuer), testIssuer, testGoogleCID, "http://%zz/bad")
-
-	mux := http.NewServeMux()
-	a.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
-	srv := httptest.NewServer(mux)
+func (s *AuthorizeSuite) TestConnectorBeginFailureIsServerError() {
+	conn := newFakeConnector("okta")
+	conn.beginErr = errors.New("upstream discovery failed")
+	srv := s.serverForConnectors(&memAuthStore{}, connectorsOf(s.T(), conn))
 	defer srv.Close()
 
 	resp := s.get(srv, validParams())

@@ -64,7 +64,7 @@ func (s *CallbackSuite) TestResolverFailureIsServerError() {
 }
 
 func (s *CallbackSuite) TestCallbackWithoutResolverDeniesEveryone() {
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains,
+	c := oidc.NewCallback(s.store, googleConnectors(s.T(), s.up, ""), s.binding, allowedDomains,
 		oidc.WithCallbackIssuer(testIssuer),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 	)
@@ -74,7 +74,7 @@ func (s *CallbackSuite) TestCallbackWithoutResolverDeniesEveryone() {
 	defer srv.Close()
 	s.store.put(s.pendingRequest(fixedState))
 
-	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
+	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie("google", fixedState))
 	defer resp.Body.Close()
 	s.Equal(http.StatusFound, resp.StatusCode)
 	loc, err := url.Parse(resp.Header.Get("Location"))

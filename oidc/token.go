@@ -192,7 +192,7 @@ func WithRefreshGenerator(fn func() (string, error)) TokenOption {
 // expiry. Without it no refresh is honoured, mirroring the callback, where
 // an empty allowlist admits nobody.
 func WithAllowedDomains(raw string) TokenOption {
-	return func(t *Token) { t.allowedDomains = parseDomains(raw) }
+	return func(t *Token) { t.allowedDomains = ParseDomains(raw) }
 }
 
 // WithTokenLifetimes sets the access-token TTL, the idle TTL of each rotated

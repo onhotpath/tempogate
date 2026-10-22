@@ -1,9 +1,7 @@
-// Package google is the concrete Google leg of the OIDC flow. It wraps
-// golang.org/x/oauth2 (code → id_token) and coreos/go-oidc (id_token
-// signature + claims verification) and structurally satisfies
-// oidc.Upstream, the consumer-side interface defined in package oidc — the
-// same provider/consumer split state/sqlite uses, so package oidc never has
-// to import oauth2 or go-oidc.
+// Package google is the Google connector: the upstream leg of a login, behind
+// oidc.Connector. It wraps golang.org/x/oauth2 (code → id_token) and
+// coreos/go-oidc (id_token signature + claims verification), so package oidc
+// never has to import either, and the lean CLI never links them.
 package google
 
 import (
@@ -11,7 +9,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,9 +19,12 @@ import (
 	xgoogle "golang.org/x/oauth2/google"
 
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc/connector/upstreamhttp"
 )
 
 const (
+	// scopes is the upstream scope set. `email` is required so the server
+	// can run the domain allowlist check.
 	scopes = "openid email"
 
 	// Discovery retry spacing. The first retry comes quickly so a blip on
@@ -33,22 +33,6 @@ const (
 	// down IdP sees at most one discovery request per window.
 	discoveryInitialBackoff = time.Second
 	discoveryMaxBackoff     = 30 * time.Second
-
-	// upstreamTimeout bounds each call to Google: discovery, the code
-	// exchange, and id_token verification including a JWKS fetch. Without
-	// it the only bound is the browser hanging up, so a stalled Google held
-	// /callback/google handlers open indefinitely. Google answers in well
-	// under a second; 10s leaves room for a slow network while still
-	// failing a login before a user gives up on it. A constant, not a
-	// config key: the upstream is always Google, so there is no endpoint
-	// that needs a different budget, and a key can be added if one ever does.
-	upstreamTimeout = 10 * time.Second
-
-	// Connection setup gets a smaller share of the budget, so an
-	// unreachable or black-holed endpoint fails fast and is not mistaken for
-	// a slow response.
-	upstreamDialTimeout         = 5 * time.Second
-	upstreamTLSHandshakeTimeout = 5 * time.Second
 )
 
 // Client exchanges a Google authorization code for a verified identity. The
@@ -59,7 +43,7 @@ type Client struct {
 	issuerURL  string
 	clientID   string
 	now        func() time.Time
-	observer   Observer
+	observer   oidc.UpstreamObserver
 	timeout    time.Duration
 	httpClient *http.Client
 
@@ -73,17 +57,6 @@ type Client struct {
 	backoff  time.Duration
 }
 
-// Observer is told the latency and outcome of every call tempogate makes to
-// Google, by operation. A failure is always an *oidc.UpstreamError, whose
-// Timeout flag tells a call that ran out of time from one Google answered.
-// The operations are "discovery" (on first use and on each retry after a
-// failure, never for a cached failure), "code_exchange" and
-// "verify_id_token" (which includes the JWKS fetch on a key-cache miss). The
-// metrics package satisfies it; this package never imports Prometheus.
-type Observer interface {
-	ObserveUpstream(op string, took time.Duration, err error)
-}
-
 type nopObserver struct{}
 
 func (nopObserver) ObserveUpstream(string, time.Duration, error) {}
@@ -91,9 +64,11 @@ func (nopObserver) ObserveUpstream(string, time.Duration, error) {}
 // Option configures a Client.
 type Option func(*Client)
 
-// WithObserver reports upstream call latency and errors to o. Nil keeps the
-// no-op default.
-func WithObserver(o Observer) Option {
+// WithObserver reports upstream call latency and errors to o, by operation:
+// "discovery" (on first use and on each retry after a failure, never for a
+// cached failure), "code_exchange" and "verify_id_token" (which includes the
+// JWKS fetch on a key-cache miss). Nil keeps the no-op default.
+func WithObserver(o oidc.UpstreamObserver) Option {
 	return func(c *Client) {
 		if o != nil {
 			c.observer = o
@@ -101,8 +76,8 @@ func WithObserver(o Observer) Option {
 	}
 }
 
-// WithTimeout replaces the per-call upstream timeout (upstreamTimeout by
-// default). For tests, which cannot wait 10s for a stalled mock.
+// WithTimeout replaces the per-call upstream timeout
+// (upstreamhttp.DefaultTimeout by default). For tests, which cannot wait 10s for a stalled mock.
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }
@@ -115,9 +90,7 @@ func WithClock(now func() time.Time) Option {
 // New builds the production client. tokenEndpoint and issuerURL are injected
 // (not hardcoded to Google) so the end-to-end test can substitute a mock; in
 // production they default to Google's real endpoints via config defaults.
-// redirectURL must equal the redirect_uri sent at /authorize, or Google
-// rejects the exchange.
-func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string, opts ...Option) *Client {
+func New(clientID, clientSecret, tokenEndpoint, issuerURL string, opts ...Option) *Client {
 	c := &Client{
 		oauth: &oauth2.Config{
 			ClientID:     clientID,
@@ -127,32 +100,19 @@ func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string, o
 				TokenURL:  tokenEndpoint,
 				AuthStyle: oauth2.AuthStyleInParams,
 			},
-			RedirectURL: redirectURL,
-			Scopes:      strings.Fields(scopes),
+			Scopes: strings.Fields(scopes),
 		},
 		issuerURL: strings.TrimRight(issuerURL, "/"),
 		clientID:  clientID,
 		now:       time.Now,
 		observer:  nopObserver{},
-		timeout:   upstreamTimeout,
+		timeout:   upstreamhttp.DefaultTimeout,
 	}
 	for _, o := range opts {
 		o(c)
 	}
-	c.httpClient = newUpstreamHTTPClient(c.timeout)
+	c.httpClient = upstreamhttp.NewClient(c.timeout)
 	return c
-}
-
-// newUpstreamHTTPClient is the client every call to Google goes through, in
-// place of http.DefaultClient, which has no timeout at all. The overall
-// Timeout also covers reading the body, which ResponseHeaderTimeout alone
-// would not bound against an endpoint that trickles it.
-func newUpstreamHTTPClient(timeout time.Duration) *http.Client {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DialContext = (&net.Dialer{Timeout: min(upstreamDialTimeout, timeout), KeepAlive: 30 * time.Second}).DialContext
-	t.TLSHandshakeTimeout = min(upstreamTLSHandshakeTimeout, timeout)
-	t.ResponseHeaderTimeout = timeout
-	return &http.Client{Transport: t, Timeout: timeout}
 }
 
 // callContext bounds one upstream call. It carries the upstream client under
@@ -164,54 +124,40 @@ func (c *Client) callContext(ctx context.Context) (context.Context, context.Canc
 	return context.WithTimeout(coreosoidc.ClientContext(ctx, c.httpClient), c.timeout)
 }
 
-// timedOut reports whether a call made under callCtx failed because it ran
-// out of time. go-oidc flattens some errors with %v, so a call that failed
-// once its deadline had passed counts as timed out whatever the error says:
-// the client's own timer can fire a moment before the context's.
-func timedOut(callCtx context.Context, err error) bool {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	if dl, ok := callCtx.Deadline(); ok && !time.Now().Before(dl) {
-		return true
-	}
-	var ne net.Error
-	return errors.As(err, &ne) && ne.Timeout()
-}
-
 // ExchangeAndVerify swaps a Google authorization code for an id_token,
-// presenting the PKCE codeVerifier, verifies its signature and claims against
-// Google's JWKS, requires its nonce to equal nonce, and returns the identity
-// it asserts: the stable `sub`, the email with its `email_verified` flag, and
-// the Workspace hosted domain (`hd`, empty for consumer accounts). The gates
-// on those claims are the callback's job, not this client's. Every failure is
+// presenting the PKCE codeVerifier and the redirectURI the code was issued
+// for, verifies its signature and claims against Google's JWKS, requires its
+// nonce to equal nonce, and returns the identity it asserts: the stable
+// `sub`, the email with its `email_verified` flag, and the Workspace hosted
+// domain (`hd`, empty for consumer accounts). The gates on those claims are
+// the Connector's and the server's job, not this client's. Every failure is
 // an *oidc.UpstreamError.
-func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonce string) (oidc.UpstreamIdentity, error) {
+func (c *Client) ExchangeAndVerify(ctx context.Context, code, redirectURI, codeVerifier, nonce string) (Identity, error) {
 	// Discover first: without a verifier the code could not be checked, so
 	// there is no point redeeming it.
 	verifier, err := c.idVerifier(ctx)
 	if err != nil {
-		return oidc.UpstreamIdentity{}, err
+		return Identity{}, err
 	}
 
-	tok, err := c.exchange(ctx, code, codeVerifier)
+	tok, err := c.exchange(ctx, code, redirectURI, codeVerifier)
 	if err != nil {
-		return oidc.UpstreamIdentity{}, err
+		return Identity{}, err
 	}
 
 	rawID, ok := tok.Extra("id_token").(string)
 	if !ok || rawID == "" {
-		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, errors.New("google: token response missing id_token"))
+		return Identity{}, upstreamErr(oidc.UpstreamReasonIDToken, errors.New("google: token response missing id_token"))
 	}
 
 	idToken, err := c.verify(ctx, verifier, rawID)
 	if err != nil {
-		return oidc.UpstreamIdentity{}, err
+		return Identity{}, err
 	}
 	// go-oidc leaves the nonce to the caller. A missing or different nonce
 	// means the id_token was minted for some other authorization request.
 	if nonce == "" || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(nonce)) != 1 {
-		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonNonce, errors.New("google: id_token nonce does not match the request"))
+		return Identity{}, upstreamErr(oidc.UpstreamReasonNonce, errors.New("google: id_token nonce does not match the request"))
 	}
 
 	var claims struct {
@@ -220,15 +166,15 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 		HostedDomain  string `json:"hd"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, fmt.Errorf("google: decode id_token claims: %w", err))
+		return Identity{}, upstreamErr(oidc.UpstreamReasonIDToken, fmt.Errorf("google: decode id_token claims: %w", err))
 	}
 	if idToken.Subject == "" {
-		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonClaims, errors.New("google: id_token has no sub claim"))
+		return Identity{}, upstreamErr(oidc.UpstreamReasonClaims, errors.New("google: id_token has no sub claim"))
 	}
 	if claims.Email == "" {
-		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonClaims, errors.New("google: id_token has no email claim"))
+		return Identity{}, upstreamErr(oidc.UpstreamReasonClaims, errors.New("google: id_token has no email claim"))
 	}
-	return oidc.UpstreamIdentity{
+	return Identity{
 		Subject:       idToken.Subject,
 		Email:         claims.Email,
 		EmailVerified: claims.EmailVerified,
@@ -236,11 +182,13 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 	}, nil
 }
 
-func (c *Client) exchange(ctx context.Context, code, codeVerifier string) (*oauth2.Token, error) {
+func (c *Client) exchange(ctx context.Context, code, redirectURI, codeVerifier string) (*oauth2.Token, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 	start := time.Now()
-	tok, err := c.oauth.Exchange(callCtx, code, oauth2.VerifierOption(codeVerifier))
+	tok, err := c.oauth.Exchange(callCtx, code,
+		oauth2.SetAuthURLParam("redirect_uri", redirectURI),
+		oauth2.VerifierOption(codeVerifier))
 	if err == nil {
 		c.observer.ObserveUpstream("code_exchange", time.Since(start), nil)
 		return tok, nil
@@ -271,7 +219,7 @@ func (c *Client) verify(ctx context.Context, verifier *coreosoidc.IDTokenVerifie
 // callErr classifies the failure of a call made under callCtx.
 func (c *Client) callErr(callCtx context.Context, reason string, err error) *oidc.UpstreamError {
 	ue := upstreamErr(reason, err)
-	ue.Timeout = timedOut(callCtx, err)
+	ue.Timeout = upstreamhttp.TimedOut(callCtx, err)
 	return ue
 }
 

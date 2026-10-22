@@ -2,7 +2,7 @@
 // server exposes on the admin listener's /metrics. Feature packages never
 // import Prometheus: each declares a small observer interface of its own
 // (oidc.LoginObserver, oidc.TokenObserver, oidc.RateLimitObserver, oidc.AuthzObserver,
-// google.Observer, sqlite.ErrorObserver, postgres.ErrorObserver) and *Metrics satisfies them
+// oidc.UpstreamObserver, sqlite.ErrorObserver, postgres.ErrorObserver) and *Metrics satisfies them
 // structurally, bound via fx.As in Fx. Only the full server build links this
 // package; the lean CLI never does.
 package metrics
@@ -172,7 +172,7 @@ func (m *Metrics) ObserveRateLimited(endpoint string) {
 	m.rateLimited.WithLabelValues(endpoint).Inc()
 }
 
-// ObserveUpstream satisfies google.Observer. Failed calls are timed too: a
+// ObserveUpstream satisfies oidc.UpstreamObserver. Failed calls are timed too: a
 // slow failure is still latency the user waited through. A failure is
 // counted as a timeout when the client flagged it as one, so a stalled
 // Google is told apart from one that answers with an error.

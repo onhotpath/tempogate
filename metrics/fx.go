@@ -7,7 +7,6 @@ import (
 
 	"github.com/onhotpath/tempogate/buildinfo"
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
 	"github.com/onhotpath/tempogate/state/postgres"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
@@ -31,7 +30,7 @@ func Fx() fx.Option {
 				fx.As(new(oidc.TokenObserver)),
 				fx.As(new(oidc.RateLimitObserver)),
 				fx.As(new(oidc.AuthzObserver)),
-				fx.As(new(google.Observer)),
+				fx.As(new(oidc.UpstreamObserver)),
 				fx.As(new(sqlite.ErrorObserver)),
 				fx.As(new(postgres.ErrorObserver)),
 				fx.As(fx.Self()),

@@ -15,7 +15,6 @@ import (
 	"go.uber.org/fx/fxtest"
 
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
@@ -168,13 +167,13 @@ func TestFxProvidesObserversAndHandler(t *testing.T) {
 		tokens   oidc.TokenObserver
 		limits   oidc.RateLimitObserver
 		authzObs oidc.AuthzObserver
-		up       google.Observer
+		up       oidc.UpstreamObserver
 		db       sqlite.ErrorObserver
 		handler  http.Handler
 	)
 	app := fxtest.New(t,
 		Fx(),
-		fx.Invoke(func(l oidc.LoginObserver, tk oidc.TokenObserver, rl oidc.RateLimitObserver, az oidc.AuthzObserver, u google.Observer, d sqlite.ErrorObserver, p struct {
+		fx.Invoke(func(l oidc.LoginObserver, tk oidc.TokenObserver, rl oidc.RateLimitObserver, az oidc.AuthzObserver, u oidc.UpstreamObserver, d sqlite.ErrorObserver, p struct {
 			fx.In
 			H http.Handler `name:"metrics_handler"`
 		}) {

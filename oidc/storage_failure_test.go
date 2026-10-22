@@ -51,7 +51,7 @@ func TestStorageFailureIsSanitized(t *testing.T) {
 	require.NoError(t, reg.WithSecrets("tempogate-device-ui:"+deviceUIInternalSecret))
 
 	signKey := []byte("0123456789abcdef0123456789abcdef")
-	authorizer := oidc.New(store, reg, newTestBinding(t, testIssuer), testIssuer, testGoogleCID, "https://accounts.example.com/auth")
+	authorizer := oidc.New(store, reg, newTestBinding(t, testIssuer), googleConnectors(t, nil, ""), testIssuer)
 	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
 	var uiLogs bytes.Buffer

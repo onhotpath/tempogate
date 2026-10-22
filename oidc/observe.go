@@ -1,6 +1,6 @@
 package oidc
 
-// LoginObserver is told the outcome of every Google sign-in callback. result
+// LoginObserver is told the outcome of every upstream sign-in callback. result
 // is "success" or "failure"; reason is one of the reason* constants below.
 // Both come from fixed sets so a metrics backend can use them as labels.
 type LoginObserver interface {
@@ -34,6 +34,7 @@ const (
 	reasonStateNotBound          = "state_not_bound"
 	reasonUnknownState           = "unknown_state"
 	reasonExpiredRequest         = "expired_request"
+	reasonConnectorMismatch      = "connector_mismatch"
 	reasonUpstreamDenied         = "upstream_denied"
 	reasonMissingCode            = "missing_code"
 	reasonUpstreamError          = "upstream_error"

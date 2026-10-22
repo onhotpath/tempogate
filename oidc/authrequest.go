@@ -1,6 +1,7 @@
 // Package oidc is the OIDC provider surface tempogate exposes to downstream
 // clients (Temporal Web UI, the CLI loopback server). It federates the
-// authorization-code flow to Google as the sole upstream IdP in v1.
+// authorization-code flow to an upstream identity provider through a
+// Connector; Google is the one implementation.
 package oidc
 
 import (
@@ -9,15 +10,18 @@ import (
 )
 
 // AuthRequest is a pending authorization-code request, persisted between the
-// downstream client's /authorize call and Google's round-trip back to
-// /callback/google. InternalState is the opaque token tempogate sends to
-// Google as its `state`; the callback looks the request up by it.
+// downstream client's /authorize call and the upstream's round-trip back to
+// /callback/<connector>. InternalState is the opaque token tempogate sends
+// upstream as its `state`; the callback looks the request up by it.
 //
 // ClientState is the downstream client's own `state` parameter, echoed back
 // to it unchanged when the flow completes — distinct from InternalState,
-// which never leaves the tempogate↔Google leg.
+// which never leaves the tempogate↔upstream leg.
 type AuthRequest struct {
-	InternalState       string
+	InternalState string
+	// ConnectorID is the connector the browser was sent to; the callback
+	// refuses the state at any other connector's callback.
+	ConnectorID         string
 	ClientID            string
 	RedirectURI         string
 	Scope               string

@@ -26,6 +26,7 @@ import (
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/api/requestid"
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/oidc/connector/google"
 )
 
 const (
@@ -105,25 +106,27 @@ func (m *memCallbackStore) codeCount() int {
 }
 
 type fakeUpstream struct {
-	id          oidc.UpstreamIdentity
+	id          google.Identity
 	err         error
 	gotCode     string
+	gotRedirect string
 	gotVerifier string
 	gotNonce    string
 }
 
-func (f *fakeUpstream) ExchangeAndVerify(_ context.Context, code, codeVerifier, nonce string) (oidc.UpstreamIdentity, error) {
+func (f *fakeUpstream) ExchangeAndVerify(_ context.Context, code, redirectURI, codeVerifier, nonce string) (google.Identity, error) {
 	f.gotCode = code
+	f.gotRedirect = redirectURI
 	f.gotVerifier = codeVerifier
 	f.gotNonce = nonce
 	if f.err != nil {
-		return oidc.UpstreamIdentity{}, f.err
+		return google.Identity{}, f.err
 	}
 	return f.id, nil
 }
 
-func aliceIdentity() oidc.UpstreamIdentity {
-	return oidc.UpstreamIdentity{Subject: "google-sub-alice", Email: "alice@example.com", EmailVerified: true}
+func aliceIdentity() google.Identity {
+	return google.Identity{Subject: "google-sub-alice", Email: "alice@example.com", EmailVerified: true}
 }
 
 type CallbackSuite struct {
@@ -162,8 +165,8 @@ func (s *CallbackSuite) TearDownTest() {
 	s.srv.Close()
 }
 
-func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up oidc.Upstream) *httptest.Server {
-	c := oidc.NewCallback(store, up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(s.resolver),
+func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up google.Exchanger) *httptest.Server {
+	c := oidc.NewCallback(store, googleConnectors(s.T(), up, ""), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(s.resolver),
 		oidc.WithCallbackAuthzObserver(s.observed),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
@@ -193,7 +196,7 @@ func (s *CallbackSuite) pendingRequest(internalState string) oidc.AuthRequest {
 // get plays the browser that started the flow: it presents the binding
 // cookie /authorize set for the request's state.
 func (s *CallbackSuite) get(q url.Values) *http.Response {
-	return s.getFrom(s.srv, q, s.binding.Cookie(q.Get("state")))
+	return s.getFrom(s.srv, q, s.binding.Cookie("google", q.Get("state")))
 }
 
 func (s *CallbackSuite) getFrom(srv *httptest.Server, q url.Values, cookies ...*http.Cookie) *http.Response {
@@ -313,11 +316,10 @@ func (s *CallbackSuite) TestHostedDomainGate() {
 		s.Run(tc.name, func() {
 			store := newMemCallbackStore()
 			store.put(s.pendingRequest(fixedState))
-			up := &fakeUpstream{id: oidc.UpstreamIdentity{
+			up := &fakeUpstream{id: google.Identity{
 				Subject: "google-sub-x", Email: tc.email, EmailVerified: true, HostedDomain: tc.hd,
 			}}
-			c := oidc.NewCallback(store, up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
-				oidc.WithAllowedHostedDomains(tc.hosted),
+			c := oidc.NewCallback(store, googleConnectors(s.T(), up, tc.hosted), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 				oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 				oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 			)
@@ -326,7 +328,7 @@ func (s *CallbackSuite) TestHostedDomainGate() {
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
 
-			resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
+			resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie("google", fixedState))
 			defer resp.Body.Close()
 
 			if tc.admit {
@@ -457,7 +459,7 @@ func (s *CallbackSuite) TestUpstreamFailureIsBadGateway() {
 func (s *CallbackSuite) TestUpstreamFailureKeepsOAuthShapeBehindSanitizer() {
 	s.up.err = errors.New("dial tcp 10.9.8.7:443: connection refused")
 	s.store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
+	c := oidc.NewCallback(s.store, googleConnectors(s.T(), s.up, ""), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCallbackIssuer(testIssuer),
 		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(io.Discard, nil))),
@@ -470,7 +472,7 @@ func (s *CallbackSuite) TestUpstreamFailureKeepsOAuthShapeBehindSanitizer() {
 	defer srv.Close()
 
 	q := callbackQuery("c", fixedState)
-	resp := s.getFrom(srv, q, s.binding.Cookie(q.Get("state")))
+	resp := s.getFrom(srv, q, s.binding.Cookie("google", q.Get("state")))
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	s.Require().NoError(err)
@@ -527,7 +529,7 @@ func (s *CallbackSuite) TestMalformedRedirectURIIsServerError() {
 func (s *CallbackSuite) TestDefaultCodeGeneratorIsOpaque() {
 	store := newMemCallbackStore()
 	store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(store, &fakeUpstream{id: aliceIdentity()}, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
+	c := oidc.NewCallback(store, googleConnectors(s.T(), &fakeUpstream{id: aliceIdentity()}, ""), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 	) // no WithCodeGenerator: exercises crypto/rand path
 	mux := http.NewServeMux()
@@ -535,7 +537,7 @@ func (s *CallbackSuite) TestDefaultCodeGeneratorIsOpaque() {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie(fixedState))
+	resp := s.getFrom(srv, callbackQuery("c", fixedState), s.binding.Cookie("google", fixedState))
 	defer resp.Body.Close()
 	s.Require().Equal(http.StatusFound, resp.StatusCode)
 
@@ -561,17 +563,17 @@ func (s *CallbackSuite) TestConsumeErrorOtherThanNotFoundIsServerError() {
 // start the flow (no binding cookie, a cookie for another state, or a forged
 // value) is refused before the state is consumed or the code exchanged.
 func (s *CallbackSuite) TestStateNotBoundToBrowserIsRejected() {
-	tampered := s.binding.Cookie(fixedState)
-	tampered.Value = s.binding.Cookie("some-other-state").Value
-	otherState := s.binding.Cookie("some-other-state")
-	otherState.Name = s.binding.Cookie(fixedState).Name
+	tampered := s.binding.Cookie("google", fixedState)
+	tampered.Value = s.binding.Cookie("google", "some-other-state").Value
+	otherState := s.binding.Cookie("google", "some-other-state")
+	otherState.Name = s.binding.Cookie("google", fixedState).Name
 
 	cases := map[string][]*http.Cookie{
 		"no binding cookie":          nil,
-		"cookie for another state":   {s.binding.Cookie("some-other-state")},
+		"cookie for another state":   {s.binding.Cookie("google", "some-other-state")},
 		"forged value":               {tampered},
 		"another state's value":      {otherState},
-		"cookie from another server": {newTestBindingWithKey(s.T(), testIssuer, "fedcba9876543210fedcba9876543210").Cookie(fixedState)},
+		"cookie from another server": {newTestBindingWithKey(s.T(), testIssuer, "fedcba9876543210fedcba9876543210").Cookie("google", fixedState)},
 	}
 	for name, cookies := range cases {
 		s.Run(name, func() {
@@ -625,7 +627,7 @@ func (s *CallbackSuite) TestSuccessClearsBindingCookie() {
 	defer resp.Body.Close()
 	s.Require().Equal(http.StatusFound, resp.StatusCode)
 
-	want := s.binding.Cookie(fixedState)
+	want := s.binding.Cookie("google", fixedState)
 	var cleared bool
 	for _, c := range resp.Cookies() {
 		if c.Name == want.Name && c.MaxAge < 0 {

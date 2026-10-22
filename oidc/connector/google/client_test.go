@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,7 +26,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/onhotpath/tempogate/oidc"
-	"github.com/onhotpath/tempogate/oidc/google"
+	"github.com/onhotpath/tempogate/oidc/connector/google"
 )
 
 const (
@@ -32,6 +34,7 @@ const (
 	testKID      = "google-test-key"
 	testVerifier = "test-pkce-verifier-0123456789abcdefghijklmnop"
 	testNonce    = "test-upstream-nonce"
+	testRedirect = "https://tempogate.example.com/callback/google"
 )
 
 type idp struct {
@@ -53,6 +56,7 @@ type idp struct {
 
 	mu          sync.Mutex
 	gotVerifier string
+	gotRedirect string
 
 	// discoveryDown makes the discovery document answer 503, modelling a
 	// transient outage of the IdP's well-known endpoint.
@@ -147,6 +151,7 @@ func (i *idp) server(t *testing.T) *httptest.Server {
 		_ = r.ParseForm()
 		i.mu.Lock()
 		i.gotVerifier = r.Form.Get("code_verifier")
+		i.gotRedirect = r.Form.Get("redirect_uri")
 		i.mu.Unlock()
 		if i.failExchange {
 			w.Header().Set("Content-Type", "application/json")
@@ -224,7 +229,7 @@ func (s *GoogleSuite) SetupTest() { s.ctx = context.Background() }
 
 func (s *GoogleSuite) clientFor(srv *httptest.Server) *google.Client {
 	return google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL)
+		srv.URL)
 }
 
 func (s *GoogleSuite) TestHappyPath() {
@@ -232,7 +237,7 @@ func (s *GoogleSuite) TestHappyPath() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	id, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	id, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
 	s.Equal("sub-1", id.Subject)
 	s.Equal("user@example.com", id.Email)
@@ -246,7 +251,7 @@ func (s *GoogleSuite) TestHostedDomainIsDecoded() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	id, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	id, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
 	s.Equal("example.com", id.HostedDomain)
 }
@@ -257,7 +262,7 @@ func (s *GoogleSuite) TestMissingSubjectIsRejected() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 	s.Contains(err.Error(), "sub")
 }
@@ -268,7 +273,7 @@ func (s *GoogleSuite) TestMissingEmailIsRejected() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 	s.Contains(err.Error(), "email")
 }
@@ -279,7 +284,7 @@ func (s *GoogleSuite) TestExchangeFailure() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 	s.Contains(err.Error(), "code exchange")
 }
@@ -290,7 +295,7 @@ func (s *GoogleSuite) TestMissingIDToken() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 	s.Contains(err.Error(), "missing id_token")
 }
@@ -300,11 +305,12 @@ func (s *GoogleSuite) TestPKCEVerifierIsSentToTokenEndpoint() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	s.Equal(testVerifier, i.gotVerifier)
+	s.Equal(testRedirect, i.gotRedirect, "the code is redeemed for the redirect URI it was issued to")
 }
 
 func (s *GoogleSuite) TestNonceMismatchIsRejected() {
@@ -319,7 +325,7 @@ func (s *GoogleSuite) TestNonceMismatchIsRejected() {
 			srv := i.server(s.T())
 			c := s.clientFor(srv)
 
-			_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+			_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 			s.Require().Error(err)
 			s.Equal(oidc.UpstreamReasonNonce, reasonOf(err))
 		})
@@ -346,7 +352,7 @@ func (s *GoogleSuite) TestFailuresCarryAReason() {
 			srv := i.server(s.T())
 			c := s.clientFor(srv)
 
-			_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+			_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 			s.Require().Error(err)
 			s.Equal(tc.reason, reasonOf(err))
 		})
@@ -359,7 +365,7 @@ func (s *GoogleSuite) TestExchangeFailureCarriesOAuthErrorCode() {
 	srv := i.server(s.T())
 	c := s.clientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	var ue *oidc.UpstreamError
 	s.Require().ErrorAs(err, &ue)
 	s.Equal("invalid_grant", ue.OAuthError)
@@ -378,39 +384,39 @@ func (s *GoogleSuite) TestDiscoveryRecoversAfterTransientFailure() {
 	t0 := time.Unix(1700000000, 0)
 	now := t0
 	c := google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL,
+		srv.URL,
 		google.WithClock(func() time.Time { return now }))
 	discoveries := func() int32 { return atomic.LoadInt32(&i.discoveryN) }
 
 	i.discoveryDown.Store(true)
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 	s.Equal(oidc.UpstreamReasonDiscovery, reasonOf(err))
 	s.EqualValues(1, discoveries())
 
 	now = t0.Add(500 * time.Millisecond)
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Equal(oidc.UpstreamReasonDiscovery, reasonOf(err))
 	s.EqualValues(1, discoveries(), "inside the backoff window the failure is served without a request")
 
 	now = t0.Add(time.Second)
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Equal(oidc.UpstreamReasonDiscovery, reasonOf(err))
 	s.EqualValues(2, discoveries(), "the backoff window elapsed, so discovery is retried")
 
 	i.discoveryDown.Store(false)
 	now = t0.Add(2500 * time.Millisecond)
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Equal(oidc.UpstreamReasonDiscovery, reasonOf(err))
 	s.EqualValues(2, discoveries(), "the backoff doubled after the second failure")
 
 	now = t0.Add(3 * time.Second)
-	id, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	id, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err, "discovery recovers once the IdP is back, without a restart")
 	s.Equal("sub-1", id.Subject)
 	s.EqualValues(3, discoveries())
 
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
 	s.EqualValues(3, discoveries(), "a successful discovery is cached")
 }
@@ -420,14 +426,14 @@ func (s *GoogleSuite) TestDiscoveryBackoffIsCapped() {
 	srv := i.server(s.T())
 	now := time.Unix(1700000000, 0)
 	c := google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL,
+		srv.URL,
 		google.WithClock(func() time.Time { return now }))
 	i.discoveryDown.Store(true)
 
 	// Fail an hour apart, so every call retries and the backoff keeps
 	// doubling well past any sane cap.
 	for range 12 {
-		_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+		_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 		s.Require().Error(err)
 		now = now.Add(time.Hour)
 	}
@@ -435,7 +441,7 @@ func (s *GoogleSuite) TestDiscoveryBackoffIsCapped() {
 
 	i.discoveryDown.Store(false)
 	now = now.Add(time.Minute)
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err, "after a long outage, recovery is at most a minute away")
 	s.EqualValues(n+1, atomic.LoadInt32(&i.discoveryN))
 }
@@ -452,7 +458,7 @@ const (
 func (s *GoogleSuite) exchangeWithin(c *google.Client) error {
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+		_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 		done <- err
 	}()
 	select {
@@ -509,7 +515,7 @@ func (s *GoogleSuite) TestTimeoutIsPerCall() {
 	i.delay.Store(int64(budget * 6 / 10))
 	srv := i.server(s.T())
 	c := google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL, google.WithTimeout(budget))
+		srv.URL, google.WithTimeout(budget))
 	s.Require().NoError(s.exchangeWithin(c))
 }
 
@@ -522,7 +528,7 @@ func (s *GoogleSuite) TestDiscoveryTimeoutIsNotCached() {
 	now := t0
 	srv := i.server(s.T())
 	c := google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL,
+		srv.URL,
 		google.WithTimeout(testTimeout), google.WithClock(func() time.Time { return now }))
 
 	err := s.exchangeWithin(c)
@@ -542,7 +548,7 @@ func (s *GoogleSuite) TestJWKSRecoversAfterTimeout() {
 	i := newIDP(s.T())
 	srv := i.server(s.T())
 	c := google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL, google.WithTimeout(testTimeout))
+		srv.URL, google.WithTimeout(testTimeout))
 
 	i.stall("/jwks", stallHeaders)
 	err := s.exchangeWithin(c)
@@ -561,7 +567,7 @@ func reasonOf(err error) string {
 	return ""
 }
 
-// recordingObserver satisfies google.Observer.
+// recordingObserver satisfies oidc.UpstreamObserver.
 type recordingObserver struct{ calls []string }
 
 func (r *recordingObserver) ObserveUpstream(op string, took time.Duration, err error) {
@@ -582,7 +588,7 @@ func (r *recordingObserver) ObserveUpstream(op string, took time.Duration, err e
 func (s *GoogleSuite) observedClientFor(srv *httptest.Server, opts ...google.Option) (*google.Client, *recordingObserver) {
 	obs := &recordingObserver{}
 	return google.New(testClientID, "secret", srv.URL+"/token",
-		"https://tempogate.example.com/callback/google", srv.URL, append(opts, google.WithObserver(obs))...), obs
+		srv.URL, append(opts, google.WithObserver(obs))...), obs
 }
 
 // Every upstream round-trip is timed by operation, so a slow or failing
@@ -591,9 +597,9 @@ func (s *GoogleSuite) TestUpstreamCallsAreObserved() {
 	srv := newIDP(s.T()).server(s.T())
 	c, obs := s.observedClientFor(srv)
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
 
 	s.Equal([]string{
@@ -607,7 +613,7 @@ func (s *GoogleSuite) TestUpstreamFailureIsObserved() {
 	i.failExchange = true
 	c, obs := s.observedClientFor(i.server(s.T()))
 
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 
 	s.Equal([]string{"discovery/ok", "code_exchange/error"}, obs.calls)
@@ -622,15 +628,15 @@ func (s *GoogleSuite) TestDiscoveryRetriesAreObserved() {
 	c, obs := s.observedClientFor(i.server(s.T()), google.WithClock(func() time.Time { return now }))
 
 	i.discoveryDown.Store(true)
-	_, err := c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 	now = t0.Add(500 * time.Millisecond)
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 
 	i.discoveryDown.Store(false)
 	now = t0.Add(time.Second)
-	_, err = c.ExchangeAndVerify(s.ctx, "code", testVerifier, testNonce)
+	_, err = c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().NoError(err)
 
 	s.Equal([]string{
@@ -639,27 +645,39 @@ func (s *GoogleSuite) TestDiscoveryRetriesAreObserved() {
 	}, obs.calls)
 }
 
-// TestFxWiresTheObserver proves google.Fx hands the graph's google.Observer
-// (the Prometheus metrics in production) to the client it provides as
-// oidc.Upstream, so upstream calls made through the real wiring are counted.
+// TestFxWiresTheObserver proves google.Fx hands the graph's
+// oidc.UpstreamObserver (the Prometheus metrics in production) to the
+// connector it contributes, so upstream calls made through the real wiring
+// are counted.
 func TestFxWiresTheObserver(t *testing.T) {
 	srv := newIDP(t).server(t)
 	obs := &recordingObserver{}
-	var up oidc.Upstream
+	var conns struct {
+		fx.In
+		All []oidc.Connector `group:"oidc_connectors"`
+	}
 	fxtest.New(t,
 		google.Fx(),
-		fx.Provide(func() google.Observer { return obs }),
+		fx.Provide(func() oidc.UpstreamObserver { return obs }),
+		fx.Supply(slog.New(slog.DiscardHandler)),
 		fx.Supply(
-			fx.Annotate("https://tempogate.example.com", fx.ResultTags(`name:"oidc_issuer"`)),
 			fx.Annotate(testClientID, fx.ResultTags(`name:"google_client_id"`)),
 			fx.Annotate("secret", fx.ResultTags(`name:"google_client_secret"`)),
+			fx.Annotate(srv.URL+"/auth", fx.ResultTags(`name:"google_auth_endpoint"`)),
 			fx.Annotate(srv.URL+"/token", fx.ResultTags(`name:"google_token_endpoint"`)),
 			fx.Annotate(srv.URL, fx.ResultTags(`name:"google_issuer_url"`)),
+			fx.Annotate("", fx.ResultTags(`name:"oidc_allowed_hosted_domains"`)),
 		),
-		fx.Populate(&up),
+		fx.Populate(&conns),
 	).RequireStart().RequireStop()
 
-	_, err := up.ExchangeAndVerify(context.Background(), "code", testVerifier, testNonce)
+	require.Len(t, conns.All, 1)
+	_, err := conns.All[0].Complete(context.Background(), oidc.CompleteParams{
+		RedirectURI:  testRedirect,
+		Params:       url.Values{"code": {"code"}},
+		CodeVerifier: testVerifier,
+		Nonce:        testNonce,
+	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"discovery/ok", "code_exchange/ok", "verify_id_token/ok"}, obs.calls)
 }
