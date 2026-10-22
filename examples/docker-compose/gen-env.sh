@@ -24,6 +24,11 @@ POSTGRES_PASSWORD=$(openssl rand -hex 24)
 
 # Optional, non-secret knobs (defaults shown).
 # DEMO_EMAIL=alice@example.com
+# DEMO_HD=example.com
 # TEMPOGATE_ALLOWED_DOMAINS=example.com
+# TEMPOGATE_ALLOWED_HOSTED_DOMAINS=example.com
 # LOG_LEVEL=info
+
+# Optional: encrypt signing keys at rest. Once set, tempogate needs it to start.
+# TEMPOGATE_KEYS_ENCRYPTION_KEY=$(openssl rand -base64 32)
 EOF
