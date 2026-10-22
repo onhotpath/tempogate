@@ -489,8 +489,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	// --- tempogate: migrate then serve. The CLI is registered as a *public*
@@ -524,6 +524,7 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		user, stateMount = "", "/var/lib/tempogate"
 		tgEnv["STATE_SQLITE_PATH"] = stateMount + "/state.db"
 	}
+	withStateBackend(ctx, t, netName, tgEnv)
 	ports := []string{"8000/tcp"}
 	if cfg.adminAPI {
 		ports = append(ports, "8081/tcp")
@@ -531,20 +532,13 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 	stateVol := stateVolume(t, "tempogate-cli-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
-	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:          tgImg,
-			FromDockerfile: tgFrom,
-			Cmd:            []string{"migrate"},
-			Env:            tgEnv,
-			User:           user,
-			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, testcontainers.ContainerMountTarget(stateMount))),
-			WaitingFor:     wait.ForExit().WithExitTimeout(2 * time.Minute),
-		},
-		Started: true,
+	runMigrate(ctx, t, t, "tempogate-migrate", netName, testcontainers.ContainerRequest{
+		Image:          tgImg,
+		FromDockerfile: tgFrom,
+		Env:            tgEnv,
+		User:           user,
+		Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, testcontainers.ContainerMountTarget(stateMount))),
 	})
-	require.NoError(t, err, "tempogate migrate")
-	track(ctx, t, "tempogate-migrate", migrate)
 
 	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -561,8 +555,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 
 	// --- postgres + temporal-frontend (JWKS-backed default authorizer) ---
 	pg, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -578,8 +572,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "postgres")
 	track(ctx, t, "postgres", pg)
+	require.NoError(t, err, "postgres")
 
 	temporal, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -604,8 +598,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "temporal")
 	track(ctx, t, "temporal", temporal)
+	require.NoError(t, err, "temporal")
 
 	// --- cliclient: headless Chrome + the tempogate binary in one container,
 	// so the loopback server and the browser share a network namespace.
@@ -631,8 +625,8 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "cliclient")
 	track(ctx, t, "cliclient", clientC)
+	require.NoError(t, err, "cliclient")
 
 	var adminURL string
 	if cfg.adminAPI {

@@ -103,8 +103,8 @@ func setupDeviceStack(ctx context.Context, t *testing.T, basePath string) (strin
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 
 	env := map[string]string{
 		"HTTP_LISTENER":              "0.0.0.0:8000",
@@ -135,8 +135,8 @@ func setupDeviceStack(ctx context.Context, t *testing.T, basePath string) (strin
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, "tempogate-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -153,8 +153,8 @@ func setupDeviceStack(ctx context.Context, t *testing.T, basePath string) (strin
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 
 	return issuer, newBrowserClient(t, map[string]string{
 		"tempogate:8000":  mappedAddr(ctx, t, tempogate, "8000"),

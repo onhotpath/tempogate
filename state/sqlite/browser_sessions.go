@@ -10,6 +10,7 @@ import (
 	sqlite3lib "modernc.org/sqlite/lib"
 
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/state/internal/secret"
 )
 
 // ErrDuplicateBrowserSession is returned by SaveBrowserSession when a row
@@ -21,7 +22,7 @@ func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO browser_sessions (sid_hash, subject, email, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?)`,
-		secretHash(bs.SID), bs.Subject, bs.Email, bs.CreatedAt, bs.ExpiresAt,
+		secret.Hash(bs.SID), bs.Subject, bs.Email, bs.CreatedAt, bs.ExpiresAt,
 	)
 	if err != nil {
 		var sqliteErr *sqlite3.Error
@@ -41,7 +42,7 @@ func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.Brow
 		`SELECT subject, email, created_at, expires_at
 		 FROM browser_sessions
 		 WHERE sid_hash = ?`,
-		secretHash(sid),
+		secret.Hash(sid),
 	).Scan(&bs.Subject, &bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return oidc.BrowserSession{}, oidc.ErrBrowserSessionNotFound
@@ -57,7 +58,7 @@ func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.Brow
 // without re-checking existence.
 func (s *Store) DeleteBrowserSession(ctx context.Context, sid string) error {
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM browser_sessions WHERE sid_hash = ?`, secretHash(sid),
+		`DELETE FROM browser_sessions WHERE sid_hash = ?`, secret.Hash(sid),
 	); err != nil {
 		return s.fail("delete_browser_session", fmt.Errorf("sqlite: delete browser session: %w", err))
 	}

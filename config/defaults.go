@@ -46,6 +46,11 @@ func defaultConfig() *Config {
 			ShutdownTimeout:   15 * time.Second,
 		},
 		State: StateConfig{
+			Driver: StateDriverSQLite,
+			Postgres: PostgresConfig{
+				MaxConns:        10,
+				ConnMaxIdleTime: 30 * time.Minute,
+			},
 			Sqlite: SqliteConfig{
 				Path:        "/var/lib/tempogate/state.db",
 				MaxConns:    1,

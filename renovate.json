@@ -40,6 +40,21 @@
       "enabled": true
     },
     {
+      "description": "The PostgreSQL majors the state store is tested against (CI services and state/postgres testImages, kept equal by a test) move with the community support window by hand; Renovate only refreshes their digests",
+      "matchDepNames": [
+        "postgres"
+      ],
+      "matchFileNames": [
+        ".github/workflows/**",
+        "state/postgres/**"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Bump the go directive on patch releases too (the default treats it as a minimum and never moves it)",
       "matchDatasources": [
         "golang-version"
@@ -66,6 +81,17 @@
       "matchStrings": [
         "imageOr\\(\"[A-Z0-9_]+\", \"(?<depName>[^\":@\\s]+):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\)",
         "(?:^|\\s)[a-z-]*image:\\s*[\"']?(?<depName>[^\"':@\\s]+):(?<currentValue>[^\"'@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The digest-pinned PostgreSQL images state/postgres's tests start locally (testImages)",
+      "managerFilePatterns": [
+        "/^state/postgres/pg_test\\.go$/"
+      ],
+      "matchStrings": [
+        "\"(?<depName>postgres):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
       ],
       "datasourceTemplate": "docker"
     }

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/perms"
 )
@@ -132,7 +133,7 @@ func NewKeys(registry KeyRegistry, signer *keys.Signer, opts ...KeysOption) *Key
 		signer:       signer,
 		logger:       zap.NewNop(),
 		maxTTL:       DefaultMaxTTL,
-		now:          func() time.Time { return time.Now().UTC() },
+		now:          clock.Now,
 		newID:        defaultNewID,
 		defaultLimit: defaultListLimit,
 		maxLimit:     maxListLimit,

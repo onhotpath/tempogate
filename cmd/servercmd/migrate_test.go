@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 
+	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
@@ -46,6 +47,7 @@ func (s *MigrateCmdSuite) params() migrateParams {
 	return migrateParams{
 		Logger:     zap.NewNop(),
 		Store:      s.store,
+		Driver:     config.StateDriverSQLite,
 		SqlitePath: s.path,
 	}
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/keys"
 )
 
@@ -282,7 +283,7 @@ func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts 
 		signer:             signer,
 		clients:            clients,
 		logger:             slog.New(slog.DiscardHandler),
-		now:                func() time.Time { return time.Now().UTC() },
+		now:                clock.Now,
 		newRefresh:         randomRefresh,
 		observer:           nopObserver{},
 		authorizer:         denyAll{},

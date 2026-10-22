@@ -75,8 +75,8 @@ func TestRedirectURIExactMatching(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	t.Run("legacy prefix registration refuses to boot", func(t *testing.T) {
@@ -199,8 +199,8 @@ func startTempogateAllowingFailure(
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, alias+"-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	serve, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -216,8 +216,8 @@ func startTempogateAllowingFailure(
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, alias, serve)
+	require.NoError(t, err, "tempogate serve")
 
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {

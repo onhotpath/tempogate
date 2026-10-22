@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -141,7 +143,7 @@ func New(
 		issuer:       strings.TrimRight(issuer, "/"),
 		googleClient: googleClientID,
 		googleAuth:   googleAuthEndpoint,
-		now:          func() time.Time { return time.Now().UTC() },
+		now:          clock.Now,
 		newState:     randomState,
 	}
 	for _, o := range opts {

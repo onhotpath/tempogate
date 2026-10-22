@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -81,7 +83,7 @@ func NewReaper(store *Store, opts ...ReaperOption) *Reaper {
 		store:    store,
 		interval: defaultReapInterval,
 		batch:    defaultReapBatchSize,
-		now:      func() time.Time { return time.Now().UTC() },
+		now:      clock.Now,
 		logger:   zap.NewNop(),
 	}
 	for _, o := range opts {

@@ -176,6 +176,6 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at tim
 	if err := tx.Commit(); err != nil {
 		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: commit mark revoked: %w", err))
 	}
-	s.changes.publish(keys.Change{Kind: keys.ChangeJTIRevoked, JTI: jti})
+	s.changes.Publish(keys.Change{Kind: keys.ChangeJTIRevoked, JTI: jti})
 	return jti, nil
 }

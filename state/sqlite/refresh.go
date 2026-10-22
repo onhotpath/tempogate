@@ -12,6 +12,7 @@ import (
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/state/internal/secret"
 )
 
 // ErrDuplicateRefreshToken is returned by SaveRefresh when a token with the
@@ -37,7 +38,7 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 		 WHERE NOT EXISTS (
 		     SELECT 1 FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NOT NULL
 		 )`,
-		secretHash(r.Token), r.JTI, r.ClientID, r.Subject, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
+		secret.Hash(r.Token), r.JTI, r.ClientID, r.Subject, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
 		r.FamilyID,
 	)
 	if err != nil {
@@ -65,7 +66,7 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 // §4.14.2). The client_id predicate means a token presented by another
 // client, live or consumed, is reported missing and left intact.
 func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at time.Time) (oidc.Refresh, error) {
-	hash := secretHash(token)
+	hash := secret.Hash(token)
 	r, err := scanRefresh(token, s.db.QueryRowContext(ctx,
 		`UPDATE refresh_tokens SET consumed_at = ?
 		 WHERE token_hash = ? AND client_id = ? AND consumed_at IS NULL AND revoked_at IS NULL

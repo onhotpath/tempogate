@@ -196,7 +196,7 @@ func migrateTo(t *testing.T, s *Store, version int) {
 	applied, err := loadAppliedVersions(ctx, s.db)
 	require.NoError(t, err)
 	for _, m := range migs {
-		if _, done := applied[m.version]; !done && m.version <= version {
+		if _, done := applied[m.Version]; !done && m.Version <= version {
 			require.NoError(t, applyMigration(ctx, s.db, m))
 		}
 	}

@@ -356,7 +356,9 @@ func userinfoStatus(t *testing.T, publicURL, raw string) int {
 	return resp.StatusCode
 }
 
-// assertJTIInDenylistStore copies the SQLite state file (and its WAL/SHM
+// assertJTIInDenylistStore reads jti_denylist through the state store the
+// stack runs on. On PostgreSQL it opens the stack's database from the host.
+// On SQLite it copies the state file (and its WAL/SHM
 // siblings, so committed-but-not-checkpointed pages are visible) off the
 // running tempogate container and uses the same pure-Go sqlite driver
 // tempogate itself uses to read jti_denylist. Avoids any dependency on a
@@ -364,6 +366,15 @@ func userinfoStatus(t *testing.T, publicURL, raw string) int {
 // that would pollute the production listener.
 func assertJTIInDenylistStore(ctx context.Context, t *testing.T, c testcontainers.Container, jti string) {
 	t.Helper()
+	if onPostgres() {
+		nets, err := c.Networks(ctx)
+		require.NoError(t, err)
+		require.Len(t, nets, 1, "tempogate networks")
+		revoked, err := postgresStateStore(ctx, t, nets[0]).IsRevoked(ctx, jti)
+		require.NoError(t, err)
+		require.Truef(t, revoked, "jti %q must be present in the persistent jti_denylist (structural acceptance criterion)", jti)
+		return
+	}
 	dir := t.TempDir()
 	local := filepath.Join(dir, "state.db")
 
@@ -645,8 +656,8 @@ func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKe
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "postgres")
 	track(ctx, t, "postgres", pg)
+	require.NoError(t, err, "postgres")
 
 	temporal, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -671,8 +682,8 @@ func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKe
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "temporal")
 	track(ctx, t, "temporal", temporal)
+	require.NoError(t, err, "temporal")
 
 	return &integrationKeysStack{
 		tempogate:    tempogate,
@@ -715,23 +726,17 @@ func startIntegrationKeysTempogate(ctx context.Context, t *testing.T, netName st
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	addAdminAuthEnv(ctx, t, tgEnv, allowSystemGrants)
+	withStateBackend(ctx, t, netName, tgEnv)
 	stateVol := stateVolume(t, "tempogate-intkeys-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
-	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:          tgImg,
-			FromDockerfile: tgFrom,
-			Cmd:            []string{"migrate"},
-			Env:            tgEnv,
-			User:           "0:0",
-			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
-			WaitingFor:     wait.ForExit().WithExitTimeout(2 * time.Minute),
-		},
-		Started: true,
+	runMigrate(ctx, t, t, "tempogate-migrate", netName, testcontainers.ContainerRequest{
+		Image:          tgImg,
+		FromDockerfile: tgFrom,
+		Env:            tgEnv,
+		User:           "0:0",
+		Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
 	})
-	require.NoError(t, err, "tempogate migrate")
-	track(ctx, t, "tempogate-migrate", migrate)
 
 	// Two exposed ports prove structurally that the admin listener is a
 	// separate bind: a single http.Server cannot answer on two ports.
@@ -753,7 +758,7 @@ func startIntegrationKeysTempogate(ctx context.Context, t *testing.T, netName st
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 	return tempogate
 }

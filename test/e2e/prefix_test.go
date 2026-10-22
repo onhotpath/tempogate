@@ -72,8 +72,8 @@ func TestSubPathIssuerHosting(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, "tempogate-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	// Readiness probes /readyz — at the ROOT even in base-path mode. That this
 	// wait succeeds is itself the proof health stays unprefixed in the real
@@ -94,8 +94,8 @@ func TestSubPathIssuerHosting(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 
 	base := mappedHTTP(ctx, t, tempogate, "8000")
 	admin := mappedHTTP(ctx, t, tempogate, "8081")

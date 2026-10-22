@@ -436,9 +436,7 @@ func setupAuthzStack(ctx context.Context, t *testing.T, authz map[string]string)
 		req.Networks = []string{netName}
 		req.NetworkAliases = alias(name)
 		c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
-		if c != nil {
-			track(ctx, t, name, c)
-		}
+		track(ctx, t, name, c)
 		require.NoError(t, err, name)
 		return c
 	}

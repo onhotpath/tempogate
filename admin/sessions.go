@@ -9,6 +9,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/zap"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -51,7 +53,7 @@ func NewSessions(store SessionStore, opts ...SessionsOption) *Sessions {
 	h := &Sessions{
 		store:  store,
 		logger: zap.NewNop(),
-		now:    func() time.Time { return time.Now().UTC() },
+		now:    clock.Now,
 	}
 	for _, o := range opts {
 		o(h)

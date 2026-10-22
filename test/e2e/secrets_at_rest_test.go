@@ -51,6 +51,7 @@ import (
 const e2eKEK = "a2VrLWZvci10aGUtZTJlLXN1aXRlLW9ubHktMDAwMSE="
 
 func TestSecretsAtRest(t *testing.T) {
+	skipOnPostgres(t)
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
@@ -156,8 +157,8 @@ func TestStateVolumeUnderFSGroup(t *testing.T) {
 			},
 			Started: true,
 		})
-		require.NoError(t, err, name)
 		track(ctx, t, name, c)
+		require.NoError(t, err, name)
 	}
 	asRoot("fsgroup-volume", "chown 0:65532 /state && chmod 2770 /state")
 
@@ -171,8 +172,8 @@ func TestStateVolumeUnderFSGroup(t *testing.T) {
 			},
 			Started: true,
 		})
-		require.NoError(t, err, name)
 		track(ctx, t, name, c)
+		require.NoError(t, err, name)
 		return c
 	}
 	ready := wait.ForHTTP("/readyz").WithPort("8000/tcp").WithStartupTimeout(2 * time.Minute)

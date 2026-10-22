@@ -337,8 +337,8 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, "tempogate-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -358,8 +358,8 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 
 	pg, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -374,8 +374,8 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "postgres")
 	track(ctx, t, "postgres", pg)
+	require.NoError(t, err, "postgres")
 
 	temporal, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -400,8 +400,8 @@ func setupMultiTenantStack(ctx context.Context, t *testing.T) *multiTenantStack 
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "temporal")
 	track(ctx, t, "temporal", temporal)
+	require.NoError(t, err, "temporal")
 
 	return &multiTenantStack{
 		tempogate:    tempogate,

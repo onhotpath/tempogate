@@ -17,7 +17,6 @@ import (
 	"github.com/onhotpath/tempogate/metrics"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/google"
-	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 // deps hands a subcommand its dependencies only when it runs, and releases
@@ -33,6 +32,9 @@ type deps[P any] func(ctx context.Context, run func(P) error) error
 // the loaded configuration and the process loggers.
 type graph struct {
 	base fx.Option
+
+	// state is the state store backend STATE_DRIVER selects.
+	state fx.Option
 }
 
 type graphParams struct {
@@ -44,13 +46,16 @@ type graphParams struct {
 }
 
 func newGraph(p graphParams) graph {
-	return graph{base: fx.Options(
-		config.Supply(p.Config),
-		fx.Supply(p.Zap, p.Slog),
-		fx.WithLogger(func() fxevent.Logger {
-			return &fxevent.ZapLogger{Logger: p.Zap.WithOptions(zap.IncreaseLevel(zap.WarnLevel))}
-		}),
-	)}
+	return graph{
+		base: fx.Options(
+			config.Supply(p.Config),
+			fx.Supply(p.Zap, p.Slog),
+			fx.WithLogger(func() fxevent.Logger {
+				return &fxevent.ZapLogger{Logger: p.Zap.WithOptions(zap.IncreaseLevel(zap.WarnLevel))}
+			}),
+		),
+		state: stateModule(p.Config.State.Driver),
+	}
 }
 
 // lazy returns deps that build P from g's base plus modules, on demand.
@@ -70,23 +75,23 @@ func lazy[P any](g graph, modules ...fx.Option) deps[P] {
 }
 
 // storeModules is all `migrate` and `sessions` need.
-func storeModules() []fx.Option {
-	return []fx.Option{sqlite.Fx()}
+func storeModules(g graph) []fx.Option {
+	return []fx.Option{g.state}
 }
 
 // keysModules is all `keys` needs: the store plus the keypair aggregate.
-func keysModules() []fx.Option {
-	return []fx.Option{sqlite.Fx(), keys.Fx()}
+func keysModules(g graph) []fx.Option {
+	return []fx.Option{g.state, keys.Fx()}
 }
 
 // serverModules is the full HTTP server stack `serve` and `gen-oas` need,
 // Prometheus metrics included. Building it validates the OIDC configuration,
 // so only those two subcommands fail when it is missing.
-func serverModules() []fx.Option {
+func serverModules(g graph) []fx.Option {
 	return []fx.Option{
 		fx.Invoke(checkIssuer),
 		metrics.Fx(),
-		sqlite.Fx(),
+		g.state,
 		keys.Fx(),
 		authz.Fx(),
 		oidc.Fx(),

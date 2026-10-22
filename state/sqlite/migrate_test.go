@@ -21,7 +21,7 @@ func (s *StoreSuite) TestMigration0010AddsSubjectToExistingRows() {
 	migs, err := loadMigrations()
 	s.Require().NoError(err)
 	for _, m := range migs {
-		if m.version == 10 {
+		if m.Version == 10 {
 			continue
 		}
 		s.Require().NoError(applyMigration(s.ctx, legacy.db, m))

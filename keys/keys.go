@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 var (
@@ -50,6 +52,7 @@ type Keys struct {
 
 	publishDelay time.Duration
 	changes      ChangeFeed
+	bootstrap    BootstrapLocker
 
 	mu          sync.RWMutex
 	keypairs    []Keypair
@@ -59,7 +62,7 @@ type Keys struct {
 func New(opts ...Option) *Keys {
 	k := &Keys{
 		alg:   AlgRS256,
-		now:   func() time.Time { return time.Now().UTC() },
+		now:   clock.Now,
 		grace: DefaultRetirementGrace,
 
 		publishDelay: DefaultPublishDelay,

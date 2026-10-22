@@ -13,6 +13,8 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/lestrrat-go/jwx/v4/jws"
 	"github.com/lestrrat-go/jwx/v4/jwt"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 // ErrNoSigningKeys is returned by Mint when the backing *Keys has no keypair
@@ -105,7 +107,7 @@ func WithDenylist(d DenylistChecker) TokenOption {
 }
 
 func newTokenConfig(opts ...TokenOption) tokenConfig {
-	c := tokenConfig{now: func() time.Time { return time.Now().UTC() }}
+	c := tokenConfig{now: clock.Now}
 	for _, o := range opts {
 		o(&c)
 	}

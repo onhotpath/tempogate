@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -137,7 +139,7 @@ func NewSessionManager(store BrowserSessionStore, signingKey []byte, opts ...Ses
 	m := &SessionManager{
 		store:      store,
 		signingKey: signingKey,
-		now:        func() time.Time { return time.Now().UTC() },
+		now:        clock.Now,
 		newSID:     randomSID,
 		ttl:        defaultSessionTTL,
 		cookie: cookieAttrs{

@@ -31,7 +31,7 @@ func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
 		}
 		return s.fail("save_keypair", fmt.Errorf("sqlite: save keypair: %w", err))
 	}
-	s.changes.publish(keys.Change{Kind: keys.ChangeKeys})
+	s.changes.Publish(keys.Change{Kind: keys.ChangeKeys})
 	return nil
 }
 
@@ -74,7 +74,7 @@ func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, private
 	if n == 0 {
 		return fmt.Errorf("sqlite: update keypair: no keypair with kid %s", kid)
 	}
-	s.changes.publish(keys.Change{Kind: keys.ChangeKeys})
+	s.changes.Publish(keys.Change{Kind: keys.ChangeKeys})
 	return nil
 }
 
@@ -98,7 +98,7 @@ func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (ke
 		return keys.Keypair{}, s.fail("retire_keypair", fmt.Errorf("sqlite: retire keypair: %w", err))
 	}
 	if changed > 0 {
-		s.changes.publish(keys.Change{Kind: keys.ChangeKeys})
+		s.changes.Publish(keys.Change{Kind: keys.ChangeKeys})
 	}
 
 	kp, err := scanKeypair(s.db.QueryRowContext(ctx,

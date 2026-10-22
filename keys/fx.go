@@ -12,9 +12,10 @@ type fxParams struct {
 	fx.In
 
 	Store           KeyStore
-	Changes         ChangeFeed    `optional:"true"`
-	RetirementGrace time.Duration `name:"keys_retirement_grace"`
-	PublishDelay    time.Duration `name:"keys_publish_delay"`
+	Changes         ChangeFeed      `optional:"true"`
+	Bootstrap       BootstrapLocker `optional:"true"`
+	RetirementGrace time.Duration   `name:"keys_retirement_grace"`
+	PublishDelay    time.Duration   `name:"keys_publish_delay"`
 
 	EncryptionKey     string `name:"keys_encryption_key" optional:"true"`
 	EncryptionKeyFile string `name:"keys_encryption_key_file" optional:"true"`
@@ -39,6 +40,7 @@ func newFx(p fxParams) (*Keys, error) {
 		WithRetirementGrace(p.RetirementGrace),
 		WithPublishDelay(p.PublishDelay),
 		WithChangeFeed(p.Changes),
+		WithBootstrapLocker(p.Bootstrap),
 	}
 	if kek != nil {
 		opts = append(opts, WithEncryptionKey(kek))
@@ -109,8 +111,8 @@ type denylistParams struct {
 	Changes ChangeFeed `optional:"true"`
 }
 
-// newDenylistCache wraps the sqlite-backed DenylistChecker (provided by
-// state/sqlite via fx.As) in the verifier-side read-through cache.
+// newDenylistCache wraps the state store's DenylistChecker (provided by the
+// STATE_DRIVER backend via fx.As) in the verifier-side read-through cache.
 // DefaultDenylistTTL governs how stale a hot-path "active" answer can be;
 // the store's change feed, when there is one, only shortens it (Follow).
 func newDenylistCache(p denylistParams) *DenylistCache {
@@ -119,9 +121,9 @@ func newDenylistCache(p denylistParams) *DenylistCache {
 
 // Fx wires *Keys plus the *Signer, *Verifier, and verifier-side
 // *DenylistCache over it into the composition root. The KeyStore and
-// DenylistChecker dependencies are both satisfied by state/sqlite via
-// fx.Annotate(..., fx.As(...)), as is the optional ChangeFeed; oidc_issuer
-// is contributed by config.
+// DenylistChecker dependencies are both satisfied by the state store
+// backend via fx.Annotate(..., fx.As(...)), as are the optional ChangeFeed
+// and BootstrapLocker; oidc_issuer is contributed by config.
 func Fx() fx.Option {
 	return fx.Options(
 		fx.Provide(newFx),

@@ -20,7 +20,7 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull lint-chart test-chart test-deploy test-deploy-kind test-deploy-compose compose-lint ci vuln go-version-check check-supply-chain gen-oas clean help tools deploy-tools \
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-postgres-go test-e2e-pull lint-chart test-chart test-deploy test-deploy-kind test-deploy-compose compose-lint ci vuln go-version-check check-supply-chain gen-oas clean help tools deploy-tools \
         gci golangci-lint govulncheck actionlint kind kubeconform yq
 
 start: ## Run the binary directly with build-info ldflags injected
@@ -141,6 +141,18 @@ test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 	E2E_TEMPOGATE_IMAGE=$(E2E_TEMPOGATE_IMAGE) E2E_MOCKGOOGLE_IMAGE=$(E2E_MOCKGOOGLE_IMAGE) \
 	E2E_CLICLIENT_IMAGE=$(E2E_CLICLIENT_IMAGE) \
 		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 ./test/e2e
+
+# The same tests over the PostgreSQL state store: each stack gets its own
+# Postgres on the test network instead of a SQLite volume (see
+# test/e2e/state_backend_test.go). Only the tests whose stacks honour
+# E2E_STATE_DRIVER run: CLI and device login, the refresh lifecycle, and
+# integration keys with signing-key rotation.
+E2E_POSTGRES_TESTS ?= TestCLILogin|TestCLIDeviceLogin|TestRefreshLifecycle|TestAdminKeyMintAndRevoke|TestSigningKeyRotationAndRetirement
+
+test-e2e-postgres-go: ## run the state-store e2e tests against PostgreSQL, with pre-built E2E_* images
+	E2E_STATE_DRIVER=postgres E2E_TEMPOGATE_IMAGE=$(E2E_TEMPOGATE_IMAGE) E2E_MOCKGOOGLE_IMAGE=$(E2E_MOCKGOOGLE_IMAGE) \
+	E2E_CLICLIENT_IMAGE=$(E2E_CLICLIENT_IMAGE) \
+		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 -run '^($(E2E_POSTGRES_TESTS))$$' ./test/e2e
 
 # CI pulls the third-party e2e images (the tests' digest-pinned imageOr
 # defaults, see scripts/e2e-images.sh) in the background while it builds the

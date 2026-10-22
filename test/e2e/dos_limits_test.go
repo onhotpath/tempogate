@@ -69,8 +69,8 @@ func TestDoSLimits(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	env := redirectTestEnv(cliClientID + ":http://127.0.0.1/callback," + deviceClientID + ":")

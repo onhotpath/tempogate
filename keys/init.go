@@ -15,7 +15,18 @@ import (
 // Init is intentionally separate from the fx graph: long-running commands
 // (e.g. serve) opt in by calling Init in their RunE, while one-shot CLIs
 // (e.g. keys generate) bypass Init and go straight to Generate.
+//
+// With a BootstrapLocker (WithBootstrapLocker) the load and the generation
+// run under its lock, so replicas booting together on an empty store agree
+// on one key: the first generates it, the others load it.
 func (k *Keys) Init(ctx context.Context) error {
+	if k.bootstrap != nil {
+		return k.bootstrap.LockKeyBootstrap(ctx, k.init)
+	}
+	return k.init(ctx)
+}
+
+func (k *Keys) init(ctx context.Context) error {
 	stored, err := k.store.LoadKeypairs(ctx)
 	if err != nil {
 		return fmt.Errorf("keys: load keypairs: %w", err)

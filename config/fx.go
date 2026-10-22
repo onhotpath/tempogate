@@ -36,6 +36,13 @@ type Result struct {
 	SqlitePath            string        `name:"sqlite_path"`
 	SqliteMaxConns        int           `name:"sqlite_max_conns"`
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
+	StateDriver           string        `name:"state_driver"`
+	PostgresDSN           string        `name:"postgres_dsn"`
+	PostgresDSNFile       string        `name:"postgres_dsn_file"`
+	PostgresListenDSN     string        `name:"postgres_listen_dsn"`
+	PostgresMaxConns      int           `name:"postgres_max_conns"`
+	PostgresConnIdle      time.Duration `name:"postgres_conn_max_idle_time"`
+	PostgresAllowInsecure bool          `name:"postgres_allow_insecure_sslmode"`
 	OIDCIssuer            string        `name:"oidc_issuer"`
 	OIDCBasePath          string        `name:"oidc_base_path"`
 	OIDCIssuerPlainHTTP   bool          `name:"oidc_issuer_plain_http"`
@@ -105,6 +112,13 @@ func project(cfg *Config) Result {
 		SqlitePath:            cfg.State.Sqlite.Path,
 		SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
 		SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,
+		StateDriver:           cfg.State.Driver,
+		PostgresDSN:           cfg.State.Postgres.DSN,
+		PostgresDSNFile:       cfg.State.Postgres.DSNFile,
+		PostgresListenDSN:     cfg.State.Postgres.ListenDSN,
+		PostgresMaxConns:      cfg.State.Postgres.MaxConns,
+		PostgresConnIdle:      cfg.State.Postgres.ConnMaxIdleTime,
+		PostgresAllowInsecure: cfg.State.Postgres.AllowInsecureSSLMode,
 		OIDCIssuer:            cfg.OIDC.Issuer,
 		OIDCBasePath:          issuerBasePath(cfg.OIDC.Issuer),
 		OIDCIssuerPlainHTTP:   issuerIsPlainHTTP(cfg.OIDC.Issuer),

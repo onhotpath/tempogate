@@ -11,6 +11,7 @@ import (
 	sqlite3lib "modernc.org/sqlite/lib"
 
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/state/internal/secret"
 )
 
 // ErrDuplicateDeviceCode is returned by SaveDeviceCode when a row with the
@@ -43,7 +44,7 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 		    approved_at, denied_at, last_polled_at, interval_seconds,
 		    created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		secretHash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Subject), nullString(dc.Email),
+		secret.Hash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Subject), nullString(dc.Email),
 		nullTime(dc.ApprovedAt), nullTime(dc.DeniedAt), nullTime(dc.LastPolledAt),
 		dc.IntervalSeconds, dc.CreatedAt, dc.ExpiresAt,
 	)
@@ -61,7 +62,7 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 }
 
 func (s *Store) LookupDeviceCodeByDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
-	dc, err := s.lookupDeviceCode(ctx, "device_code_hash", secretHash(deviceCode))
+	dc, err := s.lookupDeviceCode(ctx, "device_code_hash", secret.Hash(deviceCode))
 	if err != nil {
 		return oidc.DeviceCode{}, err
 	}
@@ -122,7 +123,7 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 // are slow_down. The interval is judged in Go because timestamps are stored
 // as Go time strings that SQLite's date functions cannot read.
 func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (bool, error) {
-	hash := secretHash(deviceCode)
+	hash := secret.Hash(deviceCode)
 	var (
 		lastPolled    sql.NullTime
 		lastPolledRaw sql.NullString
@@ -256,7 +257,7 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 		 RETURNING user_code, client_id, scope, subject, email,
 		           approved_at, denied_at, last_polled_at, interval_seconds,
 		           created_at, expires_at`,
-		secretHash(deviceCode),
+		secret.Hash(deviceCode),
 	).Scan(
 		&dc.UserCode, &dc.ClientID, &dc.Scope, &subject, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,

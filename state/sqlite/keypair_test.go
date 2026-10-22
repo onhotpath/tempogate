@@ -23,10 +23,10 @@ func (s *StoreSuite) TestKeypairRetirementMigrationKeepsExistingKeys() {
 	s.Require().NoError(err)
 	found := false
 	for _, m := range migs {
-		if m.version == keypairRetirementVersion {
+		if m.Version == keypairRetirementVersion {
 			found = true
 		}
-		if m.version < keypairRetirementVersion {
+		if m.Version < keypairRetirementVersion {
 			s.Require().NoError(applyMigration(s.ctx, store.db, m))
 		}
 	}
