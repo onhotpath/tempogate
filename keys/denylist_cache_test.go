@@ -3,6 +3,7 @@ package keys
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -136,7 +137,10 @@ func (s *denylistCacheSuite) TestCheckerErrorIsSurfaced() {
 func (s *denylistCacheSuite) TestDefaultsAreSane() {
 	c := NewDenylistCache()
 	s.Equal(DefaultDenylistTTL, c.ttl)
+	s.Equal(DefaultDenylistMaxEntries, c.maxEntries)
 	s.NotNil(c.now)
+	s.Equal(DefaultDenylistMaxEntries, NewDenylistCache(WithDenylistMaxEntries(0)).maxEntries,
+		"a non-positive cap keeps the default rather than disabling the cache")
 }
 
 // countingChecker satisfies DenylistChecker with a deterministic in-memory
@@ -158,4 +162,77 @@ type errorChecker struct{ err error }
 
 func (e *errorChecker) IsRevoked(_ context.Context, _ string) (bool, error) {
 	return false, e.err
+}
+
+func (s *denylistCacheSuite) size() int {
+	s.cache.mu.Lock()
+	defer s.cache.mu.Unlock()
+	return len(s.cache.entries)
+}
+
+func (s *denylistCacheSuite) TestExpiredEntriesAreSwept() {
+	// One fresh jti per second for well over the TTL: without a sweep every
+	// verified jti would stay in memory for the life of the process.
+	for i := range 1000 {
+		_, err := s.cache.IsRevoked(s.ctx, fmt.Sprintf("jti-%d", i))
+		s.Require().NoError(err)
+		s.advance(time.Second)
+	}
+	s.LessOrEqual(s.size(), 61, "only entries from the last two TTL windows may remain")
+}
+
+func (s *denylistCacheSuite) TestSizeCapIsHard() {
+	c := NewDenylistCache(
+		WithDenylistChecker(s.checker),
+		WithDenylistClock(func() time.Time { return s.now }),
+		WithDenylistMaxEntries(4),
+	)
+	s.cache = c
+	for i := range 100 {
+		_, err := c.IsRevoked(s.ctx, fmt.Sprintf("jti-%d", i))
+		s.Require().NoError(err)
+	}
+	s.LessOrEqual(s.size(), 4, "a burst of distinct jtis inside one TTL must not exceed the cap")
+}
+
+func (s *denylistCacheSuite) TestCapEvictsActiveEntriesBeforeRevoked() {
+	c := NewDenylistCache(
+		WithDenylistChecker(s.checker),
+		WithDenylistClock(func() time.Time { return s.now }),
+		WithDenylistMaxEntries(3),
+	)
+	s.cache = c
+	c.Hydrate("jti-revoked")
+	for i := range 10 {
+		_, err := c.IsRevoked(s.ctx, fmt.Sprintf("jti-active-%d", i))
+		s.Require().NoError(err)
+	}
+	calls := s.checker.calls.Load()
+
+	got, err := c.IsRevoked(s.ctx, "jti-revoked")
+	s.Require().NoError(err)
+	s.True(got)
+	s.Equal(calls, s.checker.calls.Load(), "the revoked entry must survive eviction pressure from active ones")
+}
+
+func (s *denylistCacheSuite) TestEvictedRevokedJtiIsStillRejected() {
+	c := NewDenylistCache(
+		WithDenylistChecker(s.checker),
+		WithDenylistClock(func() time.Time { return s.now }),
+		WithDenylistMaxEntries(2),
+	)
+	s.cache = c
+	for i := range 5 {
+		jti := fmt.Sprintf("jti-revoked-%d", i)
+		s.checker.revoked[jti] = true
+		got, err := c.IsRevoked(s.ctx, jti)
+		s.Require().NoError(err)
+		s.True(got)
+	}
+	s.advance(time.Hour)
+	for i := range 5 {
+		got, err := c.IsRevoked(s.ctx, fmt.Sprintf("jti-revoked-%d", i))
+		s.Require().NoError(err)
+		s.True(got, "eviction only drops the memo; the store still answers revoked")
+	}
 }

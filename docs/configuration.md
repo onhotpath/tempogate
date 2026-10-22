@@ -302,14 +302,14 @@ The default `5m` covers Temporal's default `1m` refresh and the default `30s` re
    `serve` publishes it in `/.well-known/jwks.json` within `KEYS_RELOAD_INTERVAL`; the old key keeps signing.
 2. **Wait `KEYS_PUBLISH_DELAY`.** Relying parties fetch the new key; then it signs every new token.
    `tempogate keys list` and `GET /admin/signing-keys` show every key with its `created_at` and `retired_at`, which one is signing (`signing` / `"active": true`), and when a pending key starts signing (`pending, signs from ...` / `activates_at`).
-3. **Retire** the old key once the new one signs: `tempogate keys retire -- <old-kid>` (the `--` matters, a `kid` may start with `-`), or `POST /admin/signing-keys/<old-kid>/retire` with the admin token.
+3. **Retire** the old key once the new one signs: `tempogate keys retire <old-kid>` (a `kid` may start with `-`; no `--` needed), or `POST /admin/signing-keys/<old-kid>/retire` with the admin token.
    The only active key cannot be retired (409 / an error naming `keys generate --force`).
    Retiring the signing key while its replacement is still inside `KEYS_PUBLISH_DELAY` is refused (409 / an error naming the replacement and when it signs).
 4. **Grace.** The retired key keeps verifying for `KEYS_RETIREMENT_GRACE`, then leaves JWKS.
    Tokens it signed stop working at tempogate at that moment and at Temporal after its next JWKS refresh.
    Users re-authenticate and get tokens from the new key; integration keys must be re-minted.
 
-In an emergency (a leaked key) retire right after step 1 with `tempogate keys retire --force -- <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
+In an emergency (a leaked key) retire right after step 1 with `tempogate keys retire --force <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
 The new key then signs at once, so Temporal rejects new tokens until its next JWKS refresh (at most `refreshInterval`); that is the price of stopping the leaked key immediately.
 The grace still applies, so if 4 h is too long, lower `KEYS_RETIREMENT_GRACE` (it is read at `serve` start) before retiring.
 
