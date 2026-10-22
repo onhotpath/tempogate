@@ -45,6 +45,7 @@ To bump by hand, run `go mod edit -go=X.Y.Z`, set every `ARG GO_IMAGE=` to `gola
 Every GitHub Action is pinned to a full commit SHA with a `# vX.Y.Z` comment, and every Dockerfile base image (and `# syntax=` frontend) to an `@sha256:` digest, keeping the tag for readability.
 `make check-supply-chain` (part of `make ci`) runs actionlint on the workflows and fails on any unpinned reference.
 Renovate keeps the SHAs and digests current; when adding an action or image by hand, resolve the SHA from the release tag (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing annotated tags) or the digest with `docker buildx imagetools inspect <image:tag>`.
+Dev tool versions live in [`tools.mk`](tools.mk); golangci-lint and actionlint are downloaded prebuilt and verified against the SHA-256s pinned there, so bump a version together with its checksums (from the release's checksums file).
 
 ## Working on a change
 

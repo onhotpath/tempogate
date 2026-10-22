@@ -6,11 +6,8 @@ BIN         := $(BIN_DIR)/tempogate
 PKG         := github.com/onhotpath/tempogate
 BUILDINFO   := $(PKG)/buildinfo
 
-# Pin tool versions so CI and local installs agree. Bump deliberately.
-GCI_VERSION           ?= v0.14.0
-GOLANGCI_LINT_VERSION ?= v2.14.0
-GOVULNCHECK_VERSION   ?= v1.9.0
-ACTIONLINT_VERSION    ?= v1.7.12
+# Pinned tool versions (and release checksums) so CI and local installs agree.
+include $(PROJECT_DIR)/tools.mk
 
 GIT_TAG    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -197,14 +194,38 @@ define install-if-needed
 	$(eval $(1) := $(BIN_DIR)/$(notdir $(2)))
 endef
 
+# install-release-if-needed downloads a prebuilt tool from its GitHub release
+# and verifies the archive against the SHA-256 pinned in tools.mk (see
+# scripts/install-release-tool.sh). Used where a release binary works on this
+# module's Go and building from source is slow (golangci-lint: ~60s cold).
+# Skipped if the target binary already exists.
+#
+# Args:
+#   $(1) - make var name to set to the resolved binary path (eval'd)
+#   $(2) - binary name in $(BIN_DIR)
+#   $(3) - release archive URL
+#   $(4) - expected SHA-256 of the archive
+#   $(5) - path of the binary inside the archive
+define install-release-if-needed
+	@if [ ! -f "$(BIN_DIR)/$(2)" ]; then \
+		echo "Installing $(3) -> $(BIN_DIR)/$(2)" ;\
+		$(PROJECT_DIR)/scripts/install-release-tool.sh "$(BIN_DIR)/$(2)" "$(3)" "$(4)" "$(5)" ;\
+	fi
+	$(eval $(1) := $(BIN_DIR)/$(2))
+endef
+
+TOOLS_PLATFORM = $(shell go env GOOS)_$(shell go env GOARCH)
+GOLANGCI_LINT_ARCHIVE = golangci-lint-$(GOLANGCI_LINT_VERSION:v%=%)-$(subst _,-,$(TOOLS_PLATFORM))
+ACTIONLINT_ARCHIVE    = actionlint_$(ACTIONLINT_VERSION:v%=%)_$(TOOLS_PLATFORM)
+
 gci:
 	$(call install-if-needed,GCI,github.com/daixiang0/gci,$(GCI_VERSION))
 
 golangci-lint:
-	$(call install-if-needed,GOLANGCI_LINT,github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+	$(call install-release-if-needed,GOLANGCI_LINT,golangci-lint,https://github.com/golangci/golangci-lint/releases/download/$(GOLANGCI_LINT_VERSION)/$(GOLANGCI_LINT_ARCHIVE).tar.gz,$(GOLANGCI_LINT_SHA256_$(TOOLS_PLATFORM)),$(GOLANGCI_LINT_ARCHIVE)/golangci-lint)
 
 govulncheck:
 	$(call install-if-needed,GOVULNCHECK,golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))
 
 actionlint:
-	$(call install-if-needed,ACTIONLINT,github.com/rhysd/actionlint/cmd/actionlint,$(ACTIONLINT_VERSION))
+	$(call install-release-if-needed,ACTIONLINT,actionlint,https://github.com/rhysd/actionlint/releases/download/$(ACTIONLINT_VERSION)/$(ACTIONLINT_ARCHIVE).tar.gz,$(ACTIONLINT_SHA256_$(TOOLS_PLATFORM)),actionlint)
