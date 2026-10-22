@@ -24,7 +24,7 @@ From the published OCI registry:
 
 ```bash
 helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate \
-  --version 0.3.0
+  --version 0.4.0
 ```
 
 Verify:
