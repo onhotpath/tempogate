@@ -117,6 +117,37 @@ func TestServeRefusesPlainHTTPIssuer(t *testing.T) {
 	require.Contains(t, containerLogs(ctx, t, c), "insecure OIDC issuer allowed")
 }
 
+// TestServeRefusesWithoutAuthorization is the deny-by-default upgrade
+// guard on the real image: a configuration that used to make every admitted
+// user cluster admin now stops serve at startup and names the fix.
+func TestServeRefusesWithoutAuthorization(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("e2e: skipped in -short")
+	}
+	ctx := context.Background()
+	img, from := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", repoRoot(t))
+	vol := stateVolume(t, "no-authz")
+	env := serverEnv(tempogateIssuer)
+	env["OIDC_ALLOW_INSECURE_ISSUER"] = "true"
+	delete(env, "OIDC_AUTHZ_RULES_0")
+	req := func(cmd ...string) testcontainers.ContainerRequest {
+		return testcontainers.ContainerRequest{
+			Image: img, FromDockerfile: from, Cmd: cmd, Env: env, User: "0:0",
+			Mounts: testcontainers.Mounts(testcontainers.VolumeMount(vol, "/state")),
+		}
+	}
+
+	code, logs := runToExit(ctx, t, "tempogate migrate", req("migrate"))
+	require.Equalf(t, 0, code, "migrate needs no authorization; logs:\n%s", logs)
+
+	code, logs = runToExit(ctx, t, "tempogate serve", req("serve"))
+	require.NotEqualf(t, 0, code, "serve must refuse to start; logs:\n%s", logs)
+	require.Contains(t, logs, "no authorization configured")
+	require.Contains(t, logs, "OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin")
+	require.Contains(t, logs, "docs/configuration.md#upgrading-to-deny-by-default-authorization")
+}
+
 func TestConfigFlagSelectsMountedFile(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -144,7 +175,10 @@ oidc:
   client_secrets: %q
   session_signing_key: %s
   allowed_domains: example.com
-`, issuer, env["OIDC_CLIENTS"], env["OIDC_CLIENT_SECRETS"], env["OIDC_SESSION_SIGNING_KEY"])
+  authz:
+    rules:
+      - %q
+`, issuer, env["OIDC_CLIENTS"], env["OIDC_CLIENT_SECRETS"], env["OIDC_SESSION_SIGNING_KEY"], e2eAdminRule)
 	req := func(cmd ...string) testcontainers.ContainerRequest {
 		return testcontainers.ContainerRequest{
 			Image:          img,

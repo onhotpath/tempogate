@@ -134,7 +134,7 @@ func TestWebUISSO(t *testing.T) {
 		require.Equal(t, []string{temporalAudience}, aud, "the access token is for Temporal, not the UI")
 		perms, ok := access.Field("permissions")
 		require.True(t, ok)
-		require.Equal(t, []any{"temporal-system:admin"}, perms, "flat Hour-0 authz: System Admin (Temporal's default ClaimMapper has no namespace wildcard)")
+		require.Equal(t, []any{"temporal-system:admin"}, perms, "the stack's e2eAdminRule grants example.com System Admin (Temporal's default ClaimMapper has no namespace wildcard)")
 		clientIDClaim, _ := access.Field("client_id")
 		require.Equal(t, clientID, clientIDClaim)
 		sub, _ := access.Subject()

@@ -1,10 +1,12 @@
 package oidc_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -233,6 +235,8 @@ type TokenSuite struct {
 	srv         *httptest.Server
 	client      *http.Client
 	observed    *recordingObserver
+	resolver    *stubResolver
+	logs        *bytes.Buffer
 }
 
 // confidentialSecret is the shared secret for the test's older-style
@@ -270,8 +274,12 @@ func (s *TokenSuite) SetupTest() {
 	s.store = newMemTokenStore()
 	s.deviceStore = newMemDeviceFlowStore()
 	s.observed = &recordingObserver{}
-	tok := oidc.NewToken(s.store, signer, s.clients,
+	s.resolver = newStubResolver("temporal-system:admin")
+	s.logs = &bytes.Buffer{}
+	tok := oidc.NewToken(s.store, signer, s.clients, oidc.WithPermissionResolver(s.resolver),
 		oidc.WithTokenObserver(s.observed),
+		oidc.WithAuthzObserver(s.observed),
+		oidc.WithTokenLogger(slog.New(slog.NewTextHandler(s.logs, nil))),
 		oidc.WithTokenClock(func() time.Time { return signNow }),
 		oidc.WithRefreshGenerator(func() (string, error) { return fixedRefresh, nil }),
 		oidc.WithDeviceCodeStore(s.deviceStore),
@@ -788,7 +796,7 @@ func (s *TokenSuite) TestConsumeCodeErrorOtherThanNotFoundIsServerError() {
 func (s *TokenSuite) TestSignerWithoutKeysIsServerError() {
 	store := newMemTokenStore()
 	store.putCode(s.authCode("code-1"))
-	tok := oidc.NewToken(store, keys.NewSigner(), s.clients, // no keypair ⇒ Mint fails
+	tok := oidc.NewToken(store, keys.NewSigner(), s.clients, oidc.WithPermissionResolver(permitAll), // no keypair ⇒ Mint fails
 		oidc.WithTokenClock(func() time.Time { return signNow }),
 	)
 	mux := http.NewServeMux()
@@ -808,7 +816,7 @@ func (s *TokenSuite) TestDefaultRefreshGeneratorIsOpaque() {
 	store := newMemTokenStore()
 	store.putCode(s.authCode("code-1"))
 	signer := keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer))
-	tok := oidc.NewToken(store, signer, s.clients,
+	tok := oidc.NewToken(store, signer, s.clients, oidc.WithPermissionResolver(permitAll),
 		oidc.WithTokenClock(func() time.Time { return signNow }),
 	) // no WithRefreshGenerator: exercises crypto/rand path
 	mux := http.NewServeMux()

@@ -136,6 +136,7 @@ type CallbackSuite struct {
 	srv      *httptest.Server
 	client   *http.Client
 	observed *recordingObserver
+	resolver *stubResolver
 }
 
 func TestCallbackSuite(t *testing.T) {
@@ -148,6 +149,7 @@ func (s *CallbackSuite) SetupTest() {
 	s.binding = newTestBinding(s.T(), testIssuer)
 	s.logs = &bytes.Buffer{}
 	s.observed = &recordingObserver{}
+	s.resolver = newStubResolver("temporal-system:admin")
 	s.srv = s.serverFor(s.store, s.up)
 	s.client = &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -161,7 +163,8 @@ func (s *CallbackSuite) TearDownTest() {
 }
 
 func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up oidc.Upstream) *httptest.Server {
-	c := oidc.NewCallback(store, up, s.binding, allowedDomains,
+	c := oidc.NewCallback(store, up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(s.resolver),
+		oidc.WithCallbackAuthzObserver(s.observed),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 		oidc.WithCallbackIssuer(testIssuer),
@@ -313,7 +316,7 @@ func (s *CallbackSuite) TestHostedDomainGate() {
 			up := &fakeUpstream{id: oidc.UpstreamIdentity{
 				Subject: "google-sub-x", Email: tc.email, EmailVerified: true, HostedDomain: tc.hd,
 			}}
-			c := oidc.NewCallback(store, up, s.binding, allowedDomains,
+			c := oidc.NewCallback(store, up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 				oidc.WithAllowedHostedDomains(tc.hosted),
 				oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 				oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
@@ -454,7 +457,7 @@ func (s *CallbackSuite) TestUpstreamFailureIsBadGateway() {
 func (s *CallbackSuite) TestUpstreamFailureKeepsOAuthShapeBehindSanitizer() {
 	s.up.err = errors.New("dial tcp 10.9.8.7:443: connection refused")
 	s.store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains,
+	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCallbackIssuer(testIssuer),
 		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(io.Discard, nil))),
@@ -524,7 +527,7 @@ func (s *CallbackSuite) TestMalformedRedirectURIIsServerError() {
 func (s *CallbackSuite) TestDefaultCodeGeneratorIsOpaque() {
 	store := newMemCallbackStore()
 	store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(store, &fakeUpstream{id: aliceIdentity()}, s.binding, allowedDomains,
+	c := oidc.NewCallback(store, &fakeUpstream{id: aliceIdentity()}, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 	) // no WithCodeGenerator: exercises crypto/rand path
 	mux := http.NewServeMux()

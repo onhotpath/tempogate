@@ -1,6 +1,10 @@
 package servercmd
 
-import "context"
+import (
+	"context"
+
+	"github.com/onhotpath/tempogate/authz"
+)
 
 // testWriter discards cobra's stdout/stderr so command tests assert on the
 // returned error rather than rendered output.
@@ -13,3 +17,13 @@ func (testWriter) Write(p []byte) (int, error) { return len(p), nil }
 func supply[P any](p P) deps[P] {
 	return func(_ context.Context, run func(P) error) error { return run(p) }
 }
+
+// testPolicy is a configured authorization policy for command tests that
+// are not about authorization.
+var testPolicy = func() *authz.Policy {
+	p, err := authz.Parse(nil, "temporal-system:admin")
+	if err != nil {
+		panic(err)
+	}
+	return p
+}()

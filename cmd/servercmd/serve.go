@@ -1,5 +1,6 @@
 // Package servercmd holds the server-bound subcommands (serve, migrate,
-// keys) — the ones that need the SQLite state store and the OIDC/API stack.
+// keys, sessions, gen-oas, authz): the ones that need the SQLite state
+// store and the OIDC/API stack.
 //
 // It is wired into the cobra command group only by the full app assembly
 // (app/modules_full.go). The lean CLI build never imports this package, so
@@ -22,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/authz"
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/state/sqlite"
@@ -36,6 +38,7 @@ type serveParams struct {
 	Keys          *keys.Keys
 	Servers       *api.Servers
 	Readiness     *api.Readiness
+	Policy        *authz.Policy
 	Listener      config.Listener     `name:"http"`
 	AdminListener config.Listener     `name:"admin"`
 	Server        config.ServerConfig `name:"http_server"`
@@ -100,6 +103,12 @@ func newServeCmd(load deps[serveParams]) *cobra.Command {
 func serve(ctx context.Context, p serveParams) error {
 	if p.DocsEnabled && !p.IssuerPlainHTTP {
 		return errAPIDocsNeedDevIssuer
+	}
+	// Checked here, once the rest of the configuration has built, rather
+	// than in the graph: gen-oas builds the same graph and needs no rules,
+	// and an operator missing several settings sees the authz one last.
+	if err := requireAuthz(p.Policy); err != nil {
+		return err
 	}
 	if err := storeReady(ctx, p.Store); err != nil {
 		return err

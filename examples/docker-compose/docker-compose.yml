@@ -1,5 +1,5 @@
 # DEV ONLY - NEVER EXPOSE THIS STACK. The bundled mock IdP signs in anyone who
-# can reach it as ANY identity, and that identity gets full Temporal access.
+# can reach it as ANY identity, and the demo identity gets full Temporal access.
 # Every port is published on 127.0.0.1 only; keep it that way. Secrets have no
 # defaults: generate them first with `./gen-env.sh > .env` (see README.md).
 #
@@ -110,6 +110,15 @@ services:
       # needs it to start. See docs/configuration.md#signing-key-encryption.
       KEYS_ENCRYPTION_KEY: "${TEMPOGATE_KEYS_ENCRYPTION_KEY:-}"
       OIDC_ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
+      # Authorization: which Temporal permissions each signed-in person gets.
+      # Deny by default, so this demo grants its one identity cluster admin
+      # with an explicit rule (the Web UI's namespace list needs a
+      # temporal-system grant). Add more indexed rules to grant others, e.g.
+      #   OIDC_AUTHZ_RULES_1: "email:bob@example.com=default:read"
+      #   OIDC_AUTHZ_RULES_2: "domain:example.com=default:write"
+      # Anyone no rule matches is refused at sign-in (access_denied). See
+      # docs/configuration.md#authorization.
+      OIDC_AUTHZ_RULES_0: "email:${DEMO_EMAIL:-alice@example.com}=temporal-system:admin"
       # Workspace mode: Google's `hd` claim must also match. Recommended for
       # any Google Workspace organization.
       OIDC_ALLOWED_HOSTED_DOMAINS: "${TEMPOGATE_ALLOWED_HOSTED_DOMAINS:-example.com}"

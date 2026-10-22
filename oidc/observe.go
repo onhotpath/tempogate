@@ -12,7 +12,7 @@ type LoginObserver interface {
 // short grant names below (never the raw, attacker-controlled grant_type);
 // errorCode is the OAuth2 error code, or empty when a token was minted.
 // event is the security event that revoked a family: auth_code_reuse,
-// refresh_token_reuse or refresh_domain_not_allowed.
+// refresh_token_reuse, refresh_domain_not_allowed or refresh_authz_denied.
 type TokenObserver interface {
 	ObserveToken(grant, errorCode string)
 	ObserveFamilyRevoked(event string)
@@ -40,6 +40,7 @@ const (
 	reasonEmailUnverified        = "email_unverified"
 	reasonDomainNotAllowed       = "domain_not_allowed"
 	reasonHostedDomainNotAllowed = "hosted_domain_not_allowed"
+	reasonAuthzDenied            = "authz_denied"
 	reasonInternal               = "internal"
 
 	grantLabelAuthorizationCode = "authorization_code"
@@ -58,3 +59,4 @@ func (nopObserver) ObserveLogin(string, string) {}
 func (nopObserver) ObserveToken(string, string) {}
 func (nopObserver) ObserveFamilyRevoked(string) {}
 func (nopObserver) ObserveRateLimited(string)   {}
+func (nopObserver) ObserveAuthzDenied(string)   {}

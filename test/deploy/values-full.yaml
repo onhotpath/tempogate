@@ -79,6 +79,12 @@ auth:
       tokenEndpoint: https://idp.example.com/token
       issuerUrl: https://idp.example.com
 
+authz:
+  rules:
+    - "email:alice@example.com=temporal-system:admin"
+    - "domain:example.com=orders:read,payments:read"
+  defaultPermissions: "orders:read"
+
 admin:
   tokenSha256SecretRef:
     name: tempogate

@@ -72,8 +72,8 @@ func (s *TokenE2ESuite) SetupTest() {
 
 	binding := newTestBinding(s.T(), testIssuer)
 	authorizer := oidc.New(store, reg, binding, testIssuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, binding, "example.com", oidc.WithCallbackIssuer(testIssuer))
-	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
+	callback := oidc.NewCallback(store, upstream, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll), oidc.WithCallbackIssuer(testIssuer))
+	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience)))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
 

@@ -90,8 +90,11 @@ func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values, authHeader
 		return nil, oauthErr(http.StatusBadRequest, "expired_token", "device_code expired")
 	}
 	if dc.DeniedAt != nil {
+		// Denied by the person on the verification page, or by tempogate
+		// because no authorization rule grants them anything; the row does
+		// not say which, so neither does the description.
 		_, _ = t.devices.ConsumeDeviceCode(ctx, deviceCode)
-		return nil, oauthErr(http.StatusBadRequest, "access_denied", "user denied the device authorization request")
+		return nil, oauthErr(http.StatusBadRequest, "access_denied", "the device authorization request was denied")
 	}
 	if dc.ApprovedAt == nil {
 		return nil, oauthErr(http.StatusBadRequest, "authorization_pending", "user has not yet completed the device authorization")
@@ -114,5 +117,13 @@ func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values, authHeader
 
 	// RFC 8628 has no nonce concept; minting with empty nonce is the correct
 	// behaviour and matches authorization_code on every other claim.
-	return t.issue(ctx, Identity{Subject: final.Subject, Email: final.Email}, final.ClientID, "", lineage{})
+	id := Identity{Subject: final.Subject, Email: final.Email}
+	out, err := t.issue(ctx, id, final.ClientID, "", lineage{})
+	if errors.Is(err, errNoPermissions) {
+		// The verification page refuses such a person before approving, so
+		// this is a rule removed after the approval. RFC 8628 §3.5
+		// access_denied ends the CLI's polling.
+		return nil, t.refuseNoPermissions(ctx, grantLabelDeviceCode, id, final.ClientID, "access_denied")
+	}
+	return out, err
 }

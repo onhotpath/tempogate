@@ -103,7 +103,7 @@ func (s *UpstreamBindingSuite) TestRoundTripBindsTheGoogleLeg() {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("test", "0.0.0"))
 	oidc.New(store, reg, binding, testIssuer, testGoogleCID, testGoogleAuth).Register(api)
-	oidc.NewCallback(store, up, binding, "example.com").Register(api)
+	oidc.NewCallback(store, up, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll)).Register(api)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

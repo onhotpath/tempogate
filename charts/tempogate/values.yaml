@@ -263,6 +263,25 @@ auth:
       tokenEndpoint: ""
       issuerUrl: ""
 
+# Which Temporal permissions each signed-in person's access token carries
+# (see docs/configuration.md#authorization). Deny by default: a person no rule
+# matches gets defaultPermissions, and with none of those no token at all.
+# tempogate refuses to start when both are empty.
+authz:
+  # OIDC_AUTHZ_RULES_<n>: "<selector>=<namespace>:<role>[,...]" where the
+  # selector is email:<address> or domain:<email domain> (case-insensitive)
+  # and the role is read, write or admin. Every matching rule applies; a
+  # namespace named twice keeps the higher role. temporal-system:<role>
+  # grants that role on every namespace. Non-secret. E.g.
+  #   - "email:alice@example.com=temporal-system:admin"
+  #   - "domain:example.com=orders:read,payments:read"
+  rules: []
+  # OIDC_AUTHZ_DEFAULT_PERMISSIONS: comma-separated permissions for admitted
+  # people no rule matches. "temporal-system:admin" keeps the behaviour of
+  # releases without rules (every admitted user is cluster admin) and is
+  # logged as a warning at startup.
+  defaultPermissions: ""
+
 # Admin API authentication (see docs/configuration.md#admin-api). Applies
 # whether or not service.admin is enabled.
 admin:

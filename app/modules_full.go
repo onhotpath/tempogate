@@ -9,7 +9,7 @@ import (
 )
 
 // serverModules wires the server-bound subcommands (serve, migrate, keys,
-// gen-oas). Each builds the part of the HTTP server stack it needs (SQLite
+// sessions, gen-oas, authz). Each builds the part of the HTTP server stack it needs (SQLite
 // state store, signing keys, OIDC issuer, Google upstream, the API surface)
 // only when it runs, so the root graph and every other subcommand never pay
 // for, or fail on, the server's configuration.

@@ -212,6 +212,8 @@ type DeviceUISuite struct {
 	client   *http.Client
 	clients  oidc.ClientRegistry
 	key      []byte
+	resolver *stubResolver
+	observed *recordingObserver
 }
 
 func TestDeviceUISuite(t *testing.T) {
@@ -245,8 +247,11 @@ func (s *DeviceUISuite) SetupTest() {
 	s.clients = reg
 
 	s.redeemer = newFakeAuthCodeRedeemer(deviceUITestIdentity)
+	s.resolver = newStubResolver("temporal-system:admin")
+	s.observed = &recordingObserver{}
 
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
+	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(s.resolver),
+		oidc.WithDeviceUIAuthzObserver(s.observed),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return deviceUITestStateNonce, nil }),
 	)
@@ -594,7 +599,7 @@ func (s *DeviceUISuite) deviceUIWithLogger(buf *bytes.Buffer, redeemerErr error)
 	}
 
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, redeemer, s.key, testIssuer,
+	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return deviceUITestStateNonce, nil }),
 		oidc.WithDeviceUILogger(logger),
@@ -905,7 +910,7 @@ func (s *DeviceUISuite) TestConfirmExpiredOrDecidedRowIsError() {
 // nonce path where the generator returns an error. Such a failure can't
 // downgrade into a redirect — it must surface as a server-side 5xx.
 func (s *DeviceUISuite) TestEnterPostStateGeneratorErrorIsServerError() {
-	failing, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
+	failing, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return "", errors.New("entropy exhausted") }),
 	)
@@ -1098,7 +1103,7 @@ func (s *DeviceUISuite) TestSessionUnexpectedLookupErrorIs500() {
 // construction fails rather than serving a UI whose same-origin check and
 // form actions have nothing to compare against.
 func (s *DeviceUISuite) TestNewDeviceUIRejectsBadIssuer() {
-	_, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, ":::not-a-url")
+	_, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, ":::not-a-url", oidc.WithDeviceUIPermissionResolver(permitAll))
 	s.Require().ErrorIs(err, oidc.ErrInternalDeviceUIClientRedirectMismatch)
 }
 
@@ -1205,7 +1210,7 @@ func TestNewDeviceUIRejectsMissingInternalClient(t *testing.T) {
 		t.Fatalf("parse clients: %v", err)
 	}
 	sm := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer)
+	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll))
 	if !errors.Is(err, oidc.ErrInternalDeviceUIClientMissing) {
 		t.Fatalf("expected ErrInternalDeviceUIClientMissing, got %v", err)
 	}
@@ -1219,7 +1224,7 @@ func TestNewDeviceUIRejectsPublicInternalClient(t *testing.T) {
 	// Skip WithSecrets — the device-ui client stays public, which is the
 	// misconfiguration this asserts is caught.
 	sm := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer)
+	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll))
 	if !errors.Is(err, oidc.ErrInternalDeviceUIClientNotConfidential) {
 		t.Fatalf("expected ErrInternalDeviceUIClientNotConfidential, got %v", err)
 	}
@@ -1250,7 +1255,7 @@ func TestNewDeviceUIRejectsNilRedeemer(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, tc.redeemer, []byte("0123456789abcdef0123456789abcdef"), testIssuer)
+			_, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, tc.redeemer, []byte("0123456789abcdef0123456789abcdef"), testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll))
 			if !errors.Is(err, oidc.ErrNilAuthCodeRedeemer) {
 				t.Fatalf("expected ErrNilAuthCodeRedeemer, got %v", err)
 			}
@@ -1266,7 +1271,7 @@ func TestNewDeviceUIRejectsNilRedeemer(t *testing.T) {
 // the cross-origin hop. The handler must surface the upstream origin into
 // the rendered CSP alongside 'self'.
 func (s *DeviceUISuite) TestEnterPageCSPIncludesUpstreamFormActionSource() {
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
+	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithUpstreamIDPOrigin("https://accounts.google.com/o/oauth2/v2/auth"),
 	)
@@ -1305,7 +1310,7 @@ func (s *DeviceUISuite) TestEnterPageCSPDefaultsToSelfWithoutUpstream() {
 // widening the directive there would be a needless loss of defense-in-
 // depth.
 func (s *DeviceUISuite) TestConfirmPageCSPStaysAtSelf() {
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
+	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithUpstreamIDPOrigin("https://accounts.google.com/o/oauth2/v2/auth"),
 	)
@@ -1356,7 +1361,7 @@ func TestNewDeviceUIRejectsInvalidUpstreamOrigin(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), key, testIssuer,
+			_, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 				oidc.WithUpstreamIDPOrigin(tc.raw))
 			if !errors.Is(err, oidc.ErrInvalidUpstreamIDPOrigin) {
 				t.Fatalf("expected ErrInvalidUpstreamIDPOrigin for %q, got %v", tc.raw, err)
@@ -1393,7 +1398,7 @@ func TestNewDeviceUIUpstreamOriginVariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ui, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), key, testIssuer,
+			ui, err := oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 				oidc.WithUpstreamIDPOrigin(tc.raw))
 			if err != nil {
 				t.Fatalf("construct: %v", err)
@@ -1445,7 +1450,7 @@ func TestNewDeviceUIAcceptsCustomInternalClientID(t *testing.T) {
 		t.Fatalf("with secrets: %v", err)
 	}
 	sm := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
-	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer,
+	_, err = oidc.NewDeviceUI(&memDeviceCodeStore{}, sm, reg, newFakeAuthCodeRedeemer(oidc.Identity{}), []byte("0123456789abcdef0123456789abcdef"), testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithInternalClientID("my-custom-ui"))
 	if err != nil {
 		t.Fatalf("custom client id should be honoured: %v", err)
@@ -1544,7 +1549,7 @@ func TestSSOCallbackCompletesWhenIssuerHostIsUnreachable(t *testing.T) {
 	// consumed AuthCode's claims before any token minting, so the signer
 	// is never dereferenced on this code path. The public /token handler
 	// would dereference it via t.issue, which this test does not exercise.
-	token := oidc.NewToken(tokenStore, nil, reg, oidc.WithTokenClock(func() time.Time { return now }))
+	token := oidc.NewToken(tokenStore, nil, reg, oidc.WithPermissionResolver(permitAll), oidc.WithTokenClock(func() time.Time { return now }))
 
 	bsStore := newMemBrowserSessionStore()
 	sessions := oidc.NewSessionManager(bsStore, signingKey,
@@ -1563,7 +1568,7 @@ func TestSSOCallbackCompletesWhenIssuerHostIsUnreachable(t *testing.T) {
 		ExpiresAt:       now.Add(15 * time.Minute),
 	})
 
-	ui, err := oidc.NewDeviceUI(devices, sessions, reg, token, signingKey, unreachableIssuer,
+	ui, err := oidc.NewDeviceUI(devices, sessions, reg, token, signingKey, unreachableIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return now }),
 		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return stateNonce, nil }),
 	)

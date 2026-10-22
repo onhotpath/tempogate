@@ -164,6 +164,8 @@ type Token struct {
 	now            func() time.Time
 	newRefresh     func() (string, error)
 	observer       TokenObserver
+	authorizer     PermissionResolver
+	authz          AuthzObserver
 
 	accessTTL          time.Duration
 	refreshTTL         time.Duration
@@ -253,6 +255,27 @@ func WithTokenObserver(o TokenObserver) TokenOption {
 	}
 }
 
+// WithPermissionResolver sets how an identity's permissions are decided. Every grant
+// asks it before minting; one that grants nothing gets no token. Without it
+// nobody does (fail closed).
+func WithPermissionResolver(a PermissionResolver) TokenOption {
+	return func(t *Token) {
+		if a != nil {
+			t.authorizer = a
+		}
+	}
+}
+
+// WithAuthzObserver reports every token refused because the
+// PermissionResolver granted nothing. Nil keeps the no-op default.
+func WithAuthzObserver(o AuthzObserver) TokenOption {
+	return func(t *Token) {
+		if o != nil {
+			t.authz = o
+		}
+	}
+}
+
 func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts ...TokenOption) *Token {
 	t := &Token{
 		store:              store,
@@ -262,6 +285,8 @@ func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts 
 		now:                func() time.Time { return time.Now().UTC() },
 		newRefresh:         randomRefresh,
 		observer:           nopObserver{},
+		authorizer:         denyAll{},
+		authz:              nopObserver{},
 		accessTTL:          DefaultAccessTokenTTL,
 		refreshTTL:         DefaultRefreshTokenTTL,
 		refreshMaxLifetime: DefaultRefreshMaxLifetime,
@@ -527,7 +552,26 @@ func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, aut
 	if err != nil {
 		return nil, err
 	}
-	return t.issue(ctx, r.Identity, r.ClientID, r.Nonce, lineage{familyID: r.FamilyID, authTime: t.now()})
+	out, err := t.issue(ctx, r.Identity, r.ClientID, r.Nonce, lineage{familyID: r.FamilyID, authTime: t.now()})
+	if errors.Is(err, errNoPermissions) {
+		// The callback already refuses such a person, so this is a rule
+		// removed between sign-in and the exchange. The code is spent.
+		return nil, t.refuseNoPermissions(ctx, grantLabelAuthorizationCode, r.Identity, r.ClientID, "invalid_grant")
+	}
+	return out, err
+}
+
+// refuseNoPermissions records a token refused because the resolver granted
+// nothing and returns the OAuth2 error for it.
+func (t *Token) refuseNoPermissions(ctx context.Context, grant string, id Identity, clientID, code string) error {
+	t.authz.ObserveAuthzDenied(grant)
+	t.logger.WarnContext(ctx, "oidc: token refused: no authorization rule grants this account any Temporal permissions",
+		"event", "token_authz_denied",
+		"grant", grant,
+		"client_id", clientID,
+		"email", id.Email,
+	)
+	return oauthErr(http.StatusBadRequest, code, msgNoAccess)
 }
 
 func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
@@ -596,7 +640,21 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 	// No nonce on refresh: OIDC Core binds nonce to the original
 	// authentication request, not to silently-renewed tokens, and the
 	// relying party does not re-check it on the refresh path.
-	return t.issue(ctx, Identity{Subject: rt.Subject, Email: rt.Email}, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
+	//
+	// issue resolves the permissions afresh, so a changed rule takes effect
+	// at the next refresh (within OIDC_ACCESS_TOKEN_TTL). A person no longer
+	// granted anything loses the whole family, like a removed domain.
+	id := Identity{Subject: rt.Subject, Email: rt.Email}
+	out, err := t.issue(ctx, id, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
+	if errors.Is(err, errNoPermissions) {
+		t.authz.ObserveAuthzDenied(grantLabelRefreshToken)
+		if err := t.revokeFamily(ctx, rt, now, "refresh_authz_denied",
+			"oidc: refresh refused: no authorization rule grants this account any Temporal permissions any more; revoked the token family"); err != nil {
+			return nil, err
+		}
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", msgNoAccess)
+	}
+	return out, err
 }
 
 // errLegacyGrant rejects a grant persisted before schema 0010 recorded the
@@ -636,8 +694,18 @@ type lineage struct {
 
 // issue mints the access token, the ID token and a rotated refresh token,
 // persisting the latter before responding. It is the single place token
-// shape and lifetimes are decided, so the grants cannot drift apart.
+// shape, lifetimes and permissions are decided, so the grants cannot drift
+// apart. It returns errNoPermissions, with nothing minted or persisted, when
+// the resolver grants id nothing.
 func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, l lineage) (*tokenOutput, error) {
+	grant, ok, err := permitted(ctx, t.authorizer, id.Email)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: resolve permissions: %w", err)
+	}
+	if !ok {
+		return nil, errNoPermissions
+	}
+
 	now := t.now()
 	if l.familyID == "" {
 		familyID, err := randomFamilyID()
@@ -648,12 +716,13 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 	}
 
 	// The access token is Temporal's credential: permissions, and the
-	// Signer's Temporal audience (OIDC_ACCESS_TOKEN_AUDIENCE).
+	// Signer's Temporal audience (OIDC_ACCESS_TOKEN_AUDIENCE). The ID token
+	// never carries permissions.
 	signed, jti, err := t.signer.Mint(ctx, keys.MintRequest{
 		Subject:     id.Subject,
 		Email:       id.Email,
 		TTL:         t.accessTTL,
-		Permissions: flatAdminPermissions(),
+		Permissions: grant.ToClaim(),
 		ClientID:    clientID,
 	})
 	if err != nil {
@@ -714,19 +783,6 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 			IDToken:      idToken,
 		},
 	}, nil
-}
-
-// flatAdminPermissions is the Hour-0 authorization model: every admitted
-// identity gets unconditional access. The value is dictated by Temporal's
-// default JWT ClaimMapper, which has no namespace wildcard: it grants
-// cluster-level and all-namespace access only via the System role, set by a
-// permission whose namespace part is exactly the system namespace
-// ("temporal-system"). A literal "*" would be treated as an ordinary
-// namespace named "*" and would NOT authorize cluster APIs (ListNamespaces,
-// cluster-info) or any real namespace. Group- or role-derived grants will
-// replace this once the shared permissions model lands.
-func flatAdminPermissions() []string {
-	return []string{"temporal-system:admin"}
 }
 
 // grantLabel maps grant_type to a fixed metric label. The raw value is

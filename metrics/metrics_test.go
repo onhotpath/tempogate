@@ -74,6 +74,15 @@ func (s *MetricsSuite) TestRateLimitedCountedByEndpoint() {
 	s.InDelta(1, testutil.ToFloat64(s.m.rateLimited.WithLabelValues("authorize")), 0)
 }
 
+func (s *MetricsSuite) TestAuthzDeniedCountedByStage() {
+	s.m.ObserveAuthzDenied("login")
+	s.m.ObserveAuthzDenied("login")
+	s.m.ObserveAuthzDenied("refresh_token")
+
+	s.InDelta(2, testutil.ToFloat64(s.m.authzDenied.WithLabelValues("login")), 0)
+	s.InDelta(1, testutil.ToFloat64(s.m.authzDenied.WithLabelValues("refresh_token")), 0)
+}
+
 func (s *MetricsSuite) TestUpstreamLatencyAndErrors() {
 	s.m.ObserveUpstream("code_exchange", 120*time.Millisecond, nil)
 	s.m.ObserveUpstream("code_exchange", 80*time.Millisecond, errors.New("boom"))
@@ -155,20 +164,21 @@ func (s *MetricsSuite) scrape() string {
 // exposes it.
 func TestFxProvidesObserversAndHandler(t *testing.T) {
 	var (
-		logins  oidc.LoginObserver
-		tokens  oidc.TokenObserver
-		limits  oidc.RateLimitObserver
-		up      google.Observer
-		db      sqlite.ErrorObserver
-		handler http.Handler
+		logins   oidc.LoginObserver
+		tokens   oidc.TokenObserver
+		limits   oidc.RateLimitObserver
+		authzObs oidc.AuthzObserver
+		up       google.Observer
+		db       sqlite.ErrorObserver
+		handler  http.Handler
 	)
 	app := fxtest.New(t,
 		Fx(),
-		fx.Invoke(func(l oidc.LoginObserver, tk oidc.TokenObserver, rl oidc.RateLimitObserver, u google.Observer, d sqlite.ErrorObserver, p struct {
+		fx.Invoke(func(l oidc.LoginObserver, tk oidc.TokenObserver, rl oidc.RateLimitObserver, az oidc.AuthzObserver, u google.Observer, d sqlite.ErrorObserver, p struct {
 			fx.In
 			H http.Handler `name:"metrics_handler"`
 		}) {
-			logins, tokens, limits, up, db, handler = l, tk, rl, u, d, p.H
+			logins, tokens, limits, authzObs, up, db, handler = l, tk, rl, az, u, d, p.H
 		}),
 	)
 	app.RequireStart().RequireStop()
@@ -177,6 +187,7 @@ func TestFxProvidesObserversAndHandler(t *testing.T) {
 	tokens.ObserveToken("refresh_token", "")
 	tokens.ObserveFamilyRevoked("refresh_token_reuse")
 	limits.ObserveRateLimited("token")
+	authzObs.ObserveAuthzDenied("login")
 	up.ObserveUpstream("discovery", time.Millisecond, nil)
 	db.ObserveDBError("probe")
 
@@ -188,6 +199,7 @@ func TestFxProvidesObserversAndHandler(t *testing.T) {
 		`tempogate_tokens_issued_total{grant="refresh_token"} 1`,
 		`tempogate_refresh_family_revocations_total{event="refresh_token_reuse"} 1`,
 		`tempogate_rate_limited_total{endpoint="token"} 1`,
+		`tempogate_authz_denied_total{stage="login"} 1`,
 		`tempogate_upstream_request_duration_seconds_count{op="discovery"} 1`,
 		`tempogate_db_errors_total{op="probe"} 1`,
 		`tempogate_build_info{commit="unknown",version="dev"} 1`,

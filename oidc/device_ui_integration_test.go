@@ -86,8 +86,8 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 
 	binding := newTestBinding(s.T(), s.issuer)
 	authorizer := oidc.New(store, reg, binding, s.issuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, binding, "example.com")
-	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
+	callback := oidc.NewCallback(store, upstream, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll))
+	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
 	deviceAuth := oidc.NewDeviceAuthorization(store, reg, s.issuer)
 
 	// The integration server is httptest TLS so the production cookie
@@ -107,7 +107,7 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 	// *Token in-process — no loopback HTTPS POST back to its own /token
 	// endpoint, so the integration suite no longer needs a tokenURL or a
 	// trust-store-relaxed HTTP client for that hop.
-	deviceUI, err := oidc.NewDeviceUI(store, sessions, reg, token, s.signKey, s.issuer,
+	deviceUI, err := oidc.NewDeviceUI(store, sessions, reg, token, s.signKey, s.issuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithUpstreamIDPOrigin(s.mg.issuer()+"/auth"),
 	)
 	s.Require().NoError(err)

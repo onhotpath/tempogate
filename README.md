@@ -75,10 +75,22 @@ Wired and exercised end to end:
   grants nothing at Temporal
 - Multi-arch distroless image and a Helm chart
 
-Authorization is currently flat: every admitted identity receives
-cluster-level access (`temporal-system:admin`), the value Temporal's default
-ClaimMapper needs for cluster APIs. Group- or role-derived per-namespace
-scoping is planned; long-lived integration keys come from the admin API below.
+### Authorization
+
+Signing in only admits a person; authorization rules decide what their access token may do in Temporal, and the default is deny:
+
+```bash
+OIDC_AUTHZ_RULES_0='email:alice@example.com=temporal-system:admin'   # cluster admin
+OIDC_AUTHZ_RULES_1='domain:example.com=orders:read,payments:read'    # everyone else at example.com
+```
+
+Every matching rule applies, a namespace named twice keeps the higher role, and an admitted person no rule matches gets `OIDC_AUTHZ_DEFAULT_PERMISSIONS`, or, without one, `access_denied` at sign-in and no token at all.
+`tempogate serve` refuses to start with neither rules nor a default.
+Rules are re-applied on every token refresh, so a change reaches a signed-in user within `OIDC_ACCESS_TOKEN_TTL` of a restart, and removing someone's last grant ends their session.
+`tempogate authz explain --email <e>` shows which rules match and the resulting claim.
+Upgrading from a release without rules, where every admitted identity was cluster admin: set `OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin` to keep that behaviour (logged as a warning) while you write rules.
+See [Authorization](docs/configuration.md#authorization).
+Long-lived machine credentials are integration keys from the admin API below; they do not go through these rules.
 
 ### Integration keys (admin API)
 
@@ -173,7 +185,7 @@ namespace name by the same authorizer, so the `perms.AddWildcard` Go-API
 sugar is internally rewritten to `temporal-system:<role>` before serialization.
 The model lives in the [`perms`](perms/perms.go) package.
 The `/admin/keys` admin API builds its claim through `perms.Grant`.
-The OIDC `/token` flow does not use `perms.Grant` yet: it stamps the literal `temporal-system:admin` (see [flat authorization](#status)), which has the same wire shape.
+The OIDC `/token` flow builds its claim through `perms.Grant` too, from the [authorization rules](#authorization).
 
 A token issued for `tenant-a` cannot perform any action on `tenant-b`. That
 boundary is enforced at the Temporal frontend by the default authorizer — not
@@ -186,9 +198,9 @@ independently).
 
 The `/admin/keys` admin API deliberately mints one (namespace, role) per key
 so audit and rotation always reason over a minimal scope; a caller that needs
-multi-namespace authorization issues several keys, or — for humans — picks up
-the multi-ns shape automatically through the OIDC `/token` path as the
-identity-mapping layer matures.
+multi-namespace authorization issues several keys or, for humans, gets the
+multi-namespace shape from the [authorization rules](#authorization) through
+the OIDC `/token` path.
 
 ## Quick start
 
@@ -199,19 +211,21 @@ TEMPOGATE_IMAGE=${TEMPOGATE_IMAGE:-ghcr.io/onhotpath/tempogate:latest}
 export OIDC_SESSION_SIGNING_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1/device/sso-callback'
 export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
+export OIDC_AUTHZ_RULES_0='email:alice@example.com=default:read'   # serve refuses to start without a rule
 docker volume create tempogate-state
 docker run --rm --mount source=tempogate-state,target=/var/lib/tempogate \
   "$TEMPOGATE_IMAGE" migrate
 docker run --rm -d --name tempogate -p 127.0.0.1:8000:8000 \
   --mount source=tempogate-state,target=/var/lib/tempogate \
-  -e OIDC_SESSION_SIGNING_KEY -e OIDC_CLIENTS -e OIDC_CLIENT_SECRETS \
+  -e OIDC_SESSION_SIGNING_KEY -e OIDC_CLIENTS -e OIDC_CLIENT_SECRETS -e OIDC_AUTHZ_RULES_0 \
   -e HTTP_LISTENER=0.0.0.0:8000 "$TEMPOGATE_IMAGE"
 curl --retry 20 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:8000/healthz
 ```
 
 Keep the signing key and SQLite volume across restarts. The generated client
-secret is for this health-check example; configure `OIDC_ISSUER`, registered
-clients, allowed domains, and Google credentials for real login. Save those
+secret and the rule are for this health-check example; configure `OIDC_ISSUER`,
+registered clients, allowed domains, [authorization rules](#authorization) and
+Google credentials for real login. Save those
 secrets outside the shell before using this as a lasting deployment. Stop the
 example with `docker stop tempogate`.
 
@@ -344,6 +358,8 @@ See [docs/configuration.md](docs/configuration.md).
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
 | `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in and again on every refresh |
 | `OIDC_ALLOWED_HOSTED_DOMAINS` | Recommended | _(empty)_ | Comma-separated Google Workspace domains; when set, Google's `hd` claim must match ("Workspace mode"). See [docs/configuration.md](docs/configuration.md#hosted-domain-workspace-mode) |
+| `OIDC_AUTHZ_RULES_<n>` | This or the next | _(none)_ | Indexed rules (`OIDC_AUTHZ_RULES_0`, `_1`, ...) `"<email:address\|domain:domain>=<namespace>:<role>[,...]"` mapping a signed-in person to Temporal permissions; re-applied on every refresh. See [Authorization](docs/configuration.md#authorization) |
+| `OIDC_AUTHZ_DEFAULT_PERMISSIONS` | This or the previous | _(empty)_ | Comma-separated permissions for admitted people no rule matches; empty denies them. `serve` refuses to start with no rules and no default. `temporal-system:admin` keeps the pre-rules behaviour (logged as a warning) |
 | `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access token (ID tokens live 5 minutes) |
 | `OIDC_ACCESS_TOKEN_AUDIENCE` | No | `temporal` | `aud` of every access token and integration key; set Temporal's `global.authorization.audience` (v1.29.0+) to match. See [Access tokens and ID tokens](docs/configuration.md#access-tokens-and-id-tokens) |
 | `OIDC_REFRESH_TOKEN_TTL` | No | `168h` (7 days) | Idle lifetime of each rotated refresh token |

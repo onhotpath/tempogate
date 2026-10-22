@@ -191,3 +191,27 @@ func TestLoadServerHardeningFromYAML(t *testing.T) {
 	require.Equal(t, 3*time.Second, c.Server.ShutdownTimeout)
 	require.Equal(t, 30*time.Second, c.Server.WriteTimeout, "unset keys keep their defaults")
 }
+
+func TestLoadAuthzRulesFromYAMLAndEnvReplacesTheList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "authz.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`oidc:
+  authz:
+    rules:
+      - "email:alice@example.com=orders:read"
+      - "domain:example.com=payments:write"
+    default_permissions: "orders:read"
+`), 0o600))
+
+	c := defaultConfig()
+	_, err := Load(c, path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"email:alice@example.com=orders:read", "domain:example.com=payments:write"}, c.OIDC.Authz.Rules)
+	require.Equal(t, "orders:read", c.OIDC.Authz.DefaultPermissions)
+
+	// Env wins over YAML; a list is replaced, not merged index by index.
+	t.Setenv("OIDC_AUTHZ_RULES_0", "email:bob@example.com=temporal-system:admin")
+	c = defaultConfig()
+	_, err = Load(c, path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"email:bob@example.com=temporal-system:admin"}, c.OIDC.Authz.Rules)
+}

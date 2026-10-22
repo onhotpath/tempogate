@@ -24,6 +24,11 @@ auth:
     name: tempogate-smoke
     key: client-secrets
 
+# serve refuses to start without authorization rules.
+authz:
+  rules:
+    - "email:alice@example.com=default:write"
+
 # Must reach the migrate initContainer as well as the serve container;
 # test/deploy/chart-assertions.sh asserts it in the rendered manifests.
 extraEnv:

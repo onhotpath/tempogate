@@ -107,6 +107,20 @@ expect_eq "extraEnv reaches the migrate initContainer" "7s" \
     yq 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") |
       .env[] | select(.name == "STATE_SQLITE_BUSY_TIMEOUT") | .value')"
 
+# Authorization rules render as indexed env keys, in order, and the default
+# as one key; neither is rendered when unset.
+authz_cm=$(render --set 'authz.rules[0]=email:alice@example.com=temporal-system:admin' \
+  --set 'authz.rules[1]=domain:example.com=orders:read' \
+  --set 'authz.defaultPermissions=orders:read' | yq 'select(.kind == "ConfigMap")')
+expect_eq "authz.rules[0] renders as OIDC_AUTHZ_RULES_0" "email:alice@example.com=temporal-system:admin" \
+  "$(yq '.data.OIDC_AUTHZ_RULES_0' <<<"$authz_cm")"
+expect_eq "authz.rules[1] renders as OIDC_AUTHZ_RULES_1" "domain:example.com=orders:read" \
+  "$(yq '.data.OIDC_AUTHZ_RULES_1' <<<"$authz_cm")"
+expect_eq "authz.defaultPermissions renders as OIDC_AUTHZ_DEFAULT_PERMISSIONS" "orders:read" \
+  "$(yq '.data.OIDC_AUTHZ_DEFAULT_PERMISSIONS' <<<"$authz_cm")"
+expect_eq "no OIDC_AUTHZ_* key is rendered by default" "0" \
+  "$(yq 'select(.kind == "ConfigMap") | .data | keys | map(select(test("^OIDC_AUTHZ_"))) | length' <<<"$manifests")"
+
 if [ "$failures" -ne 0 ]; then
   echo "FAIL: $failures chart assertion(s) failed" >&2
   exit 1

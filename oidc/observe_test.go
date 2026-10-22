@@ -23,6 +23,19 @@ type recordingObserver struct {
 	tokens      []string
 	revocations []string
 	limited     []string
+	authzDenied []string
+}
+
+func (r *recordingObserver) ObserveAuthzDenied(stage string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.authzDenied = append(r.authzDenied, stage)
+}
+
+func (r *recordingObserver) denials() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.authzDenied...)
 }
 
 func (r *recordingObserver) ObserveLogin(result, reason string) {
@@ -134,7 +147,7 @@ func (s *CallbackSuite) TestLoginOutcomesAreObserved() {
 // own reason so a misconfigured OIDC_ALLOWED_HOSTED_DOMAINS is visible.
 func (s *CallbackSuite) TestHostedDomainRefusalIsObserved() {
 	s.store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains,
+	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithAllowedHostedDomains("example.com"),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithLoginObserver(s.observed),
@@ -155,7 +168,7 @@ func (s *CallbackSuite) TestHostedDomainRefusalIsObserved() {
 // user is an internal failure, not a refusal: no code reaches the client.
 func (s *CallbackSuite) TestCodeGenerationFailureIsObserved() {
 	s.store.put(s.pendingRequest(fixedState))
-	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains,
+	c := oidc.NewCallback(s.store, s.up, s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return "", errors.New("entropy exhausted") }),
 		oidc.WithLoginObserver(s.observed),

@@ -200,9 +200,10 @@ func Merge(grants ...*Grant) *Grant {
 	return out
 }
 
-// Empty reports whether g grants nothing, i.e. ToClaim would be empty.
+// Empty reports whether g grants nothing, i.e. ToClaim would be empty. A
+// nil Grant grants nothing.
 func (g *Grant) Empty() bool {
-	return len(g.perms) == 0
+	return g == nil || len(g.perms) == 0
 }
 
 // WithSystemRole grants role on Temporal's system namespace. The default
@@ -228,6 +229,9 @@ func AddWildcard(role Role) Option {
 // sort order ToClaim emits, so callers can inspect or render a Grant
 // without round-tripping through ToClaim+ParseClaim.
 func (g *Grant) Namespaces() []NamespacePermission {
+	if g == nil {
+		return []NamespacePermission{}
+	}
 	out := make([]NamespacePermission, 0, len(g.perms))
 	for ns, role := range g.perms {
 		out = append(out, NamespacePermission{Namespace: ns, Role: role})

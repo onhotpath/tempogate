@@ -124,10 +124,21 @@ its own setting makes it explicit and reviewable; an entry for an unregistered
 client fails fast. See
 [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md).
 
-**Flat authorization, today.** Every admitted identity receives cluster-level
-access (`temporal-system:admin`) — the value Temporal's default ClaimMapper
-needs for cluster APIs. Group- or role-derived per-namespace scoping is
-planned; the JWT shape and the `permissions` claim are already in place for it.
+**Authorization is configuration, deny by default.** Admission (Google
+sign-in, `OIDC_ALLOWED_DOMAINS`, Workspace mode) says who may sign in; the
+server-only `authz` package says what their access token may do, from static
+`email:`/`domain:` rules (`OIDC_AUTHZ_RULES_<n>`) and an optional default.
+`oidc` sees it only as a consumer-side `PermissionResolver`, bound with
+`fx.As` in the server modules, so the lean CLI never links it. `Token.issue`
+resolves permissions for every grant (code, refresh, device) and puts them in
+the access token only; the Google callback and the device verification page
+ask too, so a person with no grant gets `access_denied` before any code or
+token exists. Refresh resolves again after the domain re-check, so a rule
+change reaches a session at its next refresh and an empty result revokes the
+family. Resolution is in-memory and needs nothing from Google, because
+tempogate keeps no upstream refresh token. `serve` refuses to start with no
+rules and no default. Integration keys keep their own single (namespace,
+role). See [docs/configuration.md](configuration.md#authorization).
 
 **Authenticated admin API.** Integration keys are minted and revoked, signing
 keys retired and refresh-token sessions listed and revoked on a separate admin

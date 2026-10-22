@@ -85,7 +85,9 @@ type callbackParams struct {
 	Upstream Upstream
 	Binding  *UpstreamBinding
 	Logger   *slog.Logger
+	Resolver PermissionResolver
 	Logins   LoginObserver `optional:"true"`
+	Authz    AuthzObserver `optional:"true"`
 
 	Issuer         string `name:"oidc_issuer"`
 	AllowedDomains string `name:"oidc_allowed_domains"`
@@ -112,6 +114,8 @@ func newCallbackRegistrar(p callbackParams) func(huma.API) {
 		WithAllowedHostedDomains(p.HostedDomains),
 		WithCallbackLogger(p.Logger),
 		WithLoginObserver(p.Logins),
+		WithCallbackPermissionResolver(p.Resolver),
+		WithCallbackAuthzObserver(p.Authz),
 	)
 	return c.Register
 }
@@ -119,12 +123,14 @@ func newCallbackRegistrar(p callbackParams) func(huma.API) {
 type tokenParams struct {
 	fx.In
 
-	Store   TokenStore
-	Devices DeviceCodeStore
-	Signer  *keys.Signer
-	Clients ClientRegistry
-	Logger  *slog.Logger
-	Tokens  TokenObserver `optional:"true"`
+	Store    TokenStore
+	Devices  DeviceCodeStore
+	Signer   *keys.Signer
+	Clients  ClientRegistry
+	Logger   *slog.Logger
+	Resolver PermissionResolver
+	Tokens   TokenObserver `optional:"true"`
+	Authz    AuthzObserver `optional:"true"`
 
 	AllowedDomains     string        `name:"oidc_allowed_domains"`
 	AccessTokenTTL     time.Duration `name:"oidc_access_token_ttl"`
@@ -159,6 +165,8 @@ func newToken(p tokenParams) (*Token, error) {
 		WithTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime),
 		WithTokenLogger(p.Logger),
 		WithTokenObserver(p.Tokens),
+		WithPermissionResolver(p.Resolver),
+		WithAuthzObserver(p.Authz),
 	), nil
 }
 
@@ -270,6 +278,8 @@ type deviceUIParams struct {
 	Token      *Token
 	Logger     *slog.Logger
 	SigningKey sessionSigningKey
+	Resolver   PermissionResolver
+	Authz      AuthzObserver `optional:"true"`
 
 	Issuer             string `name:"oidc_issuer"`
 	GoogleAuthEndpoint string `name:"google_auth_endpoint"`
@@ -296,6 +306,8 @@ func newDeviceUIRegistrar(p deviceUIParams) (func(huma.API), error) {
 		// collapses into the same generic HTML page with no log trail and
 		// the operator has no way to diagnose a stuck device flow.
 		WithDeviceUILogger(p.Logger),
+		WithDeviceUIPermissionResolver(p.Resolver),
+		WithDeviceUIAuthzObserver(p.Authz),
 	)
 	if err != nil {
 		return nil, err

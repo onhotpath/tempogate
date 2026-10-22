@@ -63,9 +63,11 @@ const (
 // error_description) is only included on the non-sentinel default path so the
 // sentinel identity is preserved.
 var (
-	// ErrUserDenied is returned when the user clicks Deny on the verification
-	// page. RFC 8628 §3.5 `access_denied`.
-	ErrUserDenied = errors.New("cli: user denied the device authorization")
+	// ErrUserDenied is returned when the device authorization was denied:
+	// the user clicked Deny on the verification page, or the server found
+	// no Temporal permissions for the account. RFC 8628 §3.5
+	// `access_denied`.
+	ErrUserDenied = errors.New("cli: the device authorization was denied (declined on the verification page, or no Temporal access is granted to this account)")
 
 	// ErrDeviceCodeExpired is returned when the user did not approve before
 	// the issuer's deviceCodeTTL elapsed. RFC 8628 §3.5 `expired_token`.

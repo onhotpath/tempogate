@@ -243,7 +243,26 @@ type OIDCConfig struct {
 	// verification-page session, not the token session.
 	RefreshMaxLifetime time.Duration `ferry:"refresh_max_lifetime"`
 
+	Authz AuthzConfig `ferry:"authz"`
+
 	Google GoogleConfig `ferry:"google"`
+}
+
+// AuthzConfig maps a signed-in person to the Temporal permissions their
+// access token carries (see package authz). Deny by default: a person no
+// rule matches gets DefaultPermissions, and with none of those no token at
+// all. `serve` refuses to start when both are empty.
+type AuthzConfig struct {
+	// Rules (OIDC_AUTHZ_RULES_0, OIDC_AUTHZ_RULES_1, ... or a YAML list) are
+	// "<selector>=<namespace>:<role>[,...]" entries, the selector being
+	// email:<address> or domain:<email domain>. Every matching rule applies;
+	// a namespace named by several gets the highest role.
+	Rules []string `ferry:"rules"`
+
+	// DefaultPermissions (OIDC_AUTHZ_DEFAULT_PERMISSIONS) is a
+	// comma-separated permission list for admitted people no rule matches.
+	// temporal-system:admin restores the behaviour before rules existed.
+	DefaultPermissions string `ferry:"default_permissions"`
 }
 
 // GoogleConfig is the upstream OAuth2/OIDC client tempogate uses against

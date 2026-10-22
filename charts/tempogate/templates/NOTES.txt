@@ -7,6 +7,12 @@ Port-forward and check liveness:
 {{ if not .Values.oidc.issuer -}}
 NOTE: oidc.issuer is unset — set it to this server's externally reachable URL before wiring Temporal.
 {{ end -}}
+{{ if and (not .Values.authz.rules) (not .Values.authz.defaultPermissions) -}}
+NOTE: authz.rules and authz.defaultPermissions are both empty, so `tempogate serve` refuses to start.
+      Grant Temporal permissions with rules, e.g. authz.rules: ["email:alice@example.com=orders:write"],
+      or keep the old "every admitted user is cluster admin" behaviour with
+      authz.defaultPermissions: "temporal-system:admin". See docs/configuration.md#authorization.
+{{ end -}}
 {{ if .Values.service.admin.enabled -}}
 Admin API (bearer token required): {{ include "tempogate.fullname" . }}-admin.{{ .Release.Namespace }}.svc:{{ .Values.service.admin.port }}/admin/keys
 {{ else if not .Values.admin.tokenSha256SecretRef.name -}}

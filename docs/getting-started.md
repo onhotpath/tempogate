@@ -26,7 +26,7 @@ not needed here.
 
 > [!CAUTION]
 > **The example stack is DEV ONLY. Never expose it to a network.**
-> Its mock IdP signs in **anyone who can reach it as any identity**, with full Temporal access.
+> Its mock IdP signs in **anyone who can reach it as any identity**, and the demo identity has full Temporal access.
 > It publishes every port on `127.0.0.1` only and generates its secrets locally; keep it that way.
 
 One hostname-resolution line (explained in the
@@ -64,7 +64,8 @@ Open **http://temporal-ui:8080** and click **Sign in**.
 
 You are redirected through tempogate to the mock IdP's one-click consent
 screen. Click **Approve** (it asserts `alice@example.com`, whose domain is in
-the demo's allowed list).
+the demo's allowed list, and whom the demo's authorization rule makes cluster
+admin).
 
 ![Mock IdP consent screen](img/getting-started/02-consent.png)
 
@@ -77,6 +78,18 @@ by verifying it against tempogate's JWKS, with no Temporal-side custom code.
 To see the rejection path, add `DEMO_EMAIL=` with an out-of-domain address
 to `.env`, `docker compose up -d`, and sign in again:
 tempogate returns a 403 "not in an allowed domain" instead of a token.
+
+**Who gets which permissions** is up to tempogate's authorization rules, and
+the default is deny. The demo has one rule,
+`OIDC_AUTHZ_RULES_0: "email:${DEMO_EMAIL:-alice@example.com}=temporal-system:admin"`
+in `docker-compose.yml`, so the demo identity is cluster admin. To give
+someone else access, add a rule such as
+`OIDC_AUTHZ_RULES_1: "email:bob@example.com=default:read"` to the `tempogate`
+service and restart it; an allowed identity that no rule matches is refused
+at sign-in with `access_denied`. A namespace-scoped user does not see the
+namespace dropdown fill (only a `temporal-system` grant lists namespaces); they
+open their namespace by URL, e.g. `http://temporal-ui:8080/namespaces/default/workflows`.
+See [Authorization](configuration.md#authorization).
 
 ## 3. Get a CLI token
 

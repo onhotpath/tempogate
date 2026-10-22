@@ -184,6 +184,8 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 | `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. The deliberately-separate, auditable opt-in that promotes a registered client to **confidential** (the PKCE carve-out) — e.g. the Temporal Web UI, which does not implement PKCE; also `tempogate-device-ui`, which tempogate uses as a client of itself when bouncing the verification page through Google SSO. An entry for an unregistered id fails fast. See [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md). |
 | `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated, exact-match email-domain gate applied to Google's verified email after sign-in, and re-applied to the session's email on every refresh: removing a domain ends its users' sessions at their next refresh (and revokes them). **Empty means nobody is admitted.** |
 | `OIDC_ALLOWED_HOSTED_DOMAINS` | recommended | _(empty)_ | Comma-separated Google Workspace domains ("Workspace mode"). When set, Google's `id_token` must carry an `hd` (hosted domain) claim in this list, on top of `email_verified` and `OIDC_ALLOWED_DOMAINS`. Exact, case-insensitive match. Empty keeps the email-domain-only gate and logs a warning at startup. See [Hosted domain (Workspace mode)](#hosted-domain-workspace-mode). |
+| `OIDC_AUTHZ_RULES_<n>` | this or the next | _(none)_ | Indexed list (`OIDC_AUTHZ_RULES_0`, `OIDC_AUTHZ_RULES_1`, ...; YAML `oidc.authz.rules`) of rules `"<selector>=<namespace>:<role>[,...]"` that decide which Temporal permissions a signed-in person's access token carries. See [Authorization](#authorization). |
+| `OIDC_AUTHZ_DEFAULT_PERMISSIONS` | this or the previous | _(empty)_ | Comma-separated permissions for admitted people no rule matches; empty denies them (`access_denied`, no token). **`serve` refuses to start when this and the rules are both empty.** `temporal-system:admin` keeps the behaviour of releases without rules and logs a warning. See [Upgrading to deny-by-default authorization](#upgrading-to-deny-by-default-authorization). |
 | `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; lifetime of each access token. This is also the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. ID tokens always live 5 minutes. |
 | `OIDC_ACCESS_TOKEN_AUDIENCE` | no | `temporal` | The `aud` of every access token, integration keys included. Set Temporal's `global.authorization.audience` (Temporal v1.29.0+) to the same value so the frontend refuses tokens minted for anything else. Must not be empty. See [Access tokens and ID tokens](#access-tokens-and-id-tokens). |
 | `OIDC_REFRESH_TOKEN_TTL` | no | `168h` | Go duration (7 days); idle lifetime of each rotated refresh token. A session not refreshed for this long ends. Must not exceed `OIDC_REFRESH_MAX_LIFETIME`. |
@@ -198,7 +200,8 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 
 **Minimum for real SSO:** `OIDC_ISSUER`, `OIDC_CLIENTS`,
 `OIDC_ALLOWED_DOMAINS`, `OIDC_SESSION_SIGNING_KEY`,
-`OIDC_GOOGLE_CLIENT_ID`, `OIDC_GOOGLE_CLIENT_SECRET`.
+`OIDC_GOOGLE_CLIENT_ID`, `OIDC_GOOGLE_CLIENT_SECRET`, and at least one
+`OIDC_AUTHZ_RULES_<n>` (or `OIDC_AUTHZ_DEFAULT_PERMISSIONS`).
 If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 **Device verification rate limits** have no configuration keys.
@@ -225,6 +228,89 @@ Leave the setting empty only when your email is not on Google Workspace; tempoga
 
 tempogate also sends Google the `hd` request parameter (the domain when one is configured, `*` when several), so the account chooser offers the right account.
 That parameter is only a UI hint: the user can edit the request, so the `hd` claim check above is the control.
+
+### Authorization
+
+`OIDC_ALLOWED_DOMAINS` and [Workspace mode](#hosted-domain-workspace-mode) decide who may sign in.
+Authorization rules decide what each person's access token may do in Temporal, and **the default is deny**: a person no rule grants anything to gets no token.
+
+```bash
+OIDC_AUTHZ_RULES_0='email:alice@example.com=temporal-system:admin'
+OIDC_AUTHZ_RULES_1='domain:example.com=orders:read,payments:read'
+OIDC_AUTHZ_RULES_2='email:bob@example.com=orders:write'
+```
+
+or, in YAML:
+
+```yaml
+oidc:
+  authz:
+    rules:
+      - "email:alice@example.com=temporal-system:admin"
+      - "domain:example.com=orders:read,payments:read"
+      - "email:bob@example.com=orders:write"
+    default_permissions: ""
+```
+
+As with every list, the environment replaces the YAML list as a whole rather than merging it entry by entry.
+In the Helm chart, set `authz.rules` and `authz.defaultPermissions`.
+
+**Grammar.** A rule is `<selector>=<permission>[,<permission>...]`.
+
+| Selector | Matches |
+| --- | --- |
+| `email:<address>` | The signed-in Google account's verified email, exactly, case-insensitively. |
+| `domain:<domain>` | The domain of that email, exactly (subdomains are other domains), case-insensitively. Without Workspace mode a consumer Google account created for an address at the domain matches too, so tempogate logs a warning for `domain:` rules when `OIDC_ALLOWED_HOSTED_DOMAINS` is empty. |
+
+A permission is `<namespace>:<role>`, the shape of Temporal's `permissions` claim, with role `read`, `write` or `admin`.
+`temporal-system:<role>` grants that role on every namespace, and is the only way to grant cluster-level APIs such as `ListNamespaces`.
+`group:` selectors (Google Workspace groups) are reserved and refused for now.
+
+**Semantics.**
+
+- Every matching rule applies. Their permissions are merged, and a namespace named by several rules gets the highest role, emitted as one claim entry.
+- `OIDC_AUTHZ_DEFAULT_PERMISSIONS` applies only to an admitted person no rule matches.
+- An empty result is a denial. At sign-in the Google callback sends the client `error=access_denied` (`tempogate login` prints it and exits; the device verification page denies the device code, so `tempogate login --device` stops polling with `access_denied`), and no authorization code or token is minted. A sign-in session on the device verification page is re-checked before every approval.
+- Only the access token carries the permissions; the ID token never does (see [Access tokens and ID tokens](#access-tokens-and-id-tokens)).
+- Integration keys from the admin API do not go through the rules: each carries the one namespace and role it was minted with.
+
+**Startup checks.** `tempogate serve` refuses to start when a rule or the default is malformed, uses an unknown selector or `group:`, names the `*` namespace (Temporal treats it as a namespace literally named `*`; use `temporal-system`), or grants `worker`.
+`worker` grants nothing under Temporal's default authorizer: Worker sits below Reader in Temporal's role bitmask ([`roles.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/roles.go#L9-L12)), every API but health checks needs at least Reader, and task-queue polling needs Writer ([`getRequiredRole`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L67-L77)); grant workers `write`.
+It also refuses to start when neither rules nor a default are configured.
+At startup it logs how many rules grant a `temporal-system` role, warns about rules whose domain is not in `OIDC_ALLOWED_DOMAINS` (nobody they select can sign in), and warns when the default grants a `temporal-system` role (`every admitted user is cluster admin` for `admin`).
+
+**Changes take effect at the next refresh.** Rules are configuration, so a change needs a restart.
+Every refresh then resolves the permissions again, after the [domain re-check](#refresh-token-sessions): a narrower grant mints a narrower token, and an empty one revokes the whole session (`invalid_grant`, logged as a `refresh_authz_denied` warning with the family id and email).
+Access tokens already issued keep their permissions until they expire, so a change reaches a signed-in user within `OIDC_ACCESS_TOKEN_TTL` (4h) of the restart; to end someone's sessions at once (their refresh tokens, not the access tokens already issued), run `tempogate sessions revoke --email <e>` or call `POST /admin/sessions/revoke` (see [Refresh-token sessions](#refresh-token-sessions)).
+
+**Checking a rule set.** `tempogate authz explain --email <e>` reads the same configuration as `serve` and prints the rules that match, whether the default applied, and the permissions the access token would carry (or that the sign-in is denied).
+It also flags an email whose domain is not in `OIDC_ALLOWED_DOMAINS`.
+
+```bash
+$ tempogate authz explain --email alice@example.com
+email:        alice@example.com
+matched:      rule 0  email:alice@example.com=temporal-system:admin
+              rule 1  domain:example.com=orders:read,payments:read
+permissions:  orders:read,payments:read,temporal-system:admin
+```
+
+**Namespace-scoped users and the Temporal Web UI.** Temporal grants `ListNamespaces` only through a `temporal-system:<role>` permission: it is a cluster-scoped API, so the default authorizer checks only the system role for it ([`metadata.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/api/metadata.go#L73), [`default_authorizer.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L47-L57), unchanged since v1.25).
+A user granted only `orders:read` therefore cannot list namespaces, and the Web UI's namespace dropdown stays empty for them.
+They reach their namespace by URL (`https://<temporal-ui>/namespaces/orders/workflows`), or set the UI's default namespace (`TEMPORAL_DEFAULT_NAMESPACE` for the `temporalio/ui` image) to the namespace most users work in.
+Granting `temporal-system:read` to fix the dropdown is not a narrow fix: it is read access to every namespace, workflow payloads included.
+Revisit this if Temporal adds a grant that allows listing namespaces without reaching into them.
+
+### Upgrading to deny-by-default authorization
+
+Releases without authorization rules gave every admitted person `temporal-system:admin`.
+That is no longer the default: with no rules and no default, `tempogate serve` stops at startup with `authz: no authorization configured`.
+
+- To keep the previous behaviour while you write rules, set `OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin` (chart: `authz.defaultPermissions: "temporal-system:admin"`).
+  tempogate logs a warning at every start that every admitted user is cluster admin.
+- To move to rules, list the people who need cluster admin with `email:` rules, grant everyone else what they need per namespace, and leave the default empty.
+  Check the result with `tempogate authz explain --email <e>` before restarting.
+- Existing sessions keep working: their next refresh mints a token with the new permissions, or ends the session if the person is granted nothing.
+  Access tokens issued before the upgrade keep `temporal-system:admin` until they expire (`OIDC_ACCESS_TOKEN_TTL`); revoking sessions (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) only stops their renewal.
 
 ### Token subject
 
@@ -287,8 +373,8 @@ Once the audience is enforced, integration keys minted before this release (no `
 ### Refresh-token sessions
 
 Each sign-in starts a session: a family of single-use refresh tokens that rotate on every exchange.
-A refresh is refused with `invalid_grant` when the session is idle past `OIDC_REFRESH_TOKEN_TTL`, older than `OIDC_REFRESH_MAX_LIFETIME`, revoked, or its email domain is no longer in `OIDC_ALLOWED_DOMAINS`.
-Presenting a token that was already rotated revokes the whole family ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)) and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`; a domain refusal logs `refresh_domain_not_allowed`.
+A refresh is refused with `invalid_grant` when the session is idle past `OIDC_REFRESH_TOKEN_TTL`, older than `OIDC_REFRESH_MAX_LIFETIME`, revoked, its email domain is no longer in `OIDC_ALLOWED_DOMAINS`, or the [authorization rules](#authorization) no longer grant the person anything.
+Presenting a token that was already rotated revokes the whole family ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)) and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`; a domain refusal logs `refresh_domain_not_allowed` and an authorization refusal `refresh_authz_denied`, both revoking the family.
 Token values are never logged.
 
 Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
@@ -475,10 +561,11 @@ That makes the admin listener's bind the access control: keep it on loopback or 
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `tempogate_logins_total` | counter | `result` (`success`, `failure`), `reason` | Completed Google sign-in callbacks. `reason` is `none` on success, else one of `missing_state`, `state_not_bound` (the callback came from another browser than the one that started the sign-in), `unknown_state`, `expired_request`, `upstream_denied`, `missing_code`, `upstream_error`, `email_unverified`, `domain_not_allowed`, `hosted_domain_not_allowed` (the `hd` claim failed [Workspace mode](#hosted-domain-workspace-mode)), `internal`. |
+| `tempogate_logins_total` | counter | `result` (`success`, `failure`), `reason` | Completed Google sign-in callbacks. `reason` is `none` on success, else one of `missing_state`, `state_not_bound` (the callback came from another browser than the one that started the sign-in), `unknown_state`, `expired_request`, `upstream_denied`, `missing_code`, `upstream_error`, `email_unverified`, `domain_not_allowed`, `hosted_domain_not_allowed` (the `hd` claim failed [Workspace mode](#hosted-domain-workspace-mode)), `authz_denied` (admitted, but no [authorization rule](#authorization) grants anything; sent back as `access_denied`), `internal`. |
 | `tempogate_tokens_issued_total` | counter | `grant` (`authorization_code`, `refresh_token`, `device_code`) | Tokens minted by `/token`. |
 | `tempogate_token_errors_total` | counter | `grant` (as above, or `other`), `error` | Failed `/token` requests by OAuth2 error code (`invalid_request`, `invalid_grant`, `invalid_client`, `unauthorized_client`, `unsupported_grant_type`, `authorization_pending`, `slow_down`, `access_denied`, `expired_token`) or `server_error` for a 500. `invalid_client` is a confidential client that failed to authenticate. Device-flow polling counts `authorization_pending` on every poll. Requests the rate limiter rejects never reach `/token` and are counted in `tempogate_rate_limited_total` instead. |
-| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, or a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`. The refused request is also counted as `invalid_grant`. Operator revocations (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) are not counted; the admin API's [audit log](#admin-api) records the latter. |
+| `tempogate_authz_denied_total` | counter | `stage` (`login`, `device_verification`, `authorization_code`, `refresh_token`, `device_code`) | Admitted people refused because no [authorization rule](#authorization) grants them anything: at the Google callback, on the device verification page, or at `/token` for the grant named (a rule removed after sign-in). The `login` refusals are also in `tempogate_logins_total{reason="authz_denied"}` and the `refresh_token` ones in `tempogate_refresh_family_revocations_total{event="refresh_authz_denied"}`. |
+| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`, `refresh_authz_denied`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`, or one the authorization rules no longer grant anything. The refused request is also counted as `invalid_grant`. Operator revocations (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) are not counted; the admin API's [audit log](#admin-api) records the latter. |
 | `tempogate_rate_limited_total` | counter | `endpoint` (`authorize`, `device_authorization`, `device_verification`, `token`) | Requests answered `429` by the per-client [rate limits](#abuse-controls). The client address is never a label. |
 | `tempogate_upstream_request_duration_seconds` | histogram | `op` (`discovery`, `code_exchange`, `verify_id_token`) | Latency of calls to Google, failed calls included. `verify_id_token` includes the JWKS fetch on a key-cache miss. `discovery` runs on first use and again on each retry after a failure; a failure served from inside the retry backoff is not a call and is not counted. |
 | `tempogate_upstream_errors_total` | counter | `op`, `reason` (`timeout`, `error`) | Failed calls to Google. `timeout` is a call that got no answer within the [upstream timeout](#google-leg); `error` is any other failure, including an error answer from Google. |
