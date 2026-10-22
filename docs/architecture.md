@@ -79,7 +79,10 @@ until the schema is current.
 **PKCE mandatory, with one auditable carve-out.** Every registered client is
 public and must use PKCE. A deliberately separate `OIDC_CLIENT_SECRETS`
 setting promotes specific clients to confidential for the narrow case of a
-client that cannot do PKCE (the Temporal Web UI). Keeping the relaxation in
+client that cannot do PKCE (the Temporal Web UI).
+A confidential client always authenticates its secret at `/token`, and PKCE
+is enforced on top whenever it sends a challenge.
+Keeping the relaxation in
 its own setting makes it explicit and reviewable; an entry for an unregistered
 client fails fast. See
 [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md).

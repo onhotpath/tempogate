@@ -345,14 +345,14 @@ func (s *TokenSuite) TestConfidentialWrongSecretIsInvalidClient() {
 	s.Equal("invalid_client", s.decodeOAuthError(resp))
 }
 
-func (s *TokenSuite) TestConfidentialMissingAnyProofIsInvalidRequest() {
+func (s *TokenSuite) TestConfidentialMissingAnyProofIsInvalidClient() {
 	s.store.putCode(s.confAuthCode("conf-1"))
 
 	resp := s.post(confCodeForm()) // no code_verifier, no client_secret
 	defer resp.Body.Close()
 
-	s.Equal(http.StatusBadRequest, resp.StatusCode)
-	s.Equal("invalid_request", s.decodeOAuthError(resp))
+	s.Equal(http.StatusUnauthorized, resp.StatusCode)
+	s.Equal("invalid_client", s.decodeOAuthError(resp))
 }
 
 // TestPublicClientCannotRideTheCarveOut proves the relaxation is strictly
@@ -517,8 +517,10 @@ func (s *TokenSuite) TestExpiredCodeIsInvalidGrant() {
 func (s *TokenSuite) TestClientIDMismatchIsInvalidGrant() {
 	s.store.putCode(s.authCode("code-1"))
 
+	// A different, fully authenticated client cannot redeem ui's code.
 	f := authCodeForm()
-	f.Set("client_id", "someone-else")
+	f.Set("client_id", "webui")
+	f.Set("client_secret", confidentialSecret)
 	resp := s.post(f)
 	defer resp.Body.Close()
 	s.Equal(http.StatusBadRequest, resp.StatusCode)

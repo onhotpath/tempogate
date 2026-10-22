@@ -31,7 +31,7 @@ import (
 //     poll returns invalid_grant rather than the same status indefinitely.
 //  7. Approval gate — authorization_pending until the user clicks Approve.
 //  8. Atomic consume + mint via the shared (*Token).issue.
-func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values) (*tokenOutput, error) {
+func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
 	if t.devices == nil {
 		// No DeviceCodeStore wired in: the device flow is not enabled on this
 		// deployment. Surface it as unsupported_grant_type so the CLI's error
@@ -44,9 +44,12 @@ func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values) (*tokenOut
 	if deviceCode == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "device_code is required")
 	}
-	clientID := form.Get("client_id")
+	clientID, secret := clientCredentials(form, authHeader)
 	if clientID == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "client_id is required")
+	}
+	if _, err := t.authenticateClient(clientID, secret, GrantTypeDeviceCode); err != nil {
+		return nil, err
 	}
 
 	dc, err := t.devices.LookupDeviceCodeByDeviceCode(ctx, deviceCode)
