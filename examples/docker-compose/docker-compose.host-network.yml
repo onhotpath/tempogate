@@ -1,3 +1,8 @@
+# DEV ONLY - NEVER EXPOSE THIS STACK. The bundled mock IdP signs in anyone who
+# can reach it as ANY identity. Host networking skips Docker's port mapping, so
+# every listener below is pinned to 127.0.0.1 explicitly (temporal-ui 2.32 has
+# no bind-address setting and listens on all interfaces; firewall port 8080).
+#
 # Linux-only overlay: skip the /etc/hosts edit by putting every container in
 # the host's network namespace, so `localhost:<port>` means the same thing in
 # your browser and between services. One issuer string then resolves
@@ -14,14 +19,16 @@
 # Compose will warn "Published ports are discarded when using host network
 # mode" for the base file's `ports:` — harmless; host networking exposes
 # them on localhost directly. These services now bind real host ports:
-# 8000 (tempogate), 8080 (temporal-ui), 8081 (mockoidc), 7233 (temporal),
-# 5432 (postgres) — free them first if something else is using them.
+# 8000 + 8081 (tempogate public + admin), 8080 (temporal-ui), 8082 (mockoidc),
+# 7233-7243 + 6933-6939 (temporal), 5432 (postgres) - free them first if
+# something else is using them.
 
 services:
   mockoidc:
     network_mode: host
     environment:
-      MOCK_ISSUER: "http://localhost:8081"
+      MOCK_LISTEN: "127.0.0.1:8082"
+      MOCK_ISSUER: "http://localhost:8082"
 
   tempogate-migrate:
     network_mode: host
@@ -32,20 +39,23 @@ services:
     network_mode: host
     environment:
       OIDC_ISSUER: "http://localhost:8000"
+      HTTP_LISTENER: "127.0.0.1:8000"
       # localhost is not in the loopback class, so these http URIs rely on
       # OIDC_ALLOW_INSECURE_REDIRECT_URIS from the base compose file.
       OIDC_CLIENTS: "temporal-ui:http://localhost:8080/auth/sso/callback,tempogate-cli:http://127.0.0.1/callback,tempogate-device:,tempogate-device-ui:http://localhost:8000/device/sso-callback"
-      OIDC_GOOGLE_AUTH_ENDPOINT: "http://localhost:8081/auth"
-      OIDC_GOOGLE_TOKEN_ENDPOINT: "http://localhost:8081/token"
-      OIDC_GOOGLE_ISSUER_URL: "http://localhost:8081"
+      OIDC_GOOGLE_AUTH_ENDPOINT: "http://localhost:8082/auth"
+      OIDC_GOOGLE_TOKEN_ENDPOINT: "http://localhost:8082/token"
+      OIDC_GOOGLE_ISSUER_URL: "http://localhost:8082"
 
   db:
     network_mode: host
+    command: ["postgres", "-c", "listen_addresses=localhost"]
 
   temporal:
     network_mode: host
     environment:
       POSTGRES_SEEDS: localhost
+      BIND_ON_IP: 127.0.0.1
       TEMPORAL_JWT_KEY_SOURCE1: "http://localhost:8000/.well-known/jwks.json"
 
   temporal-ui:

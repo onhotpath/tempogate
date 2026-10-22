@@ -20,7 +20,7 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull lint-chart test-chart test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools deploy-tools \
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull lint-chart test-chart test-deploy test-deploy-kind test-deploy-compose compose-lint ci vuln go-version-check check-supply-chain gen-oas clean help tools deploy-tools \
         gci golangci-lint govulncheck actionlint kind kubeconform yq
 
 start: ## Run the binary directly with build-info ldflags injected
@@ -176,6 +176,9 @@ test-deploy-compose: ## docker-compose example: config renders, migrate exits 0,
 	IMAGE=$(DEPLOY_IMAGE) PROJECT=$(COMPOSE_PROJECT) test/deploy/compose-smoke.sh
 
 test-deploy: test-deploy-kind test-deploy-compose ## both deployment smoke tests
+
+compose-lint: ## static safety checks on the dev-only docker-compose example (needs docker + jq)
+	test/deploy/compose-lint.sh
 
 ci: check lint vuln check-supply-chain test-run ## fmt/vet/imports + lint + govulncheck + supply-chain pins + tests (used by GitHub Actions)
 	@go tool cover -func=coverage.out | tail -1

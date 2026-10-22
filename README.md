@@ -194,7 +194,7 @@ export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
 docker volume create tempogate-state
 docker run --rm --mount source=tempogate-state,target=/var/lib/tempogate \
   "$TEMPOGATE_IMAGE" migrate
-docker run --rm -d --name tempogate -p 8000:8000 \
+docker run --rm -d --name tempogate -p 127.0.0.1:8000:8000 \
   --mount source=tempogate-state,target=/var/lib/tempogate \
   -e OIDC_SESSION_SIGNING_KEY -e OIDC_CLIENTS -e OIDC_CLIENT_SECRETS \
   -e HTTP_LISTENER=0.0.0.0:8000 "$TEMPOGATE_IMAGE"
@@ -425,8 +425,8 @@ Go 1.27+ is required. See [CONTRIBUTING.md](CONTRIBUTING.md).
   `tempogate login --device` flow for hosts without a browser (RFC 8628)
 - [docs/pkce-and-confidential-clients.md](docs/pkce-and-confidential-clients.md)
   — PKCE posture and the confidential-client carve-out
-- [examples/docker-compose/](examples/docker-compose/README.md) — the full
-  stack locally, one command
+- [examples/docker-compose/](examples/docker-compose/README.md) - the full
+  stack locally, one command (dev only: its mock IdP signs anyone in)
 - [examples/kind/](examples/kind/README.md) — deploy to a local Kubernetes
   cluster via the chart
 - [examples/google-oauth-setup.md](examples/google-oauth-setup.md) —
