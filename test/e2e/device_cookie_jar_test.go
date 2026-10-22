@@ -39,6 +39,7 @@ func TestDeviceLoginCookieJar(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	for _, basePath := range []string{"", "/idp"} {
 		t.Run("issuer path "+fmt.Sprintf("%q", basePath), func(t *testing.T) {
 			ctx := context.Background()

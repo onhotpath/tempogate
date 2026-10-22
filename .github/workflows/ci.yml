@@ -11,36 +11,59 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR supersedes its previous run. Pushes to main each get
+# their own group (run_id), so every main commit is verified in full: a shared
+# group would cancel a pending main run even without cancel-in-progress.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# `make ci` is the single definition of CI. Its prerequisites are split across
+# the static and test jobs so the two halves run in parallel; each job lists
+# its share in CI_TARGETS, and scripts/check-ci-targets.sh (run by
+# `make check-supply-chain`) fails if the union drifts from `ci`'s
+# prerequisites.
+#
+# Caches are restored on every run but saved only from pushes to main, so PR
+# refs never write (or poison) a cache; see .github/actions/setup-go-cached.
 
 jobs:
-  ci:
-    name: check + lint + test
+  static:
+    name: check + lint + vuln + pins
     runs-on: ubuntu-latest
+    env:
+      CI_TARGETS: check lint vuln check-supply-chain
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - id: go
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
+          cache-name: static
+          # golangci-lint's analysis cache (keyed by content, never stale).
+          extra-paths: ~/.cache/golangci-lint
 
-      # Keyed on go.mod too: tools are built with the module's toolchain, so a
-      # Go bump must rebuild them (an older-Go govulncheck cannot load newer
-      # sources).
-      - name: Cache .bin tools
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      # Keyed on the pins (tools.mk) and the Go version: gci and govulncheck
+      # are built with the module's toolchain, so a Go bump must rebuild them
+      # (an older-Go govulncheck cannot load newer sources).
+      - id: tools
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .bin
-          key: ${{ runner.os }}-tempogate-tools-${{ hashFiles('Makefile', 'go.mod') }}
+          key: tools-${{ runner.os }}-${{ runner.arch }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('tools.mk', 'scripts/install-release-tool.sh') }}
 
       - name: Install pinned tools
         run: make tools
 
-      - name: Run CI (check + lint + vuln + supply-chain pins + test-run)
-        run: make ci
+      - name: Save .bin tools
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+
+      - name: Run make ${{ env.CI_TARGETS }}
+        run: make ${{ env.CI_TARGETS }}
 
       # Rot guard: the distributed CLI is built with -tags lean and must not
       # link the heavy server/state subtree — the SQLite engine (modernc
@@ -58,6 +81,32 @@ jobs:
           fi
           echo "lean import graph clean (no api / state/sqlite / servercmd / modernc sqlite|libc)"
 
+      - name: Save Go cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
+
+  test:
+    name: test (race + coverage)
+    runs-on: ubuntu-latest
+    env:
+      CI_TARGETS: test-run
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - id: go
+        uses: ./.github/actions/setup-go-cached
+        with:
+          cache-name: test
+
+      - name: Run make ${{ env.CI_TARGETS }}
+        run: make ${{ env.CI_TARGETS }}
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -73,3 +122,27 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.out
         continue-on-error: true
+
+      - name: Save Go cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
+
+  # Keeps the historical check name stable for tooling and any future
+  # required status check: green only if every split job succeeded.
+  ci:
+    name: check + lint + test
+    needs: [static, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All CI jobs succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "static + test: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || exit 1
+          done

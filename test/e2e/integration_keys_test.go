@@ -103,6 +103,7 @@ func TestAdminKeyMintAndRevoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	st := setupIntegrationKeysStack(ctx, t)
 
@@ -222,6 +223,7 @@ func TestAdminRefusesSystemGrantByDefault(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	net, err := tcnetwork.New(ctx)
 	require.NoError(t, err)
@@ -422,6 +424,7 @@ func TestSigningKeyRotationAndRetirement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	st := setupIntegrationKeysStack(ctx, t)
 	startedAt := containerStartedAt(ctx, t, st.tempogate)

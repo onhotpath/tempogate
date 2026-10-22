@@ -54,6 +54,7 @@ func TestSecretsAtRest(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	st := setupCLIStack(ctx, t, withImageUser(), withTempogateEnv(map[string]string{"KEYS_ENCRYPTION_KEY": e2eKEK}))
 	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedEmail, true)
@@ -138,6 +139,7 @@ func TestStateVolumeUnderFSGroup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	root := repoRoot(t)
 	net, err := tcnetwork.New(ctx)

@@ -6,11 +6,8 @@ BIN         := $(BIN_DIR)/tempogate
 PKG         := github.com/onhotpath/tempogate
 BUILDINFO   := $(PKG)/buildinfo
 
-# Pin tool versions so CI and local installs agree. Bump deliberately.
-GCI_VERSION           ?= v0.14.0
-GOLANGCI_LINT_VERSION ?= v2.14.0
-GOVULNCHECK_VERSION   ?= v1.9.0
-ACTIONLINT_VERSION    ?= v1.7.12
+# Pinned tool versions (and release checksums) so CI and local installs agree.
+include $(PROJECT_DIR)/tools.mk
 
 GIT_TAG    ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -23,7 +20,7 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
         gci golangci-lint govulncheck actionlint
 
 start: ## Run the binary directly with build-info ldflags injected
@@ -87,9 +84,12 @@ go-version-check: ## assert every Dockerfile ARG GO_IMAGE tag matches go.mod's g
 # Supply-chain guard: actionlint on every workflow, plus scripts/check-pins.sh
 # (every action pinned to a commit SHA, every Dockerfile base image and
 # syntax frontend pinned to a digest). Renovate keeps the pins current.
-check-supply-chain: actionlint ## actionlint + assert actions and base images are pinned by digest
+# scripts/check-ci-targets.sh keeps the workflow's split CI jobs running
+# exactly ci's prerequisites.
+check-supply-chain: actionlint ## actionlint + assert actions and base images are pinned by digest + CI runs exactly `make ci`
 	$(ACTIONLINT)
 	./scripts/check-pins.sh
+	./scripts/check-ci-targets.sh
 
 imports-check: gci ## assert gci import grouping is already applied
 	@d=$$($(GCI) diff --skip-generated -s standard -s default -s "prefix($(PKG))" . </dev/null); \
@@ -129,10 +129,24 @@ test-e2e-images: ## build the three e2e images with a BuildKit-capable docker bu
 	DOCKER_BUILDKIT=1 docker build -t $(E2E_MOCKGOOGLE_IMAGE) -f test/e2e/mockgoogle/Dockerfile .
 	DOCKER_BUILDKIT=1 docker build -t $(E2E_CLICLIENT_IMAGE) -f test/e2e/cliclient/Dockerfile .
 
+# The top-level e2e tests are independent (each starts its own network,
+# volumes and containers) and call t.Parallel; E2E_PARALLEL caps how many run
+# at once, since several start a postgres + Temporal stack and a 4-vCPU CI
+# runner has to host them side by side. -v prints each test's duration;
+# naming the one test package (not ./test/e2e/...) lets go test stream that
+# output live instead of buffering it until the package finishes.
+E2E_PARALLEL ?= 3
+
 test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 	E2E_TEMPOGATE_IMAGE=$(E2E_TEMPOGATE_IMAGE) E2E_MOCKGOOGLE_IMAGE=$(E2E_MOCKGOOGLE_IMAGE) \
 	E2E_CLICLIENT_IMAGE=$(E2E_CLICLIENT_IMAGE) \
-		go test -tags e2e -timeout 40m -count=1 ./test/e2e/...
+		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 ./test/e2e
+
+# CI pulls the third-party e2e images (the tests' digest-pinned imageOr
+# defaults, see scripts/e2e-images.sh) in the background while it builds the
+# e2e images; anything not yet pulled is pulled by testcontainers itself.
+test-e2e-pull: ## pre-pull the third-party images the e2e tests run
+	./scripts/e2e-images.sh | xargs -P 4 -n 1 docker pull -q
 
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
 
@@ -197,14 +211,38 @@ define install-if-needed
 	$(eval $(1) := $(BIN_DIR)/$(notdir $(2)))
 endef
 
+# install-release-if-needed downloads a prebuilt tool from its GitHub release
+# and verifies the archive against the SHA-256 pinned in tools.mk (see
+# scripts/install-release-tool.sh). Used where a release binary works on this
+# module's Go and building from source is slow (golangci-lint: ~60s cold).
+# Skipped if the target binary already exists.
+#
+# Args:
+#   $(1) - make var name to set to the resolved binary path (eval'd)
+#   $(2) - binary name in $(BIN_DIR)
+#   $(3) - release archive URL
+#   $(4) - expected SHA-256 of the archive
+#   $(5) - path of the binary inside the archive
+define install-release-if-needed
+	@if [ ! -f "$(BIN_DIR)/$(2)" ]; then \
+		echo "Installing $(3) -> $(BIN_DIR)/$(2)" ;\
+		$(PROJECT_DIR)/scripts/install-release-tool.sh "$(BIN_DIR)/$(2)" "$(3)" "$(4)" "$(5)" ;\
+	fi
+	$(eval $(1) := $(BIN_DIR)/$(2))
+endef
+
+TOOLS_PLATFORM = $(shell go env GOOS)_$(shell go env GOARCH)
+GOLANGCI_LINT_ARCHIVE = golangci-lint-$(GOLANGCI_LINT_VERSION:v%=%)-$(subst _,-,$(TOOLS_PLATFORM))
+ACTIONLINT_ARCHIVE    = actionlint_$(ACTIONLINT_VERSION:v%=%)_$(TOOLS_PLATFORM)
+
 gci:
 	$(call install-if-needed,GCI,github.com/daixiang0/gci,$(GCI_VERSION))
 
 golangci-lint:
-	$(call install-if-needed,GOLANGCI_LINT,github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+	$(call install-release-if-needed,GOLANGCI_LINT,golangci-lint,https://github.com/golangci/golangci-lint/releases/download/$(GOLANGCI_LINT_VERSION)/$(GOLANGCI_LINT_ARCHIVE).tar.gz,$(GOLANGCI_LINT_SHA256_$(TOOLS_PLATFORM)),$(GOLANGCI_LINT_ARCHIVE)/golangci-lint)
 
 govulncheck:
 	$(call install-if-needed,GOVULNCHECK,golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))
 
 actionlint:
-	$(call install-if-needed,ACTIONLINT,github.com/rhysd/actionlint/cmd/actionlint,$(ACTIONLINT_VERSION))
+	$(call install-release-if-needed,ACTIONLINT,actionlint,https://github.com/rhysd/actionlint/releases/download/$(ACTIONLINT_VERSION)/$(ACTIONLINT_ARCHIVE).tar.gz,$(ACTIONLINT_SHA256_$(TOOLS_PLATFORM)),actionlint)

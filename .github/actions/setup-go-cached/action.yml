@@ -1,0 +1,70 @@
+name: Set up Go with a restore-only cache
+description: >-
+  Installs Go from go.mod and restores the Go module + build cache (plus any
+  extra paths) under a per-job cache name. Never saves: the calling job saves
+  with actions/cache/save, on pushes to main only, using the cache-key and
+  cache-paths outputs.
+
+# Why not setup-go's built-in cache: it saves from every ref under one key
+# shared by every job. PR refs then each wrote a ~530 MB copy, pushing the
+# repo over the 10 GB cache limit and evicting main's entries (which every PR
+# restores from), and jobs racing for the same key meant only the first one
+# ever saved. Here only main writes, each job family has its own key, and the
+# key carries the commit SHA so main's build cache stays current; restores
+# fall back to the newest entry for the same go.sum, then the same Go version.
+
+inputs:
+  cache-name:
+    description: Cache family, one per job (e.g. static, test, e2e).
+    required: true
+  extra-paths:
+    description: Newline-separated extra paths to cache with the Go caches.
+    required: false
+    default: ''
+
+outputs:
+  go-version:
+    description: The installed Go version.
+    value: ${{ steps.go.outputs.go-version }}
+  cache-key:
+    description: Key to pass to actions/cache/save.
+    value: ${{ steps.key.outputs.key }}
+  cache-paths:
+    description: Paths to pass to actions/cache/save (must match the restore).
+    value: ${{ steps.key.outputs.paths }}
+
+runs:
+  using: composite
+  steps:
+    - id: go
+      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - id: key
+      shell: bash
+      env:
+        CACHE_NAME: ${{ inputs.cache-name }}
+        EXTRA_PATHS: ${{ inputs.extra-paths }}
+        GO_VERSION: ${{ steps.go.outputs.go-version }}
+        GO_SUM_HASH: ${{ hashFiles('go.sum') }}
+      run: |
+        base="go-${CACHE_NAME}-${RUNNER_OS}-${RUNNER_ARCH}-go${GO_VERSION}"
+        {
+          echo "base=${base}-"
+          echo "sum=${base}-${GO_SUM_HASH}-"
+          echo "key=${base}-${GO_SUM_HASH}-${GITHUB_SHA}"
+          echo "paths<<EOF"
+          go env GOMODCACHE GOCACHE
+          if [ -n "$EXTRA_PATHS" ]; then printf '%s\n' "$EXTRA_PATHS"; fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ steps.key.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.sum }}
+          ${{ steps.key.outputs.base }}

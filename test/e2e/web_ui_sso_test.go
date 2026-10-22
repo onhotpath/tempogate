@@ -46,11 +46,15 @@ import (
 // Pinned images keep CI deterministic; override via env to bump without a
 // code change. The Temporal auth env-var templating these rely on has been in
 // the auto-setup config_template.yaml for many releases.
+//
+// Each default is pinned by digest (scripts/check-pins.sh enforces it, and
+// Renovate keeps the digests fresh). `make test-e2e-pull` reads these
+// defaults to pre-pull the images, so keep them as imageOr string literals.
 var (
-	postgresImage = imageOr("E2E_POSTGRES_IMAGE", "postgres:16-alpine")
-	temporalImage = imageOr("E2E_TEMPORAL_IMAGE", "temporalio/auto-setup:1.25.2")
-	uiImage       = imageOr("E2E_TEMPORAL_UI_IMAGE", "temporalio/ui:2.32.0")
-	chromeImage   = imageOr("E2E_CHROME_IMAGE", "chromedp/headless-shell:131.0.6778.86")
+	postgresImage = imageOr("E2E_POSTGRES_IMAGE", "postgres:16-alpine@sha256:deb28ee471183cb0c303113dac9b2433c51eeeeb678def7af9a9ec5820367815")
+	temporalImage = imageOr("E2E_TEMPORAL_IMAGE", "temporalio/auto-setup:1.25.2@sha256:b1edc1e20002d958c8182f2ae08dee877a125083683a627a44917683419ba6a8")
+	uiImage       = imageOr("E2E_TEMPORAL_UI_IMAGE", "temporalio/ui:2.32.0@sha256:82bf98dbe005a831b6bc5dc12ccd7bffd606af2032dae4821ae133caaa943d3d")
+	chromeImage   = imageOr("E2E_CHROME_IMAGE", "chromedp/headless-shell:131.0.6778.86@sha256:35500b175064d015acf5c27891f6160908cdc2ce46ded9ec471e07ffe9930e52")
 )
 
 const (
@@ -102,6 +106,7 @@ func TestWebUISSO(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	st := setupStack(ctx, t)
 

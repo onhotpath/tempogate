@@ -25,13 +25,14 @@
       "enabled": false
     },
     {
-      "description": "...but keep the digests of their pinned Dockerfile base images fresh (same tag, rebuilt image)",
+      "description": "...but keep the digests of their pinned images fresh (same tag, rebuilt image): Dockerfile base images and the e2e tests' imageOr defaults",
       "matchFileNames": [
         "test/**",
         "examples/**"
       ],
       "matchManagers": [
-        "dockerfile"
+        "dockerfile",
+        "custom.regex"
       ],
       "matchUpdateTypes": [
         "digest"
@@ -52,6 +53,21 @@
         "golang"
       ],
       "groupName": "Go toolchain"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Digest-pinned images outside Dockerfiles: the e2e tests' imageOr(\"E2E_..._IMAGE\", \"image:tag@sha256:...\") defaults and images passed to workflow action inputs (e.g. buildkit-cache-dance's utility-image)",
+      "managerFilePatterns": [
+        "/^test/e2e/[^/]+\\.go$/",
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "imageOr\\(\"[A-Z0-9_]+\", \"(?<depName>[^\":@\\s]+):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\)",
+        "(?:^|\\s)[a-z-]*image:\\s*[\"']?(?<depName>[^\"':@\\s]+):(?<currentValue>[^\"'@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
     }
   ]
 }
