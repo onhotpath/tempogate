@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Fails if a third-party build input is referenced by a mutable tag instead of
 # an immutable digest:
-#   - every `uses:` in .github/workflows must be a 40-char commit SHA followed
-#     by a `# vX.Y.Z` comment (what Renovate's pinGitHubActionDigests writes);
+#   - every `uses:` in .github/workflows and .github/actions must be a
+#     40-char commit SHA followed by a `# vX.Y.Z` comment (what Renovate's
+#     pinGitHubActionDigests writes);
 #   - every Dockerfile base image (FROM, including one taken from an ARG
 #     default) and `# syntax=` frontend must carry an `@sha256:` digest.
 # Renovate keeps both the versions and the digests current; see renovate.json.
@@ -11,7 +12,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 status=0
 
-bad_uses=$(grep -nE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows/*.yml \
+mapfile -t workflows < <(find .github/workflows .github/actions -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)
+bad_uses=$(grep -nE '^[[:space:]]*(-[[:space:]]+)?uses:' "${workflows[@]}" \
   | grep -vE 'uses:[[:space:]]*["'\'']?(\./|[^@[:space:]]+@[0-9a-f]{40}["'\'']?[[:space:]]+#[[:space:]]*v[0-9])' || true)
 if [ -n "$bad_uses" ]; then
   echo "check-pins: pin these actions to a full commit SHA with a '# vX.Y.Z' comment:"

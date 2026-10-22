@@ -84,9 +84,12 @@ go-version-check: ## assert every Dockerfile ARG GO_IMAGE tag matches go.mod's g
 # Supply-chain guard: actionlint on every workflow, plus scripts/check-pins.sh
 # (every action pinned to a commit SHA, every Dockerfile base image and
 # syntax frontend pinned to a digest). Renovate keeps the pins current.
-check-supply-chain: actionlint ## actionlint + assert actions and base images are pinned by digest
+# scripts/check-ci-targets.sh keeps the workflow's split CI jobs running
+# exactly ci's prerequisites.
+check-supply-chain: actionlint ## actionlint + assert actions and base images are pinned by digest + CI runs exactly `make ci`
 	$(ACTIONLINT)
 	./scripts/check-pins.sh
+	./scripts/check-ci-targets.sh
 
 imports-check: gci ## assert gci import grouping is already applied
 	@d=$$($(GCI) diff --skip-generated -s standard -s default -s "prefix($(PKG))" . </dev/null); \
