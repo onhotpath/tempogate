@@ -12,13 +12,12 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/onhotpath/tempogate/keys"
-	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
 type keysParams struct {
 	fx.In
 
-	Store *sqlite.Store
+	Store stateStore
 	Keys  *keys.Keys
 }
 

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -211,7 +213,7 @@ func NewCallback(
 		binding:        binding,
 		logger:         slog.New(slog.DiscardHandler),
 		allowedDomains: parseDomains(allowedDomains),
-		now:            func() time.Time { return time.Now().UTC() },
+		now:            clock.Now,
 		newCode:        randomCode,
 		logins:         nopObserver{},
 		authorizer:     denyAll{},

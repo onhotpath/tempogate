@@ -19,7 +19,8 @@ var (
 )
 
 // StoreProbe reports whether the state store can serve requests right now.
-// *sqlite.Store satisfies it structurally (bound via fx.As in sqlite.Fx).
+// Every state backend's *Store satisfies it structurally (bound via fx.As
+// in its Fx).
 type StoreProbe interface {
 	Probe(ctx context.Context) error
 }

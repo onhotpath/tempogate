@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -113,7 +115,7 @@ func NewDeviceAuthorization(
 		store:         store,
 		clients:       clients,
 		issuer:        strings.TrimRight(issuer, "/"),
-		now:           func() time.Time { return time.Now().UTC() },
+		now:           clock.Now,
 		newDeviceCode: randomDeviceCode,
 		newUserCode:   randomUserCode,
 	}

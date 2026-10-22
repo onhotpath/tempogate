@@ -524,6 +524,7 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		user, stateMount = "", "/var/lib/tempogate"
 		tgEnv["STATE_SQLITE_PATH"] = stateMount + "/state.db"
 	}
+	withStateBackend(ctx, t, netName, tgEnv)
 	ports := []string{"8000/tcp"}
 	if cfg.adminAPI {
 		ports = append(ports, "8081/tcp")

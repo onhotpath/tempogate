@@ -23,6 +23,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/onhotpath/tempogate/api/requestid"
+	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/ratelimit"
 )
 
@@ -345,7 +346,7 @@ func NewDeviceUI(
 		signingKey:       signingKey,
 		issuer:           trimmedIssuer,
 		internalClientID: DefaultInternalDeviceUIClientID,
-		now:              func() time.Time { return time.Now().UTC() },
+		now:              clock.Now,
 		newStateNonce:    randomDeviceStateNonce,
 		ipAttempts:       ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerIP, userCodeAttemptWindow)),
 		sessionAttempts:  ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerSession, userCodeAttemptWindow)),

@@ -4,12 +4,14 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 // DefaultDenylistTTL bounds how long a positive *or* negative denylist lookup
 // stays cached. 30 seconds matches the issue's stated tempogate-side revoke
 // lag — a freshly-revoked token verifies for at most this long on hot paths
-// like /userinfo before the next lookup pulls the updated state from sqlite.
+// like /userinfo before the next lookup pulls the updated state from the store.
 // The refresh-token grant does not consult the denylist: refresh tokens are
 // opaque, and their lifecycle (absolute lifetime, domain re-check, reuse
 // detection, `tempogate sessions revoke`) lives in the oidc package.
@@ -18,7 +20,7 @@ const DefaultDenylistTTL = 30 * time.Second
 // DenylistCache is the verifier's hot-path read-through cache over a
 // DenylistChecker. It memoizes both positive ("revoked") and negative
 // ("active") lookups for DefaultDenylistTTL so the steady-state cost of a
-// JWT verification is an in-memory map probe, not a sqlite round-trip.
+// JWT verification is an in-memory map probe, not a database round-trip.
 //
 // Cache invalidation is one of four: TTL expiry, an explicit Hydrate call
 // from the admin DELETE handler that marks a jti revoked immediately, a
@@ -93,7 +95,7 @@ func NewDenylistCache(opts ...DenylistCacheOption) *DenylistCache {
 	c := &DenylistCache{
 		ttl:        DefaultDenylistTTL,
 		maxEntries: DefaultDenylistMaxEntries,
-		now:        func() time.Time { return time.Now().UTC() },
+		now:        clock.Now,
 		entries:    map[string]cacheEntry{},
 	}
 	for _, o := range opts {

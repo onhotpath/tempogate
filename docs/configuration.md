@@ -133,27 +133,82 @@ Rejected requests are logged as `admin request rejected` at warn level with a `r
 | `KEYS_RELOAD_INTERVAL` | `30s` | Go duration; how often `serve` re-reads signing keys from the state store, so `tempogate keys generate --force` and `tempogate keys retire` run from another process take effect without a restart. A retire through the admin API applies immediately. Must be positive. |
 | `KEYS_PUBLISH_DELAY` | `5m` | Go duration; how long a new signing key is published in `/.well-known/jwks.json` before it signs. Until then the previous non-retired key keeps signing; when there is no other non-retired key (fresh install, or every key retired) the new key signs at once. **Must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`** (see [below](#why-new-keys-wait-before-signing)). `0` signs with a new key as soon as `serve` loads it. Must not be negative. |
 
-### State store (SQLite)
+### State store
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. See below for how its contents are protected. |
-| `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise; horizontal scaling needs a shared backend (not yet available). |
-| `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before erroring. |
+| `STATE_DRIVER` | `sqlite` | `sqlite` (one replica, a file on a volume) or `postgres` (one or more replicas over a shared PostgreSQL database). Every subcommand that opens the store (`serve`, `migrate`, `keys`, `sessions`) uses the same setting. |
 | `STATE_REAPER_INTERVAL` | `5m` | Go duration; how often `serve` deletes expired state (see below). `0` disables the reaper. |
 
-The database file and its `-wal` / `-shm` companions are created (and on every start, reset to) mode `0600`, whatever the umask.
-A missing state directory is created `0700`.
-An existing directory, such as a mounted volume, is left as it is; tempogate logs a warning if other users can enter it (group access, as a Kubernetes `fsGroup` grants, is expected and not reported).
+Both backends hold the same data with the same guarantees (the contract in `state/doc.go`, checked against both by the `state/storetest` suite), and `tempogate migrate` creates or upgrades either schema.
+Moving an existing installation from one backend to the other is not supported yet.
 
 Refresh tokens (including consumed ones), authorization codes, device codes and verification-page session ids are stored only as their SHA-256, so a copy of the database (a backup, a volume snapshot) holds nothing a client could present.
 The device flow's `user_code` is the exception: it is short enough that its hash would be reversed by trying every code, and approving it needs a signed-in browser session anyway.
-Upgrading to migration `0012` deletes the existing rows of those tables, because SQLite cannot compute the hashes: every user signs in once more after the upgrade.
 
 `serve` deletes expired rows every `STATE_REAPER_INTERVAL`, starting at boot: pending authorization requests, authorization codes, device codes and verification-page sessions once they expire, and denylisted integration-key ids an hour after the key's `expires_at` (keys without one stay denylisted).
 Refresh tokens go a whole session (family) at a time, and only once every token in it is dead: the session is past `OIDC_REFRESH_MAX_LIFETIME`, or every token has expired and was rotated or revoked.
 Until then rotated tokens are kept, so presenting one is still detected as reuse.
 Rows are deleted in batches so a large sweep does not hold up sign-ins; counts are logged at `debug`, failures at `warn`.
+With Postgres every replica runs the reaper; each batch skips rows another replica (or a request) has locked, so they share the work without coordination.
+
+#### SQLite
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `STATE_SQLITE_PATH` | `/var/lib/tempogate/state.db` | Holds the signing keypair, auth codes, and refresh tokens (including consumed ones, kept to detect reuse). Back it with durable storage: losing it rotates signing keys and invalidates every issued refresh token. See below for how its contents are protected. |
+| `STATE_SQLITE_MAX_CONNS` | `1` | SQLite tolerates one writer. Do not raise; to run more than one replica use `STATE_DRIVER=postgres`. |
+| `STATE_SQLITE_BUSY_TIMEOUT` | `5s` | Go duration; how long a query waits on a locked database before erroring. |
+
+The database file and its `-wal` / `-shm` companions are created (and on every start, reset to) mode `0600`, whatever the umask.
+A missing state directory is created `0700`.
+An existing directory, such as a mounted volume, is left as it is; tempogate logs a warning if other users can enter it (group access, as a Kubernetes `fsGroup` grants, is expected and not reported).
+
+Upgrading to migration `0012` deletes the existing rows of the tables whose secrets became hashes, because SQLite cannot compute the hashes: every user signs in once more after the upgrade.
+
+#### PostgreSQL
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `STATE_POSTGRES_DSN` | _(empty)_ | Connection string, URL (`postgres://user:pass@host:5432/db?sslmode=verify-full`) or keyword/value form. Set this or `STATE_POSTGRES_DSN_FILE`, not both. |
+| `STATE_POSTGRES_DSN_FILE` | _(empty)_ | Path to a file holding the connection string (surrounding whitespace ignored), e.g. a mounted Kubernetes Secret. It is read again for every new connection, so a rotated password applies without a restart; the pool settings below are read at startup. |
+| `STATE_POSTGRES_MAX_CONNS` | `10` | Connections per replica, at least `2`. Size the server's `max_connections` (or the pooler) for replicas × this, plus one LISTEN connection per replica. |
+| `STATE_POSTGRES_CONN_MAX_IDLE_TIME` | `30m` | Go duration; pooled connections idle longer than this are closed. |
+| `STATE_POSTGRES_LISTEN_DSN` | the main DSN | Connection string for the one long-lived `LISTEN` connection each replica holds (see below). Set it to reach Postgres directly when the main DSN goes through a transaction-mode pooler. |
+| `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE` | `false` | Development only: let tempogate connect to a non-loopback host without `sslmode=verify-full`. Logs a warning at startup. |
+
+PostgreSQL 15 is the minimum; CI tests 15 and 18, the oldest and newest majors with community support.
+Managed services (RDS, Cloud SQL, Azure Database for PostgreSQL) work like any other server.
+CockroachDB and other Postgres-compatible databases are not supported.
+
+Run `tempogate migrate` before `serve`, with a role that may create tables in the database's default schema; `serve`, `keys` and `sessions` only need to read and write rows.
+Migrations run in one transaction under a Postgres advisory lock, so replicas (or init containers) racing to migrate apply each version once, and a migration that fails leaves the schema as it was.
+
+**Connection security.**
+`serve`, `migrate` and every other subcommand refuse a connection string that could reach a remote server without authenticating it: every host must use `sslmode=verify-full`, with the server's CA available (`sslrootcert=/path/ca.pem`, or the system roots).
+`require` and `verify-ca` encrypt but accept an impostor, and `prefer` (the libpq default) silently falls back to plain text.
+Unix sockets and loopback hosts (`localhost`, `127.0.0.0/8`, `::1`) are exempt, and `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE=true` relaxes the check for development stacks, where the database is a container on a private network.
+Also add `require_auth=scram-sha-256`, so a server (or an attacker in the middle) cannot downgrade the login to MD5 or a cleartext password:
+
+```text
+postgres://tempogate@db.example.com:5432/tempogate?sslmode=verify-full&sslrootcert=/etc/tempogate/db-ca.pem&require_auth=scram-sha-256
+```
+
+**Change notifications.**
+Key generation and retirement and integration-key revocation send a Postgres `NOTIFY` in the same transaction, and every replica holds one `LISTEN` connection, so all replicas reload keys and refuse a revoked integration key within moments instead of within `KEYS_RELOAD_INTERVAL` and the 30 s denylist cache.
+Token requests never notify.
+The listener reconnects with backoff (logged at `warn`) and then re-reads what it may have missed; the periodic reloads stay in place either way, so a lost listener only makes changes slower to arrive, never lost.
+
+**Behind PgBouncer.**
+In transaction pooling mode, set `max_prepared_statements` (PgBouncer 1.21 or later) to a non-zero value, or add `default_query_exec_mode=exec` to `STATE_POSTGRES_DSN`, because tempogate's driver prepares statements.
+Transaction pooling cannot hold a `LISTEN`, so point `STATE_POSTGRES_LISTEN_DSN` at the database directly (or at a session-mode pool).
+Migrations and first-boot key generation use transaction-level advisory locks, which work through a transaction pooler.
+
+**Several replicas.**
+Every replica must share `OIDC_SESSION_SIGNING_KEY` and the rest of the configuration; no sticky sessions are needed, because all flow state is in the database.
+On an empty database, replicas starting together generate one signing key between them.
+Rate limits (`HTTP_RATE_LIMIT_*`) are counted per replica, so the effective limit is replicas × the configured value.
+The Helm chart does not offer this mode yet: it still runs one replica on SQLite.
 
 ### Signing-key encryption
 
@@ -594,7 +649,8 @@ INFO	http	http request	{"listener": "public", "method": "POST", "path": "/token"
 ### Health probes
 
 - **`/healthz`** (liveness) only says the process serves HTTP. It never touches the state store: restarting cannot bring back a lost volume, it would only turn a storage outage into a crash loop.
-- **`/readyz`** (readiness) is `503` until the public listener is bound, and on every call checks the state store with a 500 ms budget (inside the kubelet's default 1 s probe timeout). The check pings the serving connection and also opens the database file at `STATE_SQLITE_PATH` read-only and reads the schema table, because the long-lived connection keeps working on a file that has been deleted, truncated or replaced underneath it. While it fails, `/readyz` answers `503` with a generic body (the cause is logged at `warn` and counted in `tempogate_db_errors_total{op="probe"}`), so the pod leaves the Service endpoints until the store is back.
+- **`/readyz`** (readiness) is `503` until the public listener is bound, and on every call checks the state store with a 500 ms budget (inside the kubelet's default 1 s probe timeout). With SQLite the check pings the serving connection and also opens the database file at `STATE_SQLITE_PATH` read-only and reads the schema table, because the long-lived connection keeps working on a file that has been deleted, truncated or replaced underneath it.
+With Postgres it reads the schema table over a pooled connection. While it fails, `/readyz` answers `503` with a generic body (the cause is logged at `warn` and counted in `tempogate_db_errors_total{op="probe"}`), so the pod leaves the Service endpoints until the store is back.
 
 ## See also
 

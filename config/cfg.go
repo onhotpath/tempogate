@@ -148,8 +148,20 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration `ferry:"shutdown_timeout"`
 }
 
+// State drivers (STATE_DRIVER).
+const (
+	StateDriverSQLite   = "sqlite"
+	StateDriverPostgres = "postgres"
+)
+
 type StateConfig struct {
-	Sqlite SqliteConfig `ferry:"sqlite"`
+	// Driver (STATE_DRIVER) selects the state store backend: StateDriverSQLite
+	// (the default, one replica) or StateDriverPostgres (one or more
+	// replicas over a shared database).
+	Driver string `ferry:"driver"`
+
+	Sqlite   SqliteConfig   `ferry:"sqlite"`
+	Postgres PostgresConfig `ferry:"postgres"`
 
 	// ReaperInterval (STATE_REAPER_INTERVAL) is how often `serve` deletes
 	// expired rows. 0 disables the reaper.
@@ -160,6 +172,28 @@ type SqliteConfig struct {
 	Path        string        `ferry:"path"`
 	MaxConns    int           `ferry:"max_conns"`
 	BusyTimeout time.Duration `ferry:"busy_timeout"`
+}
+
+// PostgresConfig configures the Postgres state store (STATE_DRIVER=postgres).
+type PostgresConfig struct {
+	// DSN (STATE_POSTGRES_DSN) is the connection string, URL or
+	// keyword/value form. DSNFile (STATE_POSTGRES_DSN_FILE) reads it from a
+	// file instead, re-read for every new connection so a rotated password
+	// applies without a restart. Set exactly one.
+	DSN     string `ferry:"dsn"`
+	DSNFile string `ferry:"dsn_file"`
+
+	// ListenDSN (STATE_POSTGRES_LISTEN_DSN) is the connection string for the
+	// change feed's one LISTEN connection. Empty uses DSN (or DSNFile). Set
+	// it to connect directly when DSN goes through a transaction-mode pooler.
+	ListenDSN string `ferry:"listen_dsn"`
+
+	MaxConns        int           `ferry:"max_conns"`
+	ConnMaxIdleTime time.Duration `ferry:"conn_max_idle_time"`
+
+	// AllowInsecureSSLMode lets the store connect to a non-loopback host
+	// with an sslmode weaker than verify-full. Development only.
+	AllowInsecureSSLMode bool `ferry:"allow_insecure_sslmode"`
 }
 
 // OIDCConfig carries the externally reachable identity of this server and the

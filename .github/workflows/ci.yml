@@ -67,8 +67,9 @@ jobs:
 
       # Rot guard: the distributed CLI is built with -tags lean and must not
       # link the heavy server/state subtree — the SQLite engine (modernc
-      # sqlite/libc, ~5 MB), the api/state-store packages or the Prometheus
-      # client (server-only metrics). (The CLI is an OIDC client, so the
+      # sqlite/libc, ~5 MB), the Postgres driver (jackc/pgx), the
+      # api/state-store packages or the Prometheus client (server-only
+      # metrics). (The CLI is an OIDC client, so the
       # pure-Go oidc/keys/jwx packages are expected and fine.) Deterministic
       # via the import graph, so it can't be masked by dead-code elimination.
       # Fails loudly if a server import leaks in.
@@ -76,11 +77,11 @@ jobs:
         run: |
           go build -tags lean -o /dev/null .
           leaked=$(go list -tags lean -deps . \
-            | grep -E '^github\.com/onhotpath/tempogate/(api|state/sqlite|cmd/servercmd|metrics)$|^modernc\.org/(sqlite|libc)|^github\.com/prometheus/' || true)
+            | grep -E '^github\.com/onhotpath/tempogate/(api|state/sqlite|state/postgres|cmd/servercmd|metrics)$|^modernc\.org/(sqlite|libc)|^github\.com/jackc/|^github\.com/prometheus/' || true)
           if [ -n "$leaked" ]; then
             echo "server packages leaked into the lean CLI:"; echo "$leaked"; exit 1
           fi
-          echo "lean import graph clean (no api / state/sqlite / servercmd / metrics / prometheus / modernc sqlite|libc)"
+          echo "lean import graph clean (no api / state/sqlite / state/postgres / servercmd / metrics / prometheus / modernc sqlite|libc / jackc pgx)"
 
       - name: Save Go cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -92,8 +93,29 @@ jobs:
   test:
     name: test (race + coverage)
     runs-on: ubuntu-latest
+    # The state store conformance suite and state/postgres's own tests run
+    # against the oldest and newest supported PostgreSQL majors (the same
+    # images state/postgres/pg_test.go starts locally, which checks they
+    # match). Without these the Postgres tests would fail in CI, never skip.
+    services:
+      postgres15:
+        image: postgres:15-alpine@sha256:d2c2ced0372e855e4c257a9e9b5725f403847c01cfb64facbf2b21dbdadb2d74
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5415:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      postgres18:
+        image: postgres:18-alpine@sha256:83148c0bc09eac4d598b70a61e1404d0212b76c95c504bfd6c81a4c59ec91792
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5418:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
     env:
       CI_TARGETS: test-run
+      TEMPOGATE_TEST_POSTGRES_URLS: >-
+        postgres://postgres:postgres@127.0.0.1:5415/postgres?sslmode=disable,postgres://postgres:postgres@127.0.0.1:5418/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 

@@ -51,7 +51,8 @@ the gap Temporal's own docs already describe: point the Web UI at
 
 One binary with subcommands `serve`, `login`, `token`, `keys`, `sessions`,
 `migrate`, `version`. State is pluggable; the default is SQLite on a PVC via the pure-Go
-`modernc.org/sqlite` driver, with embedded migrations applied by
+`modernc.org/sqlite` driver, and PostgreSQL 15+ (`STATE_DRIVER=postgres`) holds it for
+several replicas. Embedded migrations for either are applied by
 `tempogate migrate`.
 `tempogate gen-oas` prints the OpenAPI 3.1 spec of the public API (`--admin` for the admin API, `-f json` for JSON).
 `make gen-oas` writes both to `api/openapi.yaml` and `api/openapi.admin.yaml`; they are generated on demand and not committed.
@@ -60,7 +61,7 @@ One binary with subcommands `serve`, `login`, `token`, `keys`, `sessions`,
 
 Wired and exercised end to end:
 
-- `/healthz`, `/readyz` (readiness also checks the SQLite state store)
+- `/healthz`, `/readyz` (readiness also checks the state store)
 - Prometheus `/metrics` on the private admin listener, and one structured
   access-log line per request (see [docs/configuration.md](docs/configuration.md#observability))
 - `/.well-known/jwks.json` and the full `/.well-known/openid-configuration`
@@ -380,9 +381,14 @@ See [docs/configuration.md](docs/configuration.md).
 | `ADMIN_ALLOW_SYSTEM_GRANTS` | No | `false` | Allow minting cluster-wide `temporal-system` keys (403 otherwise) |
 | `ADMIN_KEYS_MAX_TTL` | No | `2160h` (90 days) | Furthest in the future an integration key's required `expires_at` may lie |
 | `SERVER_READ_HEADER_TIMEOUT`, `SERVER_READ_TIMEOUT`, `SERVER_WRITE_TIMEOUT`, `SERVER_IDLE_TIMEOUT`, `SERVER_MAX_HEADER_BYTES`, `SERVER_SHUTDOWN_TIMEOUT` | No | `10s`, `15s`, `30s`, `60s`, `16384`, `15s` | HTTP server hardening for both listeners; see [docs/configuration.md](docs/configuration.md#http-server-hardening) |
+| `STATE_DRIVER` | No | `sqlite` | State store backend: `sqlite` (one replica) or `postgres` (one or more). See [State store](docs/configuration.md#state-store) |
 | `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
 | `STATE_SQLITE_MAX_CONNS` | No | `1` | SQLite connection pool size; do not raise (one writer) |
 | `STATE_SQLITE_BUSY_TIMEOUT` | No | `5s` | How long a query waits on a locked database |
+| `STATE_POSTGRES_DSN` / `STATE_POSTGRES_DSN_FILE` | With `STATE_DRIVER=postgres` | _(empty)_ | PostgreSQL 15+ connection string (or a file holding it, re-read per connection); a remote host needs `sslmode=verify-full`. See [PostgreSQL](docs/configuration.md#postgresql) |
+| `STATE_POSTGRES_MAX_CONNS`, `STATE_POSTGRES_CONN_MAX_IDLE_TIME` | No | `10`, `30m` | Connection pool size per replica (at least 2) and idle timeout |
+| `STATE_POSTGRES_LISTEN_DSN` | Behind a transaction-mode pooler | the main DSN | Direct connection for the change-notification `LISTEN` |
+| `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE` | No | `false` | Dev only: allow a non-loopback host without `sslmode=verify-full` |
 | `STATE_REAPER_INTERVAL` | No | `5m` | How often `serve` deletes expired state; `0` disables |
 | `KEYS_ENCRYPTION_KEY` / `KEYS_ENCRYPTION_KEY_FILE` | No | _(empty)_ | Base64 32-byte key (or a file holding it) that encrypts the stored signing key. See [Signing-key encryption](docs/configuration.md#signing-key-encryption) |
 | `KEYS_RETIREMENT_GRACE` | No | `4h` | How long a retired signing key stays in JWKS and keeps verifying |
@@ -479,7 +485,7 @@ Go 1.27+ is required. See [CONTRIBUTING.md](CONTRIBUTING.md).
 The state database is created owner-only (`0600`, in a `0700` directory when tempogate creates it).
 Bearer secrets in it (refresh tokens, authorization and device codes, session ids) are stored only as SHA-256 hashes.
 The signing key is stored as plain PEM unless you set `KEYS_ENCRYPTION_KEY`; set it in production so a leaked backup or volume snapshot cannot mint tokens.
-See [docs/configuration.md](docs/configuration.md#state-store-sqlite).
+See [docs/configuration.md](docs/configuration.md#sqlite).
 
 Report vulnerabilities via
 [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new)

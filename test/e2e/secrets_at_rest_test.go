@@ -51,6 +51,7 @@ import (
 const e2eKEK = "a2VrLWZvci10aGUtZTJlLXN1aXRlLW9ubHktMDAwMSE="
 
 func TestSecretsAtRest(t *testing.T) {
+	skipOnPostgres(t)
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}

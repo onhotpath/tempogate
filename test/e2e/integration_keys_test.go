@@ -715,6 +715,7 @@ func startIntegrationKeysTempogate(ctx context.Context, t *testing.T, netName st
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	addAdminAuthEnv(ctx, t, tgEnv, allowSystemGrants)
+	withStateBackend(ctx, t, netName, tgEnv)
 	stateVol := stateVolume(t, "tempogate-intkeys-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 

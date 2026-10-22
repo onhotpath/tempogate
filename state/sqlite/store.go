@@ -22,6 +22,8 @@ import (
 	"go.uber.org/zap"
 	// Pure-Go SQLite driver registered under the "sqlite" name with database/sql.
 	_ "modernc.org/sqlite"
+
+	"github.com/onhotpath/tempogate/state/internal/changefeed"
 )
 
 type options struct {
@@ -80,7 +82,7 @@ type Store struct {
 	db       *sql.DB
 	probe    *sql.DB
 	observer ErrorObserver
-	changes  changeHub
+	changes  changefeed.Hub
 }
 
 func New(opts ...Option) (*Store, error) {

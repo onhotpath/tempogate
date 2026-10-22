@@ -68,20 +68,31 @@ Temporal.
 same binary is the laptop CLI. Migrations are embedded and applied by `migrate`.
 Each server subcommand builds only the dependencies it uses, when it runs:
 `serve` (and `gen-oas`) need the full OIDC configuration, while `migrate`,
-`keys` and `sessions` need just the state store (`STATE_SQLITE_PATH`, plus
+`keys` and `sessions` need just the state store (`STATE_DRIVER` and its settings, plus
 `KEYS_ENCRYPTION_KEY` for `keys` when signing keys are encrypted) and
 `version` nothing.
 
 **Pluggable state, SQLite by default.** The state store (signing keypair,
-authorization codes, refresh tokens) is an interface; the default is SQLite on
-a PersistentVolumeClaim via the pure-Go `modernc.org/sqlite` driver — no CGO,
-no external database to run a small deployment. SQLite tolerates one writer,
-so the deployment is single-replica until a shared backend lands; the chart
-enforces this (`replicaCount: 1`, autoscaling off, `Recreate` strategy).
-What any backend must guarantee (consume-once, conditional transitions,
-ordering, an application-owned clock, optional change notifications) is
-written down in `state/doc.go` and checked by the `state/storetest`
-conformance suite.
+authorization codes, refresh tokens) is an interface with two backends,
+chosen by `STATE_DRIVER`. The default is SQLite on a PersistentVolumeClaim via
+the pure-Go `modernc.org/sqlite` driver — no CGO, no external database to run
+a small deployment. SQLite tolerates one writer, so with it the deployment is
+single-replica; the chart enforces this (`replicaCount: 1`, autoscaling off,
+`Recreate` strategy). PostgreSQL 15+ (`state/postgres`, the native `pgx`
+driver) is the shared backend for several replicas: where SQLite relies on
+its single writer, it takes row locks under READ COMMITTED (a per-family row
+that a rotation locks FOR SHARE and a revocation updates first, the device
+code row on poll, the active keypairs on retirement), runs migrations and
+first-boot key generation under transaction-level advisory locks, reaps in
+`FOR UPDATE SKIP LOCKED` batches on every replica, and tells every replica of
+key changes and integration-key revocations through `LISTEN/NOTIFY`, with the
+periodic reloads kept as the backstop. Each backend has its own migrations
+directory, paired by number and name from the Postgres baseline (SQLite's
+0014) on. What any backend must guarantee (consume-once, conditional
+transitions, ordering, an application-owned clock, optional change
+notifications) is written down in `state/doc.go` and checked by the
+`state/storetest` conformance suite, which CI runs against SQLite and against
+PostgreSQL 15 and 18.
 
 **Nothing in the state store is a usable credential on its own.** A copy of
 the database is the realistic leak (a backup, a volume snapshot, another
@@ -115,7 +126,10 @@ See [docs/configuration.md](configuration.md#abuse-controls).
 schema. In Kubernetes `migrate` runs as an initContainer of the single
 tempogate pod; the `Recreate` strategy stops the previous pod first, so the
 migration never races a running server for the SQLite file or its
-ReadWriteOnce volume.
+ReadWriteOnce volume. With Postgres, migrations take an advisory lock and
+apply every pending file in one transaction, so concurrent runs are safe and
+a failed one leaves no partial schema; they must be expand/contract, because
+a rolling update runs two versions against one database.
 
 **PKCE mandatory, with one auditable carve-out.** Every registered client is
 public and must use PKCE. A deliberately separate `OIDC_CLIENT_SECRETS`

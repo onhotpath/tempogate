@@ -2,7 +2,7 @@
 // server exposes on the admin listener's /metrics. Feature packages never
 // import Prometheus: each declares a small observer interface of its own
 // (oidc.LoginObserver, oidc.TokenObserver, oidc.RateLimitObserver, oidc.AuthzObserver,
-// google.Observer, sqlite.ErrorObserver) and *Metrics satisfies them
+// google.Observer, sqlite.ErrorObserver, postgres.ErrorObserver) and *Metrics satisfies them
 // structurally, bound via fx.As in Fx. Only the full server build links this
 // package; the lean CLI never does.
 package metrics
@@ -109,7 +109,7 @@ func New(opts ...Option) *Metrics {
 		dbErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "db_errors_total",
-			Help:      "State store (SQLite) operations that failed, by operation. Not-found results are not errors.",
+			Help:      "State store operations that failed, by operation. Not-found results are not errors.",
 		}, []string{"op"}),
 	}
 
@@ -189,7 +189,7 @@ func (m *Metrics) ObserveUpstream(op string, took time.Duration, err error) {
 	m.upstreamErrors.WithLabelValues(op, reason).Inc()
 }
 
-// ObserveDBError satisfies sqlite.ErrorObserver.
+// ObserveDBError satisfies sqlite.ErrorObserver and postgres.ErrorObserver.
 func (m *Metrics) ObserveDBError(op string) {
 	m.dbErrors.WithLabelValues(op).Inc()
 }

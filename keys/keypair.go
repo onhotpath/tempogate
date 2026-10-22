@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/jwx/v4/jwk"
+
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 const (
@@ -59,7 +61,7 @@ func GenerateKeypair(opts ...GenerateOption) (Keypair, error) {
 	cfg := generateConfig{
 		alg:     AlgRS256,
 		rsaBits: defaultRSABits,
-		now:     func() time.Time { return time.Now().UTC() },
+		now:     clock.Now,
 	}
 	for _, o := range opts {
 		o(&cfg)

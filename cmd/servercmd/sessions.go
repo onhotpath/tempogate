@@ -10,19 +10,21 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 
-	"github.com/onhotpath/tempogate/state/sqlite"
+	"github.com/onhotpath/tempogate/admin"
+	"github.com/onhotpath/tempogate/internal/clock"
 )
 
 type sessionsParams struct {
 	fx.In
 
-	Store *sqlite.Store
+	Store    stateStore
+	Sessions admin.SessionStore
 }
 
 // newSessionsCmd lets an operator inspect and end refresh-token sessions
 // (one per sign-in, i.e. per refresh-token family) directly on the state
 // store, like `keys`. The admin API's /admin/sessions routes are its HTTP
-// twin over the same store methods; keep the two surfaces equal.
+// twin over the same admin.SessionStore; keep the two surfaces equal.
 func newSessionsCmd(load deps[sessionsParams]) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sessions",
@@ -33,7 +35,7 @@ func newSessionsCmd(load deps[sessionsParams]) *cobra.Command {
 }
 
 func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
-	var f sqlite.RefreshSessionFilter
+	var f admin.SessionFilter
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List live sessions (never prints token values)",
@@ -43,7 +45,7 @@ func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 				if err := storeReady(ctx, p.Store); err != nil {
 					return err
 				}
-				sessions, err := p.Store.ListRefreshSessions(ctx, f, time.Now().UTC())
+				sessions, err := p.Sessions.List(ctx, f, clock.Now())
 				if err != nil {
 					return err
 				}
@@ -81,18 +83,18 @@ func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 				if err := storeReady(ctx, p.Store); err != nil {
 					return err
 				}
-				now := time.Now().UTC()
+				now := clock.Now()
 				var (
 					n   int
 					err error
 				)
 				switch {
 				case email != "":
-					n, err = p.Store.RevokeRefreshByEmail(ctx, email, now)
+					n, err = p.Sessions.RevokeEmail(ctx, email, now)
 				case subject != "":
-					n, err = p.Store.RevokeRefreshBySubject(ctx, subject, now)
+					n, err = p.Sessions.RevokeSubject(ctx, subject, now)
 				default:
-					n, err = p.Store.RevokeRefreshFamily(ctx, family, now)
+					n, err = p.Sessions.RevokeFamily(ctx, family, now)
 				}
 				if err != nil {
 					return err
@@ -112,7 +114,7 @@ func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 
 // storeReady refuses to touch a store that is unreachable or not yet
 // migrated, mirroring `keys generate`.
-func storeReady(ctx context.Context, s *sqlite.Store) error {
+func storeReady(ctx context.Context, s stateStore) error {
 	if err := s.Ping(ctx); err != nil {
 		return fmt.Errorf("state store unreachable: %w", err)
 	}

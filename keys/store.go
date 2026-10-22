@@ -29,3 +29,20 @@ type KeyStore interface {
 	// leave none; an unknown kid is ErrKeypairNotFound.
 	RetireKeypair(ctx context.Context, kid string, at time.Time) (Keypair, error)
 }
+
+// BootstrapLocker is the optional seam through which a store shared by
+// several processes serialises first-boot key generation: replicas starting
+// together on an empty database would otherwise each generate (and sign
+// with) a key of their own. LockKeyBootstrap runs fn while holding a lock no
+// other process sharing the store can hold at the same time, and returns
+// fn's error. A single-writer store (SQLite) needs no such lock and does
+// not offer one.
+type BootstrapLocker interface {
+	LockKeyBootstrap(ctx context.Context, fn func(context.Context) error) error
+}
+
+// WithBootstrapLocker makes Init load and, if needed, generate under
+// locker. Nil keeps Init unlocked.
+func WithBootstrapLocker(locker BootstrapLocker) Option {
+	return func(k *Keys) { k.bootstrap = locker }
+}

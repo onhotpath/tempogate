@@ -53,7 +53,7 @@ func (s *StoreSuite) TearDownTest() {
 func (s *StoreSuite) latestVersion() int {
 	migs, err := loadMigrations()
 	s.Require().NoError(err)
-	return migs[len(migs)-1].version
+	return migs[len(migs)-1].Version
 }
 
 func (s *StoreSuite) TestNewRejectsEmptyPath() {
@@ -597,33 +597,6 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 	}
 
 	s.store = nil
-}
-
-func (s *StoreSuite) TestParseMigration() {
-	cases := []struct {
-		name    string
-		fname   string
-		wantErr bool
-		wantVer int
-	}{
-		{"valid", "0001_keypairs.sql", false, 1},
-		{"three digits", "042_foo.sql", false, 42},
-		{"no underscore", "0001.sql", true, 0},
-		{"underscore at start", "_keypairs.sql", true, 0},
-		{"non-numeric prefix", "abcd_foo.sql", true, 0},
-	}
-
-	for _, tc := range cases {
-		s.Run(tc.name, func() {
-			m, err := parseMigration(tc.fname)
-			if tc.wantErr {
-				s.Require().Error(err)
-				return
-			}
-			s.Require().NoError(err)
-			s.Equal(tc.wantVer, m.version)
-		})
-	}
 }
 
 func (s *StoreSuite) TestFxRejectsEmptyPath() {

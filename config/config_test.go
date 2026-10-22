@@ -30,6 +30,10 @@ var wantDefaultServer = ServerConfig{
 	ShutdownTimeout:   15 * time.Second,
 }
 
+// wantDefaultPostgres pins the Postgres pool defaults, unused while
+// STATE_DRIVER is sqlite.
+var wantDefaultPostgres = PostgresConfig{MaxConns: 10, ConnMaxIdleTime: 30 * time.Minute}
+
 func (s *ConfigSuite) TestNew() {
 	cases := []struct {
 		name string
@@ -61,6 +65,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -113,6 +119,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -166,6 +174,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -264,6 +274,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -316,10 +328,75 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/tmp/tempogate.db",
 						MaxConns:    8,
 						BusyTimeout: 2 * time.Second,
+					},
+					ReaperInterval: 5 * time.Minute,
+				},
+				OIDC: OIDCConfig{
+					Issuer:              "http://127.0.0.1:8000",
+					SessionTTL:          5 * time.Minute,
+					AccessTokenTTL:      4 * time.Hour,
+					AccessTokenAudience: "temporal",
+					RefreshTokenTTL:     7 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
+					Google: GoogleConfig{
+						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
+						TokenEndpoint: "https://oauth2.googleapis.com/token",
+						IssuerURL:     "https://accounts.google.com",
+					},
+				},
+			},
+		},
+		{
+			name: "postgres from env",
+			env: map[string]string{
+				"STATE_DRIVER":                          "postgres",
+				"STATE_POSTGRES_DSN_FILE":               "/run/secrets/dsn",
+				"STATE_POSTGRES_LISTEN_DSN":             "postgres://db:5432/tempogate?sslmode=verify-full",
+				"STATE_POSTGRES_MAX_CONNS":              "20",
+				"STATE_POSTGRES_CONN_MAX_IDLE_TIME":     "2m",
+				"STATE_POSTGRES_ALLOW_INSECURE_SSLMODE": "true",
+			},
+			want: &Config{
+				Log: LogConfig{Level: "info", Requests: true},
+				HTTP: HTTPConfig{
+					Listener: Listener{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 8000,
+					},
+					RateLimit: defaultRateLimits,
+				},
+				Admin: AdminConfig{
+					Listener: Listener{
+						IP:   net.IPv4(127, 0, 0, 1),
+						Port: 8081,
+					},
+					Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+				},
+				Keys: KeysConfig{
+					RetirementGrace: 4 * time.Hour,
+					ReloadInterval:  30 * time.Second,
+					PublishDelay:    5 * time.Minute,
+				},
+				Server: wantDefaultServer,
+				State: StateConfig{
+					Driver: StateDriverPostgres,
+					Postgres: PostgresConfig{
+						DSNFile:              "/run/secrets/dsn",
+						ListenDSN:            "postgres://db:5432/tempogate?sslmode=verify-full",
+						MaxConns:             20,
+						ConnMaxIdleTime:      2 * time.Minute,
+						AllowInsecureSSLMode: true,
+					},
+					Sqlite: SqliteConfig{
+						Path:        "/var/lib/tempogate/state.db",
+						MaxConns:    1,
+						BusyTimeout: 5 * time.Second,
 					},
 					ReaperInterval: 5 * time.Minute,
 				},
@@ -366,6 +443,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -418,6 +497,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -470,6 +551,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -525,6 +608,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,
@@ -579,6 +664,8 @@ func (s *ConfigSuite) TestNew() {
 				},
 				Server: wantDefaultServer,
 				State: StateConfig{
+					Driver:   StateDriverSQLite,
+					Postgres: wantDefaultPostgres,
 					Sqlite: SqliteConfig{
 						Path:        "/var/lib/tempogate/state.db",
 						MaxConns:    1,

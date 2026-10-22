@@ -205,6 +205,7 @@ func (tg *restartableTempogate) start(t *testing.T, env map[string]string, migra
 		tg.vol = stateVolume(tg.owner, prefix)
 	}
 	mounts := testcontainers.Mounts(testcontainers.VolumeMount(tg.vol, "/state"))
+	withStateBackend(ctx, tg.owner, tg.netName, env)
 
 	if migrate {
 		m, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

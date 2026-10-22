@@ -263,6 +263,37 @@ func sessionCases() []testCase {
 			require.NoError(t, err)
 			require.Empty(t, got, "filters combine")
 		}},
+		{"Sessions/EmailsOrderBytewiseAndFoldOnlyASCII", func(t *testing.T, b Backend) {
+			// SQLite compares and orders text bytewise and its lower() folds
+			// only A-Z; a backend must not swap in its locale's rules, or the
+			// same sessions list and revoke differently per backend.
+			for _, p := range []struct{ token, email string }{
+				{"emile", "émile@example.com"},
+				{"bob", "bob@example.com"},
+				{"zoe", "Zoe@example.com"},
+			} {
+				r := refresh(p.token, "fam-"+p.token)
+				r.Email = p.email
+				saveRefresh(t, b.Store, r)
+			}
+			got, err := b.Sessions.List(t.Context(), admin.SessionFilter{}, t0)
+			require.NoError(t, err)
+			require.Equal(t, []string{"fam-zoe", "fam-bob", "fam-emile"}, families(got), "uppercase before lowercase before non-ASCII")
+
+			got, err = b.Sessions.List(t.Context(), admin.SessionFilter{Email: "ZOE@EXAMPLE.COM"}, t0)
+			require.NoError(t, err)
+			require.Equal(t, []string{"fam-zoe"}, families(got), "ASCII letters fold")
+			got, err = b.Sessions.List(t.Context(), admin.SessionFilter{Email: "ÉMILE@example.com"}, t0)
+			require.NoError(t, err)
+			require.Empty(t, got, "other letters do not")
+
+			n, err := b.Sessions.RevokeEmail(t.Context(), "ÉMILE@example.com", t0)
+			require.NoError(t, err)
+			require.Zero(t, n)
+			n, err = b.Sessions.RevokeEmail(t.Context(), "émile@EXAMPLE.com", t0)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+		}},
 		{"Sessions/RevokeFamily", func(t *testing.T, b Backend) {
 			seed(t, b)
 			n, err := b.Sessions.RevokeFamily(t.Context(), "fam-alice-1", now)

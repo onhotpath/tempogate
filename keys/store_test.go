@@ -2,10 +2,12 @@ package keys
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -137,4 +139,41 @@ func (s *KeyStoreSuite) TestLoadReturnsCopy() {
 	s.Require().NoError(err)
 	s.Require().Len(again, 1)
 	s.Equal("kid-1", again[0].Kid)
+}
+
+// mutexLocker is a BootstrapLocker over an in-process mutex, standing in for
+// the advisory lock a shared store takes.
+type mutexLocker struct {
+	mu    sync.Mutex
+	calls int
+	err   error
+}
+
+func (l *mutexLocker) LockKeyBootstrap(ctx context.Context, fn func(context.Context) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls++
+	if l.err != nil {
+		return l.err
+	}
+	return fn(ctx)
+}
+
+// TestInitUnderABootstrapLockGeneratesOneKey: processes sharing one store
+// and one lock agree on a single first key.
+func TestInitUnderABootstrapLockGeneratesOneKey(t *testing.T) {
+	store, locker := &fakeKeyStore{}, &mutexLocker{}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			k := New(WithStore(store), WithBootstrapLocker(locker), WithGenerateOptions(WithRSABits(2048)))
+			require.NoError(t, k.Init(t.Context()))
+		})
+	}
+	wg.Wait()
+	require.Equal(t, 4, locker.calls)
+	require.Len(t, store.kps, 1)
+
+	locker.err = errors.New("lock unavailable")
+	require.ErrorIs(t, New(WithStore(store), WithBootstrapLocker(locker)).Init(t.Context()), locker.err)
 }

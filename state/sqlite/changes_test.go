@@ -65,10 +65,10 @@ func (s *StoreSuite) TestChangesArePublishedForCommittedWritesOnly() {
 func (s *StoreSuite) TestASlowSubscriberMissesChangesWithoutBlockingWrites() {
 	ch := s.store.SubscribeChanges(s.ctx)
 	at := time.Now().UTC()
-	for i := range changeBuffer + 3 {
+	for i := range cap(ch) + 3 {
 		s.Require().NoError(s.store.SaveKeypair(s.ctx, changeKeypair(string(rune('a'+i)), at)))
 	}
-	s.Len(ch, changeBuffer, "changes past the buffer are dropped, never waited for")
+	s.Len(ch, cap(ch), "changes past the buffer are dropped, never waited for")
 }
 
 func (s *StoreSuite) TestSubscriptionClosesWithItsContext() {

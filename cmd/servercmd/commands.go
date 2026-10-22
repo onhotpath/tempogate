@@ -26,19 +26,19 @@ func Fx() fx.Option {
 		fx.Provide(newGraph),
 		fx.Provide(
 			asCommand(func(g graph) *cobra.Command {
-				return newServeCmd(lazy[serveParams](g, serverModules()...))
+				return newServeCmd(lazy[serveParams](g, serverModules(g)...))
 			}),
 			asCommand(func(g graph) *cobra.Command {
-				return newMigrateCmd(lazy[migrateParams](g, storeModules()...))
+				return newMigrateCmd(lazy[migrateParams](g, storeModules(g)...))
 			}),
 			asCommand(func(g graph) *cobra.Command {
-				return newKeysCmd(lazy[keysParams](g, keysModules()...))
+				return newKeysCmd(lazy[keysParams](g, keysModules(g)...))
 			}),
 			asCommand(func(g graph) *cobra.Command {
-				return newSessionsCmd(lazy[sessionsParams](g, storeModules()...))
+				return newSessionsCmd(lazy[sessionsParams](g, storeModules(g)...))
 			}),
 			asCommand(func(g graph) *cobra.Command {
-				return newGenOASCmd(lazy[genOASParams](g, serverModules()...))
+				return newGenOASCmd(lazy[genOASParams](g, serverModules(g)...))
 			}),
 			asCommand(func(g graph) *cobra.Command {
 				return newAuthzCmd(lazy[authzParams](g, authz.Fx()))
