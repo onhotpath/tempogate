@@ -169,8 +169,10 @@ jobs:
 
           # On the tag path the tag already exists; on the main path it
           # does not yet — `--target` makes `gh` create it at this commit.
+          # `--latest=false` keeps the binary release as the repo's Latest.
           gh release create "$tag" "$pkg" \
             --target "$GITHUB_SHA" \
+            --latest=false \
             --title "tempogate Helm chart v${version}" \
             --notes "Install without cloning the repo:
 
