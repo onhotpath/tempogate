@@ -27,43 +27,58 @@ type migration struct {
 	sql     string
 }
 
-// IsCurrent returns nil when the database has applied every embedded
-// migration. When the applied max-version trails the embedded one it
-// returns an error in the form
+// IsCurrent returns nil when every embedded migration is recorded in
+// schema_migrations, checked per version the same way Migrate applies them.
+// Versions recorded in the database but not embedded (a newer database read
+// by an older binary) are ignored. When the unapplied versions all sit above
+// the highest applied one it returns
 //
 //	schema version X, expected Y; run `tempogate migrate`
 //
-// which is what serve surfaces to the operator.
+// and when any lies below it (migrations merged out of numeric order) it
+// names them instead:
+//
+//	schema is missing migrations 10, 12; run `tempogate migrate`
+//
+// serve surfaces either message to the operator.
 func (s *Store) IsCurrent(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaVersionDDL); err != nil {
 		return fmt.Errorf("sqlite: ensure schema_migrations: %w", err)
-	}
-
-	var dbMax sql.NullInt64
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT MAX(version) FROM schema_migrations`,
-	).Scan(&dbMax); err != nil {
-		return fmt.Errorf("sqlite: read max version: %w", err)
-	}
-
-	applied := 0
-	if dbMax.Valid {
-		applied = int(dbMax.Int64)
 	}
 
 	migs, err := loadMigrations()
 	if err != nil {
 		return err
 	}
-	expected := 0
-	if len(migs) > 0 {
-		expected = migs[len(migs)-1].version
+
+	applied, err := loadAppliedVersions(ctx, s.db)
+	if err != nil {
+		return err
 	}
 
-	if applied < expected {
-		return fmt.Errorf("schema version %d, expected %d; run `tempogate migrate`", applied, expected)
+	dbMax := 0
+	for v := range applied {
+		dbMax = max(dbMax, v)
 	}
-	return nil
+
+	var missing []string
+	gap := false
+	for _, m := range migs {
+		if _, ok := applied[m.version]; ok {
+			continue
+		}
+		missing = append(missing, strconv.Itoa(m.version))
+		gap = gap || m.version < dbMax
+	}
+
+	switch {
+	case len(missing) == 0:
+		return nil
+	case gap:
+		return fmt.Errorf("schema is missing migrations %s; run `tempogate migrate`", strings.Join(missing, ", "))
+	default:
+		return fmt.Errorf("schema version %d, expected %d; run `tempogate migrate`", dbMax, migs[len(migs)-1].version)
+	}
 }
 
 // Migrate applies every embedded migration whose version has not yet been
