@@ -46,11 +46,12 @@ The chart in [`charts/tempogate/`](../charts/tempogate/README.md) deploys tempog
 It is published as an OCI artifact, so you do not need a clone of the repository:
 
 ```bash
-helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.3.0
+helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate
 ```
 
-The chart has its own version, separate from the binary.
-Find the latest version in the [chart releases](https://github.com/onhotpath/tempogate/releases?q=chart-v).
+The chart has its own version, separate from the binary, and each chart version sets a default image tag (`appVersion`).
+To pin a chart version, add `--version X.Y.Z`.
+Find the versions in the [chart releases](https://github.com/onhotpath/tempogate/releases?q=chart-v).
 To try the chart on a local cluster, use [examples/kind/](../examples/kind/README.md).
 
 ## CLI binaries

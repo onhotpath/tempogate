@@ -120,13 +120,16 @@ Then open <http://temporal-ui:8080> and sign in.
 | Target | How |
 | --- | --- |
 | Container image | `docker pull ghcr.io/onhotpath/tempogate:latest` (`linux/amd64`, `linux/arm64`) |
-| Kubernetes | `helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate --version 0.3.0` |
+| Kubernetes | `helm install tempogate oci://ghcr.io/onhotpath/charts/tempogate` |
 | CLI on macOS | `brew tap onhotpath/tempogate https://github.com/onhotpath/tempogate`<br>`brew trust --cask onhotpath/tempogate/tempogate`<br>`brew install --cask tempogate` |
 | CLI on Linux or macOS | Download from [GitHub Releases](https://github.com/onhotpath/tempogate/releases) |
 | From source | `make build` (Go 1.27+) |
 
 The macOS binary is not notarized by Apple, and the cask removes the quarantine attribute.
 Read [the macOS note](docs/installation.md#macos-homebrew) before you install it.
+
+> [!IMPORTANT]
+> Upgrading from v0.2.0? v0.3.0 has breaking changes. Follow [docs/upgrading.md](docs/upgrading.md).
 
 [docs/installation.md](docs/installation.md) gives the full steps: a `docker run` example, image tags, signature checks and a build from source.
 For a real Google sign-in, first [create the Google OAuth client](examples/google-oauth-setup.md).
@@ -154,7 +157,7 @@ OIDC_AUTHZ_RULES_1='domain:example.com=orders:read,payments:read'    # everyone 
 > [!IMPORTANT]
 > Releases up to v0.2.0 have no rules, and give every admitted person cluster admin.
 > To keep that behaviour while you write rules, set `OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin`.
-> See [the upgrade note](docs/configuration.md#upgrading-to-deny-by-default-authorization).
+> See [the upgrade guide](docs/upgrading.md).
 
 Read [Authorization](docs/configuration.md#authorization) for the grammar, and [Multi-tenancy](docs/architecture.md#multi-tenancy) for how Temporal enforces namespace boundaries.
 
@@ -235,6 +238,7 @@ It also covers [PostgreSQL for several replicas](docs/configuration.md#postgresq
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Web UI SSO and a CLI token in ten minutes, with a mock identity provider |
 | [Installation](docs/installation.md) | Image, Helm chart, CLI binaries, Homebrew and build from source |
+| [Upgrading](docs/upgrading.md) | What to change when you upgrade, release by release |
 | [Configuration](docs/configuration.md) | Every setting, revocation, key rotation and observability |
 | [Architecture](docs/architecture.md) | How the parts fit together, design decisions and multi-tenancy |
 | [CLI loopback login](docs/cli-loopback-login.md) | The `tempogate login` flow, token storage and refresh |
