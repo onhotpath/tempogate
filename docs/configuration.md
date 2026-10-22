@@ -256,7 +256,7 @@ Token values are never logged.
 Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
 
 ```bash
-tempogate sessions list [--email alice@example.com]   # family id, client, email, sign-in, last rotation, expiry
+tempogate sessions list [--email alice@example.com]   # family id, client, email, Google subject, sign-in, last rotation, expiry
 tempogate sessions revoke --email alice@example.com   # every session of a user
 tempogate sessions revoke --family <family-id>        # one session
 ```

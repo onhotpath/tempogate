@@ -42,7 +42,7 @@ func (s *SessionsCmdSuite) TearDownTest() {
 func (s *SessionsCmdSuite) seed(token, family, email string) {
 	now := time.Now().UTC()
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, oidc.Refresh{
-		Token: token, JTI: "jti-" + token, ClientID: "tempogate-cli", Email: email,
+		Token: token, JTI: "jti-" + token, ClientID: "tempogate-cli", Subject: "google-sub-" + family, Email: email,
 		FamilyID: family, AuthTime: now.Add(-time.Hour), CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}))
 }
@@ -91,7 +91,7 @@ func (s *SessionsCmdSuite) TestListShowsSessionsButNeverTokens() {
 
 	out, err := s.run("list")
 	s.Require().NoError(err)
-	for _, want := range []string{"FAMILY_ID", "CLIENT_ID", "EMAIL", "AUTH_TIME", "LAST_ROTATION", "EXPIRES_AT", "fam-a", "fam-b", "alice@example.com", "tempogate-cli"} {
+	for _, want := range []string{"FAMILY_ID", "CLIENT_ID", "EMAIL", "SUBJECT", "AUTH_TIME", "LAST_ROTATION", "EXPIRES_AT", "fam-a", "fam-b", "alice@example.com", "google-sub-fam-a", "tempogate-cli"} {
 		s.Contains(out, want)
 	}
 	s.NotContains(out, "secret-token", "token values are never printed")

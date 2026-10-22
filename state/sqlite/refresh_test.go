@@ -147,6 +147,7 @@ func (s *StoreSuite) TestListRefreshSessions() {
 	}
 	a := byFamily["fam-a"]
 	s.Equal("alice@example.com", a.Email)
+	s.Equal("google-sub-alice", a.Subject)
 	s.Equal("ui", a.ClientID)
 	s.True(a.AuthTime.Before(a.RotatedAt), "auth_time is the sign-in, before the last rotation")
 	s.True(a.ExpiresAt.After(now))

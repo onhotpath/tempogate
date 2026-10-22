@@ -139,6 +139,7 @@ func (s *Store) revokeRefresh(ctx context.Context, where, arg string, at time.Ti
 type RefreshSession struct {
 	FamilyID  string
 	ClientID  string
+	Subject   string
 	Email     string
 	AuthTime  time.Time
 	RotatedAt time.Time // when the live token was minted
@@ -152,7 +153,7 @@ type RefreshSession struct {
 // writers.
 func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.Time) ([]RefreshSession, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT family_id, client_id, email, auth_time, created_at, expires_at
+		`SELECT family_id, client_id, subject, email, auth_time, created_at, expires_at
 		 FROM refresh_tokens
 		 WHERE consumed_at IS NULL AND revoked_at IS NULL
 		   AND (? = '' OR lower(email) = lower(?))
@@ -167,7 +168,7 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 	var out []RefreshSession
 	for rows.Next() {
 		var rs RefreshSession
-		if err := rows.Scan(&rs.FamilyID, &rs.ClientID, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt); err != nil {
+		if err := rows.Scan(&rs.FamilyID, &rs.ClientID, &rs.Subject, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt); err != nil {
 			return nil, fmt.Errorf("sqlite: scan refresh session: %w", err)
 		}
 		if now.Before(rs.ExpiresAt) {
