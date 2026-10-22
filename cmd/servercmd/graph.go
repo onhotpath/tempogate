@@ -82,6 +82,7 @@ func keysModules() []fx.Option {
 // subcommands fail when it is missing.
 func serverModules() []fx.Option {
 	return []fx.Option{
+		fx.Invoke(checkIssuer),
 		sqlite.Fx(),
 		keys.Fx(),
 		oidc.Fx(),
@@ -89,4 +90,19 @@ func serverModules() []fx.Option {
 		google.Fx(),
 		api.Fx(),
 	}
+}
+
+// checkIssuer refuses an insecure OIDC_ISSUER before the server stack is
+// built, so the operator sees that error rather than whichever other setting
+// happens to be missing too. Only the subcommands that build the issuer run
+// it: migrate, keys and version never need OIDC configuration.
+func checkIssuer(cfg *config.Config, logger *zap.Logger) error {
+	if err := config.ValidateIssuer(cfg.OIDC.Issuer); err != nil {
+		if !cfg.OIDC.AllowInsecureIssuer {
+			return err
+		}
+		logger.Warn("insecure OIDC issuer allowed by OIDC_ALLOW_INSECURE_ISSUER; do not use in production",
+			zap.String("issuer", cfg.OIDC.Issuer))
+	}
+	return nil
 }

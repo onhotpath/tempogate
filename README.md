@@ -320,13 +320,18 @@ See [docs/cli-device-login.md](docs/cli-device-login.md).
 
 ## Configuration
 
-Configuration is layered: defaults, then an optional `application.yaml`, then
+Configuration is layered: defaults, then an optional yaml file, then
 environment variables (env wins). Nested keys flatten with `_` as the
 separator.
+The yaml file is `--config <path>` (or `$TEMPOGATE_CONFIG`) when given, else
+`application.yaml` in the working directory; parent directories are not
+searched.
+See [docs/configuration.md](docs/configuration.md).
 
 | Env var | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `OIDC_ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. May include a path (e.g. `https://host/idp`) — see [Sub-path hosting](#sub-path-hosting) |
+| `OIDC_ISSUER` | For real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer` and used to derive `jwks_uri`. Must be `https://` unless the host is loopback (see `OIDC_ALLOW_INSECURE_ISSUER`). May include a path (e.g. `https://host/idp`) - see [Sub-path hosting](#sub-path-hosting) |
+| `OIDC_ALLOW_INSECURE_ISSUER` | No | `false` | Development only. `serve` refuses a plain-http `OIDC_ISSUER` unless its host is loopback (`localhost`, `127.0.0.0/8`, `::1`) or this is `true` |
 | `OIDC_CLIENTS` | For any login | _(empty)_ | Comma-separated `id:redirect_uri` allowlist of **exact** redirect URIs (repeat an id for several). Loopback `http://127.0.0.1/<path>` entries match any port. Register the CLI as `tempogate-cli:http://127.0.0.1/callback` and the device CLI as `tempogate-device:` |
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | No | `false` | Dev only: allow plain-`http` non-loopback redirect URIs in `OIDC_CLIENTS` (e.g. a local Docker Compose stack) |
 | `OIDC_ALLOWED_DOMAINS` | For any login | _(empty)_ | Comma-separated email-domain gate applied after Google sign-in and again on every refresh |

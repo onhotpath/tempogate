@@ -20,6 +20,11 @@ func NewRootCmd(subcommands ...*cobra.Command) *cobra.Command {
 		Version:       buildinfo.Version(),
 	}
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
+	// Read before cobra runs, by config.ProcessPath: configuration is loaded
+	// while the fx graph is built. Declared here so every subcommand accepts
+	// it and --help documents it.
+	rootCmd.PersistentFlags().String("config", "",
+		"config file to load instead of ./application.yaml (also $TEMPOGATE_CONFIG)")
 	for _, sc := range subcommands {
 		rootCmd.AddCommand(sc)
 	}

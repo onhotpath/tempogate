@@ -252,6 +252,7 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		"HTTP_LISTENER":               "0.0.0.0:8000",
 		"STATE_SQLITE_PATH":           "/state/state.db",
 		"OIDC_ISSUER":                 tempogateIssuer,
+		"OIDC_ALLOW_INSECURE_ISSUER":  "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":                clientID + ":" + uiCallback,
 		"OIDC_CLIENT_SECRETS":         clientID + ":" + clientSecret,
 		"OIDC_ALLOWED_DOMAINS":        "example.com",

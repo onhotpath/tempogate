@@ -7,10 +7,18 @@ Every tempogate setting, its default, and when you need it.
 Three layers, last wins:
 
 1. **Built-in defaults** (the table below).
-2. **An optional `application.yaml`** — searched in the working directory and
-   up to three parent directories, or an explicit path passed to the binary.
+2. **An optional yaml file.**
    Nested keys are normal YAML (`oidc: { issuer: ... }`).
-3. **Environment variables** — these **override** the file.
+   Which file:
+   - `--config <path>`, accepted by every subcommand (`tempogate --config /etc/tempogate.yaml serve`), else
+   - the `TEMPOGATE_CONFIG` environment variable, else
+   - `application.yaml` in the working directory, if present.
+     Parent directories are **not** searched, so a file planted above the working directory cannot repoint the server.
+
+   A file named by `--config` or `TEMPOGATE_CONFIG` that cannot be read is fatal.
+   An `application.yaml` in the working directory that cannot be read (for example the image's `/home/nonroot` when the container runs under a uid other than the default `65532`) is skipped with a warning.
+   Run with `LOG_LEVEL=debug` to log which file was loaded.
+3. **Environment variables** - these **override** the file.
 
 Environment is the recommended surface for containers and Kubernetes. Nested
 config keys flatten with a **`_`** separator: `oidc.google.client_id`
@@ -152,7 +160,8 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `OIDC_ISSUER` | for real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer`, derives `jwks_uri`. May include a path for [sub-path hosting](#sub-path-hosting). |
+| `OIDC_ISSUER` | for real deploys | `http://127.0.0.1:8000` | Externally reachable base URL; advertised as `issuer`, derives `jwks_uri`. May include a path for [sub-path hosting](#sub-path-hosting). **Must be `https://`** unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`): `tempogate serve` refuses to start otherwise. |
+| `OIDC_ALLOW_INSECURE_ISSUER` | no | `false` | **Development only.** Lets `serve` start with a plain-http `OIDC_ISSUER` on a non-loopback host (e.g. the docker-compose demo's `http://tempogate:8000`), logging a warning. Relying parties fetch the discovery document and signing keys from the issuer, so over plain http anyone on the path can substitute keys. `migrate`, `keys` and `version` never check the issuer. |
 | `OIDC_CLIENTS` | for any login | _(empty)_ | Comma-separated `id:redirect_uri`. The first `:` splits id from URI, so the URI keeps its scheme. Each value is an **exact** redirect URI, never a prefix: see [Redirect URI registration](#redirect-uri-registration). Repeat an id to register several URIs. An empty value (`tempogate-device:`) registers a device-only client. **Every client here is public - PKCE is mandatory.** Register the loopback CLI as `tempogate-cli:http://127.0.0.1/callback`; the device flow additionally needs `tempogate-device:` and `tempogate-device-ui:<issuer>/device/sso-callback` (see [docs/cli-device-login.md](cli-device-login.md)); the server refuses to start if `tempogate-device-ui` is not registered for that exact callback. Invalid entries stop the server at startup. |
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | no | `false` | Dev only. Allows plain-`http` redirect URIs for non-loopback hosts in `OIDC_CLIENTS` (e.g. `http://temporal-ui:8080/auth/sso/callback` in a local Docker Compose stack). Leave it off in production: a code sent over plain http to a remote host can be read on the network. |
 | `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. The deliberately-separate, auditable opt-in that promotes a registered client to **confidential** (the PKCE carve-out) — e.g. the Temporal Web UI, which does not implement PKCE; also `tempogate-device-ui`, which tempogate uses as a client of itself when bouncing the verification page through Google SSO. An entry for an unregistered id fails fast. See [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md). |

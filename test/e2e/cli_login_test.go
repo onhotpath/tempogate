@@ -426,6 +426,7 @@ func setupCLIStack(ctx context.Context, t *testing.T, opts ...cliStackOption) *c
 		"HTTP_LISTENER":               "0.0.0.0:8000",
 		"STATE_SQLITE_PATH":           "/state/state.db",
 		"OIDC_ISSUER":                 tempogateIssuer,
+		"OIDC_ALLOW_INSECURE_ISSUER":  "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":                cliClientID + ":http://127.0.0.1/callback," + deviceClientID + ":",
 		"OIDC_ALLOWED_DOMAINS":        "example.com",
 		"OIDC_ALLOWED_HOSTED_DOMAINS": hostedDomain,

@@ -194,6 +194,13 @@ oidc:
   # regardless, so the probe paths below need no change.
   issuer: ""
 
+  # OIDC_ALLOW_INSECURE_ISSUER - development only. `serve` refuses to start
+  # when `issuer` is plain http on a non-loopback host, because relying
+  # parties would then fetch the discovery document and signing keys over an
+  # unauthenticated channel. Set true only for a throwaway cluster without
+  # TLS.
+  allowInsecureIssuer: false
+
   # OIDC_SESSION_SIGNING_KEY — base64url-encoded 32-byte HMAC key.
   # Signs the verification-page session cookie and the SSO-bounce `state`
   # used by the device-authorization flow (RFC 8628), see

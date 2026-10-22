@@ -30,9 +30,9 @@ oidc:
 	t.Setenv("OIDC_GOOGLE_CLIENT_ID", "from-env")
 
 	c := defaultConfig()
-	used, err := Load(c, path)
+	src, err := Load(c, path)
 	require.NoError(t, err)
-	require.Equal(t, path, used)
+	require.Equal(t, Source{Path: path}, src)
 	require.Equal(t, "debug", c.Log.Level)
 	require.Equal(t, "0.0.0.0:8000", c.HTTP.Listener.String())
 	require.Equal(t, "/tmp/from-yaml.db", c.State.Sqlite.Path)
@@ -41,18 +41,87 @@ oidc:
 	require.Equal(t, "https://accounts.google.com", c.OIDC.Google.IssuerURL)
 }
 
-func TestLoadSearchesFourDirectories(t *testing.T) {
+func TestLoadUsesApplicationYAMLInWorkingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "application.yaml"), []byte("log:\n  level: trace\n"), 0o600))
+	t.Chdir(dir)
+	c := defaultConfig()
+	src, err := Load(c, "")
+	require.NoError(t, err)
+	require.Equal(t, Source{Path: "application.yaml"}, src)
+	require.Equal(t, "trace", c.Log.Level)
+}
+
+// A file in a parent directory is not the operator's: on a shared host anyone
+// who can write to /tmp or a home directory above the cwd could otherwise
+// point the Google endpoints at their own IdP.
+func TestLoadIgnoresApplicationYAMLInParentDirectories(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "application.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("log:\n  level: trace\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "application.yaml"),
+		[]byte("oidc:\n  google:\n    auth_endpoint: https://attacker.example/auth\n"), 0o600))
 	deep := filepath.Join(root, "one", "two", "three")
 	require.NoError(t, os.MkdirAll(deep, 0o700))
-	t.Chdir(deep)
+	for _, dir := range []string{filepath.Join(root, "one"), deep} {
+		t.Run(dir, func(t *testing.T) {
+			t.Chdir(dir)
+			c := defaultConfig()
+			src, err := Load(c, "")
+			require.NoError(t, err)
+			require.Equal(t, Source{}, src)
+			require.Equal(t, "https://accounts.google.com/o/oauth2/v2/auth", c.OIDC.Google.AuthEndpoint)
+		})
+	}
+}
+
+func skipIfRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks do not apply to root")
+	}
+}
+
+// The container runs in /home/nonroot; under any uid other than the image
+// default that directory is unreadable, and the implicit lookup must not turn
+// that into a startup failure.
+func TestLoadSkipsUnreadableWorkingDirectory(t *testing.T) {
+	skipIfRoot(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "application.yaml"), []byte("log:\n  level: trace\n"), 0o600))
+	t.Chdir(dir)
+	require.NoError(t, os.Chmod(dir, 0))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Setenv("LOG_LEVEL", "warn")
+
 	c := defaultConfig()
-	used, err := Load(c, "")
+	src, err := Load(c, "")
 	require.NoError(t, err)
-	require.Equal(t, path, used)
-	require.Equal(t, "trace", c.Log.Level)
+	require.Empty(t, src.Path)
+	require.ErrorIs(t, src.Skipped, os.ErrPermission)
+	require.Equal(t, "warn", c.Log.Level, "environment is still applied")
+}
+
+func TestLoadSkipsUnreadableImplicitFile(t *testing.T) {
+	skipIfRoot(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "application.yaml"), []byte("log:\n  level: trace\n"), 0))
+	t.Chdir(dir)
+
+	c := defaultConfig()
+	src, err := Load(c, "")
+	require.NoError(t, err)
+	require.Empty(t, src.Path)
+	require.ErrorIs(t, src.Skipped, os.ErrPermission)
+	require.Equal(t, "info", c.Log.Level)
+}
+
+// An operator who names a file means it: failing to read it is fatal.
+func TestLoadRejectsUnreadableExplicitFile(t *testing.T) {
+	skipIfRoot(t)
+	path := filepath.Join(t.TempDir(), "custom.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("log:\n  level: trace\n"), 0))
+	_, err := Load(defaultConfig(), path)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.ErrorContains(t, err, path)
 }
 
 func TestLoadRejectsMissingExplicitFileAndMalformedYAML(t *testing.T) {
@@ -99,4 +168,9 @@ func TestLoadRejectsInvalidDurationAndListener(t *testing.T) {
 			require.True(t, strings.Contains(err.Error(), "ferry:"), err)
 		})
 	}
+}
+
+func TestNewFailsOnMissingExplicitFile(t *testing.T) {
+	_, err := New(Params{Path: Path(filepath.Join(t.TempDir(), "missing.yaml"))})
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

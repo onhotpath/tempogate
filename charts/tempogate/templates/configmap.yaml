@@ -23,6 +23,9 @@ data:
   {{- with .Values.oidc.issuer }}
   OIDC_ISSUER: {{ . | quote }}
   {{- end }}
+  {{- if .Values.oidc.allowInsecureIssuer }}
+  OIDC_ALLOW_INSECURE_ISSUER: "true"
+  {{- end }}
   {{- with .Values.oidc.sessionTtl }}
   OIDC_SESSION_TTL: {{ . | quote }}
   {{- end }}
