@@ -13,7 +13,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -251,6 +250,7 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		"ADMIN_LISTENER":              "0.0.0.0:8081",
 		"STATE_SQLITE_PATH":           "/state/state.db",
 		"OIDC_ISSUER":                 tempogateIssuer,
+		"OIDC_ALLOW_INSECURE_ISSUER":  "true", // plain-http issuer on the test network
 		"OIDC_CLIENTS":                cliClientID + ":http://127.0.0.1/callback",
 		"OIDC_ALLOWED_DOMAINS":        "example.com",
 		"OIDC_ALLOWED_HOSTED_DOMAINS": hostedDomain,
@@ -261,8 +261,7 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		"OIDC_GOOGLE_ISSUER_URL":      mockIssuer,
 	}
 	addDeviceUIServerEnv(env, tempogateIssuer)
-	stateVol := fmt.Sprintf("tempogate-observability-e2e-state-%d", time.Now().UnixNano())
-	t.Cleanup(func() { removeVolume(ctx, t, stateVol) })
+	stateVol := stateVolume(t, "tempogate-observability-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
