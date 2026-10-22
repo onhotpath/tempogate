@@ -156,12 +156,13 @@ type createInput struct {
 }
 
 // createBody intentionally does not declare an OpenAPI `enum` on Role.
-// Validation runs in the handler so role / namespace / owner all surface the
-// same 400 status with the same body shape; pushing it down to Huma's schema
-// layer would split role into 422 while the others stayed at 400.
+// Validation runs in the handler so a malformed role, namespace or owner all
+// surface the same 400 status with the same body shape; pushing it down to
+// Huma's schema layer would split role into 422 while the others stayed at
+// 400. Only the well-formed but useless worker role is a 422 (see mint).
 type createBody struct {
 	Namespace string     `json:"namespace" doc:"Temporal namespace this key authorizes"`
-	Role      string     `json:"role" doc:"one of read, write, worker, admin"`
+	Role      string     `json:"role" doc:"one of read, write, admin (worker is refused: it grants nothing under Temporal's default authorizer)"`
 	Owner     string     `json:"owner" doc:"human email or service-account name"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty" doc:"required absolute expiry, in the future and at most ADMIN_KEYS_MAX_TTL (default 90 days) from now; Temporal honours only exp, so revocation alone does not stop a key there"`
 }
@@ -288,7 +289,11 @@ func (h *Keys) create(ctx context.Context, in *createInput) (*createOutput, erro
 }
 
 func (h *Keys) mint(ctx context.Context, k *IntegrationKey) (*createOutput, error) {
-	if err := k.Validate(); err != nil {
+	if err := k.Validate(); errors.Is(err, ErrWorkerRole) {
+		// A well-formed request for a key that would authorize nothing:
+		// 422 tells the caller to change the role, not fix the syntax.
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	} else if err != nil {
 		return nil, huma.Error400BadRequest(err.Error())
 	}
 	if k.Namespace == perms.SystemNamespace && !h.systemGrants {

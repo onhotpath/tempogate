@@ -216,10 +216,11 @@ func TestAdminKeyMintAndRevoke(t *testing.T) {
 	assertJTIInDenylistStore(ctx, t, st.tempogate, mintedJTI)
 }
 
-// TestAdminRefusesSystemGrantByDefault runs tempogate with the shipped default
+// TestAdminGrantPolicy runs tempogate with the shipped default
 // ADMIN_ALLOW_SYSTEM_GRANTS=false: an authenticated caller can mint
-// namespace-scoped keys but not a cluster-wide temporal-system grant.
-func TestAdminRefusesSystemGrantByDefault(t *testing.T) {
+// namespace-scoped keys but not a cluster-wide temporal-system grant, and
+// never a worker key, which Temporal's default authorizer honours nowhere.
+func TestAdminGrantPolicy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
@@ -234,6 +235,13 @@ func TestAdminRefusesSystemGrantByDefault(t *testing.T) {
 	status, body := adminRequest(t, http.MethodPost, adminURL+"/admin/keys", "", e2eAdminToken,
 		`{"namespace":"temporal-system","role":"admin","owner":"e2e-system"}`)
 	require.Equalf(t, http.StatusForbidden, status, "temporal-system grant must be refused by default: %s", body)
+	require.NotContains(t, string(body), `"jwt"`)
+
+	exp := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	status, body = adminRequest(t, http.MethodPost, adminURL+"/admin/keys", "", e2eAdminToken,
+		`{"namespace":"payments","role":"worker","owner":"e2e-worker","expires_at":"`+exp+`"}`)
+	require.Equalf(t, http.StatusUnprocessableEntity, status, "a worker key must be refused: %s", body)
+	require.Contains(t, string(body), "worker grants nothing under Temporal's default authorizer; use write")
 	require.NotContains(t, string(body), `"jwt"`)
 
 	created := mintIntegrationKey(t, adminURL, adminCreateBody{
@@ -621,7 +629,7 @@ func setupIntegrationKeysStack(ctx context.Context, t *testing.T) *integrationKe
 	alias := func(name string) map[string][]string { return map[string][]string{netName: {name}} }
 
 	// This stack mints a temporal-system:admin key, so it opts into system
-	// grants; TestAdminRefusesSystemGrantByDefault covers the default.
+	// grants; TestAdminGrantPolicy covers the default.
 	tempogate := startIntegrationKeysTempogate(ctx, t, netName, true)
 
 	pg, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

@@ -58,9 +58,9 @@ func (s *ModelSuite) TestValidate() {
 			wantErr: nil,
 		},
 		{
-			name:    "valid worker",
+			name:    "worker grants nothing",
 			key:     New(WithNamespace("ns"), WithRole(RoleWorker), WithOwner("o")),
-			wantErr: nil,
+			wantErr: ErrWorkerRole,
 		},
 		{
 			name:    "valid admin",
@@ -107,8 +107,8 @@ func (s *ModelSuite) TestValidate() {
 }
 
 func (s *ModelSuite) TestGrantSerializesToSingleNamespaceRoleEntry() {
-	k := New(WithNamespace("payments"), WithRole(RoleWorker), WithOwner("svc"))
-	s.Equal([]string{"payments:worker"}, k.Grant().ToClaim())
+	k := New(WithNamespace("payments"), WithRole(RoleWrite), WithOwner("svc"))
+	s.Equal([]string{"payments:write"}, k.Grant().ToClaim())
 }
 
 func (s *ModelSuite) TestGrantSystemNamespaceRoundTrip() {

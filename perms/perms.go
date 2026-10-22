@@ -33,20 +33,18 @@
 // reaches Temporal, because Temporal would treat `*` as a literal
 // namespace name and deny every real-namespace call.
 //
-// # One role per namespace (last write wins inside Grant)
+// # One entry per namespace, carrying the highest role
 //
-// Grant's internal store is a map keyed by namespace, so adding the same
-// namespace twice with different roles keeps only the most recent option.
-// The behaviour is exposed deliberately so callers can layer a default and
-// then override per-namespace without filtering by hand, and it means
-// ToClaim never emits two entries for one namespace.
-//
-// This is Grant's own rule, not Temporal's. The default ClaimMapper ORs
-// every entry for a namespace into one role bitmask
-// (`role |= permissionToRole(...)` in extractPermissions, see
-// https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_jwt_claim_mapper.go#L102-L127),
-// so a foreign claim carrying `ns:admin` and `ns:read` authorizes admin at
-// the frontend even though ParseClaim keeps only `ns:read`.
+// Temporal's default ClaimMapper ORs every entry for a namespace into one
+// role bitmask (`role |= permissionToRole(...)` in extractPermissions, see
+// https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_jwt_claim_mapper.go#L134-L143),
+// and the default authorizer then compares that mask numerically against
+// the role an API needs. Its documentation says duplicate entries are
+// "overridden"; the source does not. Grant sidesteps the disagreement: it
+// keeps one role per namespace, the highest one it was given, so ToClaim
+// never emits two entries for one namespace and a claim means the same
+// under either reading. Adding a namespace twice, Merge and ParseClaim all
+// apply that rule.
 package perms
 
 import (
@@ -89,28 +87,58 @@ const SystemNamespace = "temporal-system"
 // without re-implementing the translation.
 const Wildcard = "*"
 
-var validRoles = map[Role]struct{}{
-	RoleRead:   {},
-	RoleWrite:  {},
-	RoleWorker: {},
-	RoleAdmin:  {},
+// roleBits mirrors Temporal's role bitmask (Worker=1, Reader=2, Writer=4,
+// Admin=8, see
+// https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/roles.go#L9-L12).
+// The authorizer compares the ORed mask numerically, so the highest bit a
+// namespace carries is the role it effectively has.
+var roleBits = map[Role]int{
+	RoleWorker: 1,
+	RoleRead:   2,
+	RoleWrite:  4,
+	RoleAdmin:  8,
 }
 
 // Valid reports whether r is one of the four canonical Temporal roles.
 // Useful at API boundaries where the caller has a string and needs a 4xx
 // vs. 5xx decision before constructing the Grant.
 func (r Role) Valid() bool {
-	_, ok := validRoles[r]
+	_, ok := roleBits[r]
 	return ok
 }
 
+// Grantable rejects a (namespace, role) pair that is well-formed but cannot
+// authorize anything at a Temporal frontend running the default
+// authorizer, so a grant an operator writes never silently does nothing:
+//
+//   - `*` is not a wildcard there; Temporal treats it as a namespace named
+//     "*". SystemNamespace is the every-namespace grant.
+//   - worker alone passes no check: the default authorizer requires at
+//     least reader for every API but health checks, and task-queue polling
+//     is a write API (getRequiredRole in
+//     https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L67-L77).
+//
+// Tokens already minted are not affected; ParseClaim still accepts both.
+func Grantable(namespace string, role Role) error {
+	switch {
+	case namespace == Wildcard:
+		return ErrWildcardNamespace
+	case role == RoleWorker:
+		return ErrWorkerRole
+	}
+	return nil
+}
+
 // ErrInvalidRole, ErrEmptyNamespace, ErrMalformedEntry are the sentinels
-// ParseClaim returns. They are exported so callers can map each to a
+// ParseClaim returns; ParseConfig and Grantable add ErrWorkerRole and
+// ErrWildcardNamespace. They are exported so callers can map each to a
 // precise error response.
 var (
-	ErrInvalidRole    = errors.New("perms: role must be one of read/write/worker/admin")
-	ErrEmptyNamespace = errors.New("perms: namespace must not be empty")
-	ErrMalformedEntry = errors.New("perms: entry must be \"<namespace>:<role>\"")
+	ErrInvalidRole       = errors.New("perms: role must be one of read/write/worker/admin")
+	ErrEmptyNamespace    = errors.New("perms: namespace must not be empty")
+	ErrMalformedEntry    = errors.New("perms: entry must be \"<namespace>:<role>\"")
+	ErrWorkerRole        = errors.New("perms: worker grants nothing under Temporal's default authorizer; use write")
+	ErrWildcardNamespace = errors.New("perms: \"*\" is not a namespace wildcard in Temporal; use " + SystemNamespace + " to grant every namespace")
 )
 
 // NamespacePermission is the (Namespace, Role) pair Grant materializes
@@ -144,11 +172,37 @@ func New(opts ...Option) *Grant {
 	return g
 }
 
-// AddNamespace grants role on the given namespace. Calling AddNamespace
-// twice for the same namespace keeps only the last role (see the package
-// doc: Temporal would OR duplicate entries, Grant never emits them).
+// AddNamespace grants role on the given namespace. Granting a namespace
+// twice keeps the higher role (see the package doc).
 func AddNamespace(namespace string, role Role) Option {
-	return func(g *Grant) { g.perms[namespace] = role }
+	return func(g *Grant) { g.add(namespace, role) }
+}
+
+func (g *Grant) add(namespace string, role Role) {
+	if cur, ok := g.perms[namespace]; !ok || roleBits[role] > roleBits[cur] {
+		g.perms[namespace] = role
+	}
+}
+
+// Merge is the union of grants: every namespace any of them names, at the
+// highest role any of them gives it. Nil grants are skipped, and the inputs
+// are left untouched.
+func Merge(grants ...*Grant) *Grant {
+	out := New()
+	for _, g := range grants {
+		if g == nil {
+			continue
+		}
+		for ns, role := range g.perms {
+			out.add(ns, role)
+		}
+	}
+	return out
+}
+
+// Empty reports whether g grants nothing, i.e. ToClaim would be empty.
+func (g *Grant) Empty() bool {
+	return len(g.perms) == 0
 }
 
 // WithSystemRole grants role on Temporal's system namespace. The default
@@ -202,8 +256,8 @@ func (g *Grant) ToClaim() []string {
 // canonical representation). Each entry must be exactly
 // `<namespace>:<role>`; the split happens on the LAST colon so a namespace
 // name that itself contains `:` round-trips correctly. Duplicate
-// namespaces keep the last role, same as the constructor options; this
-// differs from Temporal's ClaimMapper, which ORs them.
+// namespaces keep the highest role, which is what Temporal's ORed bitmask
+// amounts to.
 func ParseClaim(claim []string) (*Grant, error) {
 	g := New()
 	for i, entry := range claim {
@@ -219,7 +273,31 @@ func ParseClaim(claim []string) (*Grant, error) {
 		if !role.Valid() {
 			return nil, fmt.Errorf("%w: entry %d %q", ErrInvalidRole, i, entry)
 		}
-		g.perms[namespace] = role
+		g.add(namespace, role)
+	}
+	return g, nil
+}
+
+// ParseConfig parses a permission list an operator wrote in configuration:
+// ParseClaim's grammar, surrounding spaces trimmed, plus Grantable on every
+// entry, so a typo that would mint a grant Temporal ignores fails at
+// startup instead of at the first denied call. A worker entry is refused
+// even next to a higher role for the same namespace: it can only be a
+// mistake.
+func ParseConfig(entries []string) (*Grant, error) {
+	trimmed := make([]string, len(entries))
+	for i, e := range entries {
+		trimmed[i] = strings.TrimSpace(e)
+	}
+	g, err := ParseClaim(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	for i, entry := range trimmed {
+		idx := strings.LastIndex(entry, ":")
+		if err := Grantable(entry[:idx], Role(entry[idx+1:])); err != nil {
+			return nil, fmt.Errorf("%w: entry %d %q", err, i, entry)
+		}
 	}
 	return g, nil
 }

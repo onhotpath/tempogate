@@ -82,7 +82,7 @@ func (s *AuditSuite) audit() []observer.LoggedEntry {
 
 func (s *AuditSuite) TestCreateAndRevokeAreAudited() {
 	s.setup()
-	resp, b := s.request(http.MethodPost, admin.KeysPath, withExpiry(`{"namespace":"payments","role":"worker","owner":"svc-recon"}`))
+	resp, b := s.request(http.MethodPost, admin.KeysPath, withExpiry(`{"namespace":"payments","role":"write","owner":"svc-recon"}`))
 	s.Require().Equal(http.StatusCreated, resp.StatusCode, string(b))
 	var created postResp
 	s.Require().NoError(json.Unmarshal(b, &created))
@@ -98,7 +98,7 @@ func (s *AuditSuite) TestCreateAndRevokeAreAudited() {
 	s.Equal(created.ID, f["id"])
 	s.Equal(row.JTI, f["jti"])
 	s.Equal("payments", f["namespace"])
-	s.Equal("worker", f["role"])
+	s.Equal("write", f["role"])
 	s.Equal("svc-recon", f["owner"])
 	s.Equal(digestHex(guardToken)[:8], f["caller"], "caller is the matched digest's fingerprint")
 	s.NotEmpty(f["remote_addr"])
@@ -120,7 +120,7 @@ func (s *AuditSuite) TestCreateAndRevokeAreAudited() {
 	s.Equal(created.ID, f["id"])
 	s.Equal(row.JTI, f["jti"])
 	s.Equal("payments", f["namespace"])
-	s.Equal("worker", f["role"])
+	s.Equal("write", f["role"])
 	s.Equal("svc-recon", f["owner"])
 	s.Equal(digestHex(guardToken)[:8], f["caller"])
 	s.NotEmpty(f["remote_addr"])

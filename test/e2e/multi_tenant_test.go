@@ -27,11 +27,12 @@
 // v1.25.2 common/authorization/default_jwt_claim_mapper.go), and different
 // namespaces accumulate independently because they index into different
 // keys of claims.Namespaces. The multi-ns assertions below codify the
-// latter: if a future Temporal change collapsed the array across namespaces
-// (a hypothetical "last write wins across the whole array" failure mode),
-// the tenant-a admin op would be denied because tenant-a's grant would be
-// overwritten by tenant-b:read. That counterfactual is what makes the test
-// meaningful.
+// latter: if a future Temporal change kept only one entry of the array (a
+// hypothetical failure mode, not today's behaviour), the tenant-a admin op
+// would be denied because tenant-a's grant would be lost to tenant-b:read.
+// That counterfactual is what makes the test meaningful. tempogate itself
+// emits one entry per namespace (perms.Grant keeps the highest role), so the
+// same-namespace OR never comes into play for its tokens.
 //
 // The in-process minting helper (mintInProcess) sidesteps extending the
 // admin API into a multi-permission surface: the production API stays
@@ -138,10 +139,10 @@ func TestMultiTenantNamespaceScoping(t *testing.T) {
 		// `tenant-a:admin` + `tenant-b:read`. The grant is serialized as a
 		// two-entry permissions claim; Temporal's default ClaimMapper
 		// accumulates the entries into claims.Namespaces independently
-		// because the keys differ. Were the array collapsed across
-		// namespaces (the S1 "last write wins" counterfactual) the
-		// tenant-a admin assertion below would fail because tenant-a's
-		// grant would be lost when tenant-b's was applied.
+		// because the keys differ. Were the array collapsed to a single
+		// entry (the S1 counterfactual) the tenant-a admin assertion
+		// below would fail because tenant-a's grant would be lost when
+		// tenant-b's was applied.
 		jwtStr := mintInProcess(ctx, t, st.tempogate,
 			"e2e-multitenant-multi-ns",
 			perms.New(

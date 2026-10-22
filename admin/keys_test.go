@@ -280,7 +280,7 @@ func (s *KeysSuite) deleteKey(id string) *http.Response {
 }
 
 func (s *KeysSuite) TestPostMintsKeyReturns201() {
-	resp, raw := s.postKey(postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon"})
+	resp, raw := s.postKey(postBody{Namespace: "payments", Role: "write", Owner: "svc-recon"})
 	s.Require().Equal(http.StatusCreated, resp.StatusCode, "body=%s", string(raw))
 
 	var got postResp
@@ -294,7 +294,7 @@ func (s *KeysSuite) TestPostMintsKeyReturns201() {
 	row, err := s.registry.ByID(s.ctx, got.ID)
 	s.Require().NoError(err)
 	s.Equal("payments", row.Namespace)
-	s.Equal(admin.RoleWorker, row.Role)
+	s.Equal(admin.RoleWrite, row.Role)
 	s.Equal("svc-recon", row.Owner)
 	s.NotEmpty(row.JTI)
 
@@ -313,7 +313,7 @@ func (s *KeysSuite) TestPostMintsKeyReturns201() {
 	asSlice, ok := perms.([]any)
 	s.Require().True(ok)
 	s.Require().Len(asSlice, 1)
-	s.Equal("payments:worker", asSlice[0])
+	s.Equal("payments:write", asSlice[0])
 }
 
 func (s *KeysSuite) TestPostWithExpiresAtStampsExpClaim() {
@@ -346,7 +346,7 @@ func (s *KeysSuite) TestPostValidatesRole() {
 	}{
 		{"read", "read", http.StatusCreated},
 		{"write", "write", http.StatusCreated},
-		{"worker", "worker", http.StatusCreated},
+		{"worker", "worker", http.StatusUnprocessableEntity},
 		{"admin", "admin", http.StatusCreated},
 		{"empty role", "", http.StatusBadRequest},
 		{"unknown role", "superuser", http.StatusBadRequest},
@@ -358,6 +358,18 @@ func (s *KeysSuite) TestPostValidatesRole() {
 			s.Equal(tc.want, resp.StatusCode, "body=%s", string(raw))
 		})
 	}
+}
+
+func (s *KeysSuite) TestPostRefusesWorkerRoleWith422() {
+	// Under Temporal's default authorizer worker passes no check, so a
+	// worker key would be a credential that only ever fails at Temporal.
+	resp, raw := s.postKey(postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon"})
+	s.Require().Equal(http.StatusUnprocessableEntity, resp.StatusCode, "body=%s", string(raw))
+	s.Contains(string(raw), "worker grants nothing under Temporal's default authorizer; use write")
+
+	stored, err := s.registry.List(s.ctx, admin.ListFilter{})
+	s.Require().NoError(err)
+	s.Empty(stored, "a refused worker key is never persisted")
 }
 
 func (s *KeysSuite) TestPostRejectsEmptyNamespaceOrOwner() {

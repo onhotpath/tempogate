@@ -159,12 +159,13 @@ Google account required (a bundled mock IdP stands in).
 Tempogate serializes a token's authorization as a flat `permissions` claim of
 `"<namespace>:<role>"` entries, the shape Temporal's default JWT `ClaimMapper` parses into a per-namespace role bitmask.
 Two entries for **different** namespaces accumulate independently, so a single token can grant `read` on one namespace and `admin` on another.
-Two entries for the **same** namespace are ORed together by the ClaimMapper, not overridden ([`default_jwt_claim_mapper.go`](https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_jwt_claim_mapper.go#L102-L127) in Temporal v1.25.2), so `ns:admin` plus `ns:read` authorizes admin.
-Tempogate itself never emits duplicates: `perms.Grant` keeps one role per namespace.
+Two entries for the **same** namespace are ORed together by the ClaimMapper, not overridden ([`default_jwt_claim_mapper.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_jwt_claim_mapper.go#L134-L143) in Temporal v1.32.1, unchanged since v1.25), so `ns:admin` plus `ns:read` authorizes admin, whatever Temporal's documentation says about overriding.
+Tempogate itself never emits duplicates: `perms.Grant` keeps one entry per namespace carrying the highest role it was given, which means the same under either reading.
 
-The four canonical Temporal roles (`read`, `write`, `worker`, `admin`) are passed through verbatim.
-`worker` on its own authorizes nothing: in Temporal's role bitmask it sits below `read`, and the default authorizer requires at least `read` for every API except health checks (task-queue polling is a write API).
-Grant `write` to a namespace's workers.
+Tempogate grants the roles `read`, `write` and `admin`.
+`worker` on its own authorizes nothing: in Temporal's role bitmask it sits below `read`, and the default authorizer requires at least `read` for every API except health checks (task-queue polling is a write API, see [`getRequiredRole`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/default_authorizer.go#L67-L77) and [`roles.go`](https://github.com/temporalio/temporal/blob/v1.32.1/common/authorization/roles.go#L9-L12)).
+So the admin API refuses `role: worker` with 422; grant `write` to a namespace's workers.
+Integration keys minted as `worker` before this rule keep working as they always did, that is, they authorize nothing.
 Cluster-wide access is expressed by granting a role on
 the `temporal-system` namespace (the only construct the default ClaimMapper
 recognises for "every namespace"); the literal `*` is rejected as a real

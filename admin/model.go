@@ -38,14 +38,15 @@ const (
 	RoleAdmin  = perms.RoleAdmin
 )
 
-// ErrInvalidRole, ErrEmptyNamespace, ErrEmptyOwner are the sentinels Validate
-// returns. They are exported so handlers can map each to a precise 400
-// response and so the sqlite layer (which never receives user input directly)
-// can stay free of validation concerns. ErrInvalidRole wraps perms.ErrInvalidRole
-// so callers that already errors.Is against the perms-side sentinel keep
-// working as the two packages converge.
+// ErrInvalidRole, ErrWorkerRole, ErrEmptyNamespace, ErrEmptyOwner are the
+// sentinels Validate returns. They are exported so handlers can map each to a
+// precise response and so the sqlite layer (which never receives user input
+// directly) can stay free of validation concerns. The role sentinels wrap
+// their perms-side counterparts so callers that already errors.Is against
+// those keep working as the two packages converge.
 var (
 	ErrInvalidRole    = fmt.Errorf("admin: %w", perms.ErrInvalidRole)
+	ErrWorkerRole     = fmt.Errorf("admin: %w", perms.ErrWorkerRole)
 	ErrEmptyNamespace = errors.New("admin: namespace is required")
 	ErrEmptyOwner     = errors.New("admin: owner is required")
 )
@@ -102,6 +103,11 @@ func New(opts ...Option) *IntegrationKey {
 // ID/CreatedAt/JTI: those are server-stamped and validating them here would
 // either require the handler to call Validate after stamping (changing the
 // error-mapping shape) or duplicate the rule across two call sites.
+//
+// A worker key is refused (ErrWorkerRole): under Temporal's default
+// authorizer it passes no check (see perms.Grantable), so minting one would
+// hand out a credential that only fails later, at Temporal. Keys stored
+// before this rule keep their role.
 func (k *IntegrationKey) Validate() error {
 	if k.Namespace == "" {
 		return ErrEmptyNamespace
@@ -111,6 +117,9 @@ func (k *IntegrationKey) Validate() error {
 	}
 	if !k.Role.Valid() {
 		return ErrInvalidRole
+	}
+	if k.Role == RoleWorker {
+		return ErrWorkerRole
 	}
 	return nil
 }

@@ -111,17 +111,16 @@ func (s *PermsSuite) TestWildcardWithEveryRole() {
 	}
 }
 
-func (s *PermsSuite) TestDuplicateNamespaceAppliesLastWriteWins() {
-	g := New(
-		AddNamespace("payments", RoleRead),
-		AddNamespace("payments", RoleAdmin),
-	)
-
-	// Grant keeps one role per namespace (last write wins) so callers can
-	// layer a default and override per-namespace. Temporal's default
-	// ClaimMapper would instead OR duplicate entries, so Grant never emits
-	// them.
-	s.Equal([]string{"payments:admin"}, g.ToClaim())
+func (s *PermsSuite) TestDuplicateNamespaceKeepsHighestRole() {
+	// Temporal ORs duplicate entries into one bitmask, so the effective
+	// role is the highest one whatever the order; Grant emits only that.
+	for _, order := range [][]Role{{RoleRead, RoleAdmin}, {RoleAdmin, RoleRead}} {
+		g := New(
+			AddNamespace("payments", order[0]),
+			AddNamespace("payments", order[1]),
+		)
+		s.Equal([]string{"payments:admin"}, g.ToClaim(), "order %v", order)
+	}
 }
 
 func (s *PermsSuite) TestSystemRoleCollapsesWithExplicitNamespace() {
@@ -130,10 +129,97 @@ func (s *PermsSuite) TestSystemRoleCollapsesWithExplicitNamespace() {
 		AddNamespace(SystemNamespace, RoleRead),
 	)
 
-	// Both options key the same underlying namespace, so last-write-wins
-	// applies across them. Pinned so a future refactor that introduces a
-	// separate "system" slot fails this test.
-	s.Equal([]string{"temporal-system:read"}, g.ToClaim())
+	// Both options key the same underlying namespace, so they collapse to
+	// one entry at the higher role. Pinned so a future refactor that
+	// introduces a separate "system" slot fails this test.
+	s.Equal([]string{"temporal-system:admin"}, g.ToClaim())
+}
+
+func (s *PermsSuite) TestRoleOrderFollowsTemporalBits() {
+	// Worker=1 < Reader=2 < Writer=4 < Admin=8 in Temporal's roles.go.
+	ladder := []Role{RoleWorker, RoleRead, RoleWrite, RoleAdmin}
+	for i, lower := range ladder {
+		for _, higher := range ladder[i:] {
+			g := New(AddNamespace("ns", higher), AddNamespace("ns", lower))
+			s.Equal([]string{"ns:" + string(higher)}, g.ToClaim(), "%s vs %s", lower, higher)
+		}
+	}
+}
+
+func (s *PermsSuite) TestMergeIsUnionWithHighestRolePerNamespace() {
+	a := New(AddNamespace("orders", RoleRead), AddNamespace("payments", RoleWrite))
+	b := New(AddNamespace("orders", RoleWrite), WithSystemRole(RoleRead))
+	c := New(AddNamespace("payments", RoleRead))
+
+	got := Merge(a, nil, b, c)
+
+	s.Equal([]string{"orders:write", "payments:write", "temporal-system:read"}, got.ToClaim())
+	s.Equal([]string{"orders:read", "payments:write"}, a.ToClaim(), "inputs are not mutated")
+}
+
+func (s *PermsSuite) TestMergeOfNothingIsEmpty() {
+	s.True(Merge().Empty())
+	s.True(Merge(nil, New()).Empty())
+	s.False(Merge(New(AddNamespace("ns", RoleRead))).Empty())
+}
+
+func (s *PermsSuite) TestGrantable() {
+	cases := []struct {
+		name string
+		ns   string
+		role Role
+		want error
+	}{
+		{"read", "orders", RoleRead, nil},
+		{"write", "orders", RoleWrite, nil},
+		{"admin", "orders", RoleAdmin, nil},
+		{"system admin", SystemNamespace, RoleAdmin, nil},
+		{"worker", "orders", RoleWorker, ErrWorkerRole},
+		{"system worker", SystemNamespace, RoleWorker, ErrWorkerRole},
+		{"wildcard", Wildcard, RoleRead, ErrWildcardNamespace},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			err := Grantable(tc.ns, tc.role)
+			if tc.want == nil {
+				s.NoError(err)
+				return
+			}
+			s.ErrorIs(err, tc.want)
+		})
+	}
+}
+
+func (s *PermsSuite) TestParseConfigAcceptsGrantableEntries() {
+	g, err := ParseConfig([]string{" orders:read", "orders:write ", "temporal-system:admin"})
+	s.Require().NoError(err)
+	s.Equal([]string{"orders:write", "temporal-system:admin"}, g.ToClaim())
+}
+
+func (s *PermsSuite) TestParseConfigRejects() {
+	cases := []struct {
+		name  string
+		entry string
+		want  error
+	}{
+		{"worker", "orders:worker", ErrWorkerRole},
+		{"wildcard", "*:admin", ErrWildcardNamespace},
+		{"malformed", "orders", ErrMalformedEntry},
+		{"unknown role", "orders:owner", ErrInvalidRole},
+		{"empty namespace", ":read", ErrEmptyNamespace},
+	}
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			_, err := ParseConfig([]string{"ok:read", tc.entry})
+			s.Require().ErrorIs(err, tc.want)
+		})
+	}
+}
+
+func (s *PermsSuite) TestParseConfigRejectsWorkerEvenNextToHigherRole() {
+	_, err := ParseConfig([]string{"orders:write", "orders:worker"})
+	s.Require().ErrorIs(err, ErrWorkerRole)
+	s.Contains(err.Error(), `entry 1 "orders:worker"`)
 }
 
 func (s *PermsSuite) TestMixedSystemAndPerNamespaceEmitsBoth() {
@@ -190,8 +276,8 @@ func (s *PermsSuite) TestParseClaimNamespaceContainingColon() {
 	s.Equal(in, g.ToClaim())
 }
 
-func (s *PermsSuite) TestParseClaimDuplicateNamespaceLastWriteWins() {
-	g, err := ParseClaim([]string{"payments:read", "payments:admin"})
+func (s *PermsSuite) TestParseClaimDuplicateNamespaceKeepsHighestRole() {
+	g, err := ParseClaim([]string{"payments:admin", "payments:read"})
 	s.Require().NoError(err)
 
 	s.Equal([]string{"payments:admin"}, g.ToClaim())
