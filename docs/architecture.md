@@ -115,7 +115,7 @@ older than `OIDC_REFRESH_MAX_LIFETIME` from sign-in, or when the email's
 domain has left `OIDC_ALLOWED_DOMAINS` (which also revokes the family).
 Rotated tokens are kept as tombstones rather than deleted, so presenting one
 again is recognised as reuse and revokes the whole family (RFC 9700
-§4.14.2). Operators revoke by email, Google subject or family with
+§4.14.2). Operators revoke by email, token subject (`google:<sub>`) or family with
 `tempogate sessions revoke` or its admin-API twin, `POST
 /admin/sessions/revoke`. The jti denylist used for integration keys plays no part here: it
 covers JWTs, and refresh tokens are opaque rows.

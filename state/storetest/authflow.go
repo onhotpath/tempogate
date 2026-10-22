@@ -13,6 +13,7 @@ import (
 func authRequest(state string) oidc.AuthRequest {
 	return oidc.AuthRequest{
 		InternalState:       state,
+		ConnectorID:         "google",
 		ClientID:            "temporal-ui",
 		RedirectURI:         "https://temporal.example.com/auth/sso/callback",
 		Scope:               "openid email",
@@ -32,6 +33,7 @@ func authCode(code string) oidc.AuthCode {
 		Code:                code,
 		ClientID:            "temporal-ui",
 		RedirectURI:         "https://temporal.example.com/auth/sso/callback",
+		ConnectorID:         "google",
 		Subject:             "sub-alice",
 		Email:               "alice@example.com",
 		Scope:               "openid email",
@@ -45,11 +47,12 @@ func authCode(code string) oidc.AuthCode {
 
 func browserSession(sid string) oidc.BrowserSession {
 	return oidc.BrowserSession{
-		SID:       sid,
-		Subject:   "sub-alice",
-		Email:     "alice@example.com",
-		CreatedAt: t0,
-		ExpiresAt: t0.Add(5 * time.Minute),
+		SID:         sid,
+		ConnectorID: "google",
+		Subject:     "sub-alice",
+		Email:       "alice@example.com",
+		CreatedAt:   t0,
+		ExpiresAt:   t0.Add(5 * time.Minute),
 	}
 }
 
@@ -77,6 +80,7 @@ func requireAuthCodeIdentity(t *testing.T, want, got oidc.AuthCode) {
 	require.Equal(t, want.Code, got.Code)
 	require.Equal(t, want.ClientID, got.ClientID)
 	require.Equal(t, want.RedirectURI, got.RedirectURI)
+	require.Equal(t, want.ConnectorID, got.ConnectorID)
 	require.Equal(t, want.Subject, got.Subject)
 	require.Equal(t, want.Email, got.Email)
 	require.Equal(t, want.FamilyID, got.FamilyID)
@@ -95,6 +99,15 @@ func authFlowCases() []testCase {
 
 			_, err = b.Store.ConsumeAuthRequest(t.Context(), want.InternalState)
 			require.ErrorIs(t, err, oidc.ErrAuthRequestNotFound)
+		}},
+		{"AuthRequest/RoundTripsAnyConnector", func(t *testing.T, b Backend) {
+			want := authRequest("state-1")
+			want.ConnectorID = "okta"
+			require.NoError(t, b.Store.SaveAuthRequest(t.Context(), want))
+
+			got, err := b.Store.ConsumeAuthRequest(t.Context(), want.InternalState)
+			require.NoError(t, err)
+			requireAuthRequest(t, want, got)
 		}},
 		{"AuthRequest/ConsumeUnknown", func(t *testing.T, b Backend) {
 			_, err := b.Store.ConsumeAuthRequest(t.Context(), "never-issued")
@@ -134,6 +147,20 @@ func authFlowCases() []testCase {
 			requireAuthCode(t, want, got)
 
 			replay, err := b.Store.ConsumeAuthCode(t.Context(), want.Code, "fam-2", t0.Add(2*time.Second))
+			require.ErrorIs(t, err, oidc.ErrAuthCodeReused)
+			requireAuthCodeIdentity(t, want, replay)
+		}},
+		{"AuthCode/RoundTripsAnyConnector", func(t *testing.T, b Backend) {
+			want := authCode("code-1")
+			want.ConnectorID = "okta"
+			require.NoError(t, b.Store.SaveAuthCode(t.Context(), want))
+
+			got, err := b.Store.ConsumeAuthCode(t.Context(), want.Code, "fam-1", t0)
+			require.NoError(t, err)
+			want.FamilyID = "fam-1"
+			requireAuthCode(t, want, got)
+
+			replay, err := b.Store.ConsumeAuthCode(t.Context(), want.Code, "fam-2", t0)
 			require.ErrorIs(t, err, oidc.ErrAuthCodeReused)
 			requireAuthCodeIdentity(t, want, replay)
 		}},
@@ -190,6 +217,16 @@ func authFlowCases() []testCase {
 			_, err = b.Store.LookupBrowserSession(t.Context(), want.SID)
 			require.ErrorIs(t, err, oidc.ErrBrowserSessionNotFound)
 			require.NoError(t, b.Store.DeleteBrowserSession(t.Context(), want.SID), "deleting an unknown sid is a no-op")
+		}},
+		{"BrowserSession/RoundTripsAnyConnector", func(t *testing.T, b Backend) {
+			want := browserSession("sid-1")
+			want.ConnectorID = "okta"
+			require.NoError(t, b.Store.SaveBrowserSession(t.Context(), want))
+
+			got, err := b.Store.LookupBrowserSession(t.Context(), want.SID)
+			require.NoError(t, err)
+			require.Equal(t, "okta", got.ConnectorID)
+			require.Equal(t, want.Subject, got.Subject)
 		}},
 		{"BrowserSession/LookupUnknown", func(t *testing.T, b Backend) {
 			_, err := b.Store.LookupBrowserSession(t.Context(), "never-minted")

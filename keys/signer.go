@@ -28,7 +28,9 @@ var ErrNoSigningKeys = errors.New("keys: signer has no keypair to sign with")
 // nonceClaim is the OIDC Core §2 binding: when a relying party sends `nonce`
 // at /authorize the provider MUST echo it into the ID token so the RP can
 // detect token replay/injection. clientIDClaim names the OAuth client an
-// access token was issued to (RFC 9068 §2.2).
+// access token was issued to (RFC 9068 §2.2). idpClaim names the upstream
+// connector a person signed in through (`google`); the sub carries it as its
+// prefix too, but a claim saves every consumer from parsing the sub.
 const (
 	permissionsClaim   = "permissions"
 	emailClaim         = "email"
@@ -36,6 +38,7 @@ const (
 	nonceClaim         = "nonce"
 	authTimeClaim      = "auth_time"
 	clientIDClaim      = "client_id"
+	idpClaim           = "idp"
 )
 
 // AccessTokenType is the JWS typ header of every access token tempogate
@@ -161,6 +164,10 @@ type MintRequest struct {
 	TTL         time.Duration
 	Email       string
 
+	// IDP, when non-empty, is the connector the person signed in through.
+	// Integration keys are not an identity provider and omit it.
+	IDP string
+
 	// ClientID, when non-empty, names the OAuth client the token was issued
 	// to. Tokens minted through /token carry it; integration keys have no
 	// client and omit it.
@@ -173,6 +180,7 @@ type MintRequest struct {
 type IDTokenRequest struct {
 	Subject string
 	Email   string
+	IDP     string
 
 	// Audience is the requesting client_id. Required: OIDC Core §2 makes
 	// the client the ID token's audience.
@@ -208,6 +216,9 @@ func (s *Signer) Mint(_ context.Context, req MintRequest) (string, string, error
 	if req.Email != "" {
 		b.Claim(emailClaim, req.Email)
 	}
+	if req.IDP != "" {
+		b.Claim(idpClaim, req.IDP)
+	}
 	if req.ClientID != "" {
 		b.Claim(clientIDClaim, req.ClientID)
 	}
@@ -233,6 +244,9 @@ func (s *Signer) MintIDToken(_ context.Context, req IDTokenRequest) (string, err
 	b.Audience([]string{req.Audience})
 	if req.Email != "" {
 		b.Claim(emailClaim, req.Email).Claim(emailVerifiedClaim, true)
+	}
+	if req.IDP != "" {
+		b.Claim(idpClaim, req.IDP)
 	}
 	if req.Nonce != "" {
 		b.Claim(nonceClaim, req.Nonce)

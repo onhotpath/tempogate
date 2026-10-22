@@ -12,6 +12,7 @@ import (
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/internal/clock"
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 type sessionsParams struct {
@@ -35,11 +36,20 @@ func newSessionsCmd(load deps[sessionsParams]) *cobra.Command {
 }
 
 func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
-	var f admin.SessionFilter
+	var (
+		f       admin.SessionFilter
+		subject string
+	)
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List live sessions (never prints token values)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if subject != "" {
+				var err error
+				if f.ConnectorID, f.Subject, err = oidc.ParseTokenSubject(subject); err != nil {
+					return err
+				}
+			}
 			ctx := cmd.Context()
 			return load(ctx, func(p sessionsParams) error {
 				if err := storeReady(ctx, p.Store); err != nil {
@@ -53,7 +63,7 @@ func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 				_, _ = fmt.Fprintln(w, "FAMILY_ID\tCLIENT_ID\tEMAIL\tSUBJECT\tAUTH_TIME\tLAST_ROTATION\tEXPIRES_AT")
 				for _, s := range sessions {
 					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						s.FamilyID, s.ClientID, s.Email, s.Subject,
+						s.FamilyID, s.ClientID, s.Email, oidc.TokenSubject(s.ConnectorID, s.Subject),
 						rfc3339(s.AuthTime), rfc3339(s.RotatedAt), rfc3339(s.ExpiresAt))
 				}
 				return w.Flush()
@@ -61,7 +71,7 @@ func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&f.Email, "email", "", "only sessions of this email (case-insensitive)")
-	c.Flags().StringVar(&f.Subject, "subject", "", "only sessions of this Google subject (exact)")
+	c.Flags().StringVar(&subject, "subject", "", "only sessions of this token sub, <connector>:<upstream sub> (exact)")
 	return c
 }
 
@@ -92,7 +102,11 @@ func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 				case email != "":
 					n, err = p.Sessions.RevokeEmail(ctx, email, now)
 				case subject != "":
-					n, err = p.Sessions.RevokeSubject(ctx, subject, now)
+					connectorID, sub, perr := oidc.ParseTokenSubject(subject)
+					if perr != nil {
+						return perr
+					}
+					n, err = p.Sessions.RevokeSubject(ctx, connectorID, sub, now)
 				default:
 					n, err = p.Sessions.RevokeFamily(ctx, family, now)
 				}
@@ -105,7 +119,7 @@ func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&email, "email", "", "revoke every session of this email (case-insensitive)")
-	c.Flags().StringVar(&subject, "subject", "", "revoke every session of this Google subject (exact)")
+	c.Flags().StringVar(&subject, "subject", "", "revoke every session of this token sub, <connector>:<upstream sub> (exact)")
 	c.Flags().StringVar(&family, "family", "", "revoke the session with this family id (see `sessions list`); fails if no such session exists")
 	c.MarkFlagsMutuallyExclusive("email", "subject", "family")
 	c.MarkFlagsOneRequired("email", "subject", "family")

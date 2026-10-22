@@ -3,6 +3,8 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -27,17 +29,38 @@ var ErrAuthCodeNotFound = errors.New("oidc: auth code not found")
 var ErrAuthCodeReused = errors.New("oidc: auth code already redeemed")
 
 // Identity is the authenticated end user as tempogate persists and mints it.
-// Subject is Google's `sub`: opaque, stable and never reused across Google
-// accounts, so it (not the email, which can be re-issued to someone else)
-// becomes the token's sub. Email is carried alongside as a claim.
+// ConnectorID is the connector the user signed in through and Subject the
+// upstream's own `sub` there: opaque, stable and never reused, so the pair
+// (not the email, which can be re-issued to someone else) is who the user
+// is. The token's sub is TokenSubject of the pair, composed at mint time and
+// never stored. Email is carried alongside as a claim.
 //
 // Every row that carries an Identity (auth code, refresh token, device code,
-// browser session) gained its subject in schema 0010. A row with an empty
-// Subject predates that migration, and the hosted-domain check, so it is
+// browser session) gained its subject in schema 0010 and its connector in
+// 0016 (backfilled as google, the only connector before it). A row with an
+// empty Subject predates 0010, and the hosted-domain check, so it is
 // rejected and the user signs in again.
 type Identity struct {
-	Subject string
-	Email   string
+	ConnectorID string
+	Subject     string
+	Email       string
+}
+
+// TokenSubject is the sub of every token minted for a person:
+// `<connector id>:<upstream subject>`. Connector ids never contain a colon
+// (ValidateConnectorID), so the first one splits it back.
+func TokenSubject(connectorID, subject string) string {
+	return connectorID + ":" + subject
+}
+
+// ParseTokenSubject splits a token sub into its connector id and upstream
+// subject. It fails on anything TokenSubject cannot have produced.
+func ParseTokenSubject(sub string) (connectorID, subject string, err error) {
+	connectorID, subject, ok := strings.Cut(sub, ":")
+	if !ok || subject == "" || ValidateConnectorID(connectorID) != nil {
+		return "", "", fmt.Errorf("oidc: subject %q is not of the form <connector>:<sub>", sub)
+	}
+	return connectorID, subject, nil
 }
 
 // AuthCode is the authorization code tempogate mints after Google has
@@ -48,6 +71,7 @@ type AuthCode struct {
 	Code                string
 	ClientID            string
 	RedirectURI         string
+	ConnectorID         string
 	Subject             string
 	Email               string
 	Scope               string
@@ -67,7 +91,7 @@ type AuthCode struct {
 	ExpiresAt time.Time
 }
 
-// CallbackStore is the consumer-side state interface for the /callback/google
+// CallbackStore is the consumer-side state interface for the /callback/{connector}
 // handler (see state/doc.go). It is distinct from AuthRequestStore — the
 // authorize side only writes pending requests; the callback side consumes one
 // (single-use) and persists the minted code. The concrete sqlite.Store

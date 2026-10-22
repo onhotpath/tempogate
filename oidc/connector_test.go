@@ -347,6 +347,7 @@ func (s *CallbackSuite) TestConnectorGetsTheBindingValuesBeginSent() {
 	s.Equal(begin.RedirectURI, calls[0].RedirectURI)
 	s.Equal("okta-code", calls[0].Params.Get("code"))
 	s.Equal("okta-sub-alice", s.store.only().Subject)
+	s.Equal("okta", s.store.only().ConnectorID, "the code carries the connector the user signed in through")
 
 	googleBinding := s.binding.Cookie("google", begin.State)
 	s.Equal(cookie.Name, googleBinding.Name)
@@ -404,4 +405,21 @@ func TestBindingIsScopedPerConnector(t *testing.T) {
 	require.NotEqual(t, b.Cookie("okta", "st").Value, b.Cookie("google", "st").Value)
 	_, err := hex.DecodeString(strings.TrimPrefix(b.Cookie("okta", "st").Name, "tempogate_upstream_"))
 	require.NoError(t, err, "the cookie name depends on the state only")
+}
+
+func TestTokenSubject(t *testing.T) {
+	require.Equal(t, "google:1234", oidc.TokenSubject("google", "1234"))
+	for sub, want := range map[string][2]string{
+		"google:1234":     {"google", "1234"},
+		"okta:00u1:extra": {"okta", "00u1:extra"},
+	} {
+		id, subject, err := oidc.ParseTokenSubject(sub)
+		require.NoError(t, err, sub)
+		require.Equal(t, want, [2]string{id, subject}, sub)
+		require.Equal(t, sub, oidc.TokenSubject(id, subject), "round trip")
+	}
+	for _, sub := range []string{"", "1234", "google:", ":1234", "Google:1234", "key:1234"} {
+		_, _, err := oidc.ParseTokenSubject(sub)
+		require.Error(t, err, sub)
+	}
 }

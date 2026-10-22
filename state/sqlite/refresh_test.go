@@ -62,8 +62,12 @@ func (s *StoreSuite) TestRevokeRefreshBySubject() {
 	other.FamilyID = "fam-c"
 	other.Subject = "GOOGLE-SUB-ALICE"
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, other))
+	elsewhere := s.refresh("d1")
+	elsewhere.FamilyID = "fam-d"
+	elsewhere.ConnectorID = "okta"
+	s.Require().NoError(s.store.SaveRefresh(s.ctx, elsewhere))
 
-	n, err := s.store.RevokeRefreshBySubject(s.ctx, "google-sub-alice", time.Now().UTC())
+	n, err := s.store.RevokeRefreshBySubject(s.ctx, "google", "google-sub-alice", time.Now().UTC())
 	s.Require().NoError(err)
 	s.Equal(2, n, "every family of the subject, whatever email it signed in with")
 
@@ -73,8 +77,10 @@ func (s *StoreSuite) TestRevokeRefreshBySubject() {
 	}
 	_, err = s.store.ConsumeRefresh(s.ctx, "c1", "ui", time.Now().UTC())
 	s.NoError(err, "a subject is matched exactly")
+	_, err = s.store.ConsumeRefresh(s.ctx, "d1", "ui", time.Now().UTC())
+	s.NoError(err, "the same subject at another connector is another person")
 
-	n, err = s.store.RevokeRefreshBySubject(s.ctx, "nobody", time.Now().UTC())
+	n, err = s.store.RevokeRefreshBySubject(s.ctx, "google", "nobody", time.Now().UTC())
 	s.Require().NoError(err)
 	s.Zero(n)
 }

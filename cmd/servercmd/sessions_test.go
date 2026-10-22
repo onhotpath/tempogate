@@ -42,7 +42,7 @@ func (s *SessionsCmdSuite) TearDownTest() {
 func (s *SessionsCmdSuite) seed(token, family, email string) {
 	now := time.Now().UTC()
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, oidc.Refresh{
-		Token: token, JTI: "jti-" + token, ClientID: "tempogate-cli", Subject: "google-sub-" + family, Email: email,
+		Token: token, JTI: "jti-" + token, ClientID: "tempogate-cli", ConnectorID: "google", Subject: "sub-" + family, Email: email,
 		FamilyID: family, AuthTime: now.Add(-time.Hour), CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}))
 }
@@ -91,7 +91,7 @@ func (s *SessionsCmdSuite) TestListShowsSessionsButNeverTokens() {
 
 	out, err := s.run("list")
 	s.Require().NoError(err)
-	for _, want := range []string{"FAMILY_ID", "CLIENT_ID", "EMAIL", "SUBJECT", "AUTH_TIME", "LAST_ROTATION", "EXPIRES_AT", "fam-a", "fam-b", "alice@example.com", "google-sub-fam-a", "tempogate-cli"} {
+	for _, want := range []string{"FAMILY_ID", "CLIENT_ID", "EMAIL", "SUBJECT", "AUTH_TIME", "LAST_ROTATION", "EXPIRES_AT", "fam-a", "fam-b", "alice@example.com", "google:sub-fam-a", "tempogate-cli"} {
 		s.Contains(out, want)
 	}
 	s.NotContains(out, "secret-token", "token values are never printed")
@@ -101,10 +101,13 @@ func (s *SessionsCmdSuite) TestListShowsSessionsButNeverTokens() {
 	s.Contains(out, "fam-b")
 	s.NotContains(out, "fam-a")
 
-	out, err = s.run("list", "--subject", "google-sub-fam-a")
+	out, err = s.run("list", "--subject", "google:sub-fam-a")
 	s.Require().NoError(err)
 	s.Contains(out, "fam-a")
 	s.NotContains(out, "fam-b")
+
+	_, err = s.run("list", "--subject", "sub-fam-a")
+	s.Require().ErrorContains(err, "<connector>:<sub>", "a bare upstream sub names no connector")
 }
 
 func (s *SessionsCmdSuite) TestRevokeByEmail() {
@@ -138,7 +141,10 @@ func (s *SessionsCmdSuite) TestRevokeBySubject() {
 	s.seed("a1", "fam-a", "alice@example.com")
 	s.seed("b1", "fam-b", "bob@example.com")
 
-	out, err := s.run("revoke", "--subject", "google-sub-fam-a")
+	_, err := s.run("revoke", "--subject", "sub-fam-a")
+	s.Require().ErrorContains(err, "<connector>:<sub>", "a bare upstream sub names no connector")
+
+	out, err := s.run("revoke", "--subject", "google:sub-fam-a")
 	s.Require().NoError(err)
 	s.Contains(out, "revoked 1 session(s)")
 	s.False(s.live("a1"))

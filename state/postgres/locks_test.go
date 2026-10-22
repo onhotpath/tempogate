@@ -84,7 +84,7 @@ func TestLocks(t *testing.T) {
 			live := holding(t, s,
 				func(tx pgx.Tx) {
 					exec(t, tx, `SELECT 1 FROM refresh_families WHERE family_id = 'fam' FOR SHARE`)
-					exec(t, tx, `INSERT INTO refresh_tokens (`+refreshColumns+`) VALUES ($1, '', 'ui', '', '', 'fam', $2, $2, $3)`,
+					exec(t, tx, `INSERT INTO refresh_tokens (`+refreshColumns+`) VALUES ($1, '', 'ui', 'google', '', '', 'fam', $2, $2, $3)`,
 						secret.Hash(child.Token), at, at.Add(time.Hour))
 				},
 				func() int {
@@ -109,7 +109,7 @@ func TestLocks(t *testing.T) {
 			stall, err := s.pool.Begin(t.Context())
 			require.NoError(t, err)
 			defer func() { _ = stall.Rollback(context.WithoutCancel(t.Context())) }()
-			exec(t, stall, `INSERT INTO refresh_tokens (`+refreshColumns+`) VALUES ($1, '', 'ui', '', '', 'other', $2, $2, $2)`,
+			exec(t, stall, `INSERT INTO refresh_tokens (`+refreshColumns+`) VALUES ($1, '', 'ui', 'google', '', '', 'other', $2, $2, $2)`,
 				secret.Hash("child"), at)
 
 			saved := make(chan error, 1)

@@ -21,9 +21,10 @@ var ErrBrowserSessionNotFound = errors.New("oidc: browser session not found")
 // lifetime. TTL enforcement is the handler's concern — the store will hand
 // back an expired row without complaint, mirroring AuthCode / Refresh.
 type BrowserSession struct {
-	SID       string
-	Subject   string
-	Email     string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	SID         string
+	ConnectorID string
+	Subject     string
+	Email       string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 }

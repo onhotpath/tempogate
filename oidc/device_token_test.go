@@ -119,6 +119,7 @@ func (m *memDeviceFlowStore) ApproveDeviceCode(_ context.Context, userCode strin
 	}
 	t := now
 	dc.ApprovedAt = &t
+	dc.ConnectorID = id.ConnectorID
 	dc.Subject = id.Subject
 	dc.Email = id.Email
 	m.rows[dcCode] = dc
@@ -202,7 +203,7 @@ func (s *TokenSuite) approve(userCode string, id oidc.Identity) {
 }
 
 func aliceID() oidc.Identity {
-	return oidc.Identity{Subject: "google-sub-alice", Email: "alice@example.com"}
+	return oidc.Identity{ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com"}
 }
 
 func (s *TokenSuite) deny(userCode string) {
@@ -381,7 +382,7 @@ func (s *TokenSuite) TestDeviceCodeApprovedMintsTokenAndConsumes() {
 	tok, err := s.verifier.Verify(context.Background(), body.AccessToken)
 	s.Require().NoError(err)
 	sub, _ := tok.Subject()
-	s.Equal("google-sub-alice", sub, "the device grant mints the approver's Google sub")
+	s.Equal("google:google-sub-alice", sub, "the device grant mints the approver's sub")
 	email, err := jwxjwt.Get[string](tok, "email")
 	s.Require().NoError(err)
 	s.Equal("alice@example.com", email)
@@ -391,7 +392,7 @@ func (s *TokenSuite) TestDeviceCodeApprovedMintsTokenAndConsumes() {
 	s.Equal("tempogate-device", clientID, "the token is issued to the polling client")
 	idTok := s.parseIDToken(body.IDToken)
 	idSub, _ := idTok.Subject()
-	s.Equal("google-sub-alice", idSub, "the ID token carries the same Google sub")
+	s.Equal("google:google-sub-alice", idSub, "the ID token carries the same sub")
 	aud, _ := idTok.Audience()
 	s.Equal([]string{"tempogate-device"}, aud, "the ID token's aud is the polling client_id")
 	perms, ok := tok.Field("permissions")

@@ -927,7 +927,7 @@ func (u *DeviceUI) handleDecision(ctx context.Context, in *deviceDecisionInput, 
 	}
 	now := u.now()
 	if approve {
-		err = u.devices.ApproveDeviceCode(ctx, canonical, Identity{Subject: bs.Subject, Email: bs.Email}, now)
+		err = u.devices.ApproveDeviceCode(ctx, canonical, Identity{ConnectorID: bs.ConnectorID, Subject: bs.Subject, Email: bs.Email}, now)
 	} else {
 		err = u.devices.DenyDeviceCode(ctx, canonical, now)
 	}

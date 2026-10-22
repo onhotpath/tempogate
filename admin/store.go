@@ -68,20 +68,23 @@ var ErrSessionNotFound = errors.New("admin: session not found")
 // Session is one live refresh-token family (one sign-in) as operators see
 // it. It deliberately carries no token value or hash.
 type Session struct {
-	FamilyID  string
-	ClientID  string
-	Subject   string
-	Email     string
-	AuthTime  time.Time
-	RotatedAt time.Time
-	ExpiresAt time.Time
+	FamilyID    string
+	ClientID    string
+	ConnectorID string
+	Subject     string
+	Email       string
+	AuthTime    time.Time
+	RotatedAt   time.Time
+	ExpiresAt   time.Time
 }
 
 // SessionFilter narrows SessionStore.List. Empty fields do not filter; Email
-// matches case-insensitively, Subject exactly.
+// matches case-insensitively, ConnectorID and Subject (the upstream's own
+// value) exactly.
 type SessionFilter struct {
-	Email   string
-	Subject string
+	Email       string
+	ConnectorID string
+	Subject     string
 }
 
 // SessionStore is the refresh-session contract admin/ depends on; a shim in
@@ -93,5 +96,5 @@ type SessionStore interface {
 	List(ctx context.Context, f SessionFilter, now time.Time) ([]Session, error)
 	RevokeFamily(ctx context.Context, familyID string, at time.Time) (int, error)
 	RevokeEmail(ctx context.Context, email string, at time.Time) (int, error)
-	RevokeSubject(ctx context.Context, subject string, at time.Time) (int, error)
+	RevokeSubject(ctx context.Context, connectorID, subject string, at time.Time) (int, error)
 }

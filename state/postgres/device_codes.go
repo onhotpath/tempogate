@@ -28,18 +28,18 @@ var ErrDeviceCodeNotFound = fmt.Errorf("%w: postgres", oidc.ErrDeviceCodeNotFoun
 // them apart). Rooted at oidc.ErrDeviceCodeNotPending.
 var ErrDeviceCodeNotPending = fmt.Errorf("%w: postgres", oidc.ErrDeviceCodeNotPending)
 
-const deviceCodeColumns = `user_code, client_id, scope, subject, email,
+const deviceCodeColumns = `user_code, client_id, scope, connector_id, subject, email,
 	approved_at, denied_at, last_polled_at, interval_seconds,
 	created_at, expires_at`
 
 func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO device_codes
-		   (device_code_hash, user_code, client_id, scope, subject, email,
+		   (device_code_hash, user_code, client_id, scope, connector_id, subject, email,
 		    approved_at, denied_at, last_polled_at, interval_seconds,
 		    created_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		secret.Hash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Subject), nullString(dc.Email),
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		secret.Hash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.ConnectorID), nullString(dc.Subject), nullString(dc.Email),
 		dc.ApprovedAt, dc.DeniedAt, dc.LastPolledAt,
 		dc.IntervalSeconds, dc.CreatedAt, dc.ExpiresAt,
 	)
@@ -131,9 +131,9 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 func (s *Store) ApproveDeviceCode(ctx context.Context, userCode string, id oidc.Identity, now time.Time) error {
 	return s.decideDeviceCode(ctx,
 		`UPDATE device_codes
-		 SET approved_at = $1, subject = $3, email = $4
+		 SET approved_at = $1, connector_id = $3, subject = $4, email = $5
 		 WHERE user_code = $2 AND approved_at IS NULL AND denied_at IS NULL AND expires_at > $1`,
-		now, userCode, id.Subject, id.Email,
+		now, userCode, id.ConnectorID, id.Subject, id.Email,
 	)
 }
 
@@ -179,15 +179,18 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 
 func scanDeviceCode(r pgx.Row) (oidc.DeviceCode, error) {
 	var (
-		dc             oidc.DeviceCode
-		subject, email *string
+		dc                          oidc.DeviceCode
+		connectorID, subject, email *string
 	)
 	if err := r.Scan(
-		&dc.UserCode, &dc.ClientID, &dc.Scope, &subject, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &connectorID, &subject, &email,
 		&dc.ApprovedAt, &dc.DeniedAt, &dc.LastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	); err != nil {
 		return oidc.DeviceCode{}, err
+	}
+	if connectorID != nil {
+		dc.ConnectorID = *connectorID
 	}
 	if subject != nil {
 		dc.Subject = *subject

@@ -22,10 +22,10 @@ var ErrDuplicateAuthCode = errors.New("sqlite: auth code with this value already
 func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO auth_codes
-		   (code_hash, client_id, redirect_uri, subject, email, scope,
+		   (code_hash, client_id, redirect_uri, connector_id, subject, email, scope,
 		    code_challenge, code_challenge_method, nonce, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		secret.Hash(ac.Code), ac.ClientID, ac.RedirectURI, ac.Subject, ac.Email, ac.Scope,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		secret.Hash(ac.Code), ac.ClientID, ac.RedirectURI, ac.ConnectorID, ac.Subject, ac.Email, ac.Scope,
 		ac.CodeChallenge, ac.CodeChallengeMethod, ac.Nonce, ac.CreatedAt, ac.ExpiresAt,
 	)
 	if err != nil {
@@ -52,11 +52,11 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE auth_codes SET consumed_at = ?, family_id = ?
 		 WHERE code_hash = ? AND consumed_at IS NULL
-		 RETURNING client_id, redirect_uri, subject, email, scope,
+		 RETURNING client_id, redirect_uri, connector_id, subject, email, scope,
 		           code_challenge, code_challenge_method, nonce, family_id, created_at, expires_at`,
 		at, familyID, secret.Hash(code),
 	).Scan(
-		&ac.ClientID, &ac.RedirectURI, &ac.Subject, &ac.Email, &ac.Scope,
+		&ac.ClientID, &ac.RedirectURI, &ac.ConnectorID, &ac.Subject, &ac.Email, &ac.Scope,
 		&ac.CodeChallenge, &ac.CodeChallengeMethod, &ac.Nonce, &ac.FamilyID, &ac.CreatedAt, &ac.ExpiresAt,
 	)
 	if err == nil {
@@ -67,10 +67,10 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 	}
 
 	err = s.db.QueryRowContext(ctx,
-		`SELECT client_id, redirect_uri, subject, email, family_id, created_at, expires_at
+		`SELECT client_id, redirect_uri, connector_id, subject, email, family_id, created_at, expires_at
 		 FROM auth_codes WHERE code_hash = ? AND consumed_at IS NOT NULL`,
 		secret.Hash(code),
-	).Scan(&ac.ClientID, &ac.RedirectURI, &ac.Subject, &ac.Email, &ac.FamilyID, &ac.CreatedAt, &ac.ExpiresAt)
+	).Scan(&ac.ClientID, &ac.RedirectURI, &ac.ConnectorID, &ac.Subject, &ac.Email, &ac.FamilyID, &ac.CreatedAt, &ac.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return oidc.AuthCode{}, oidc.ErrAuthCodeNotFound
 	}

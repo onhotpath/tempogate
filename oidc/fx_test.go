@@ -322,7 +322,7 @@ func (s *FxSuite) TestSessionCookieFollowsIssuer() {
 			defer app.RequireStop()
 
 			rec := httptest.NewRecorder()
-			_, err := sm.Issue(s.T().Context(), rec, oidc.Identity{Subject: "google-sub-alice", Email: "alice@example.com"})
+			_, err := sm.Issue(s.T().Context(), rec, oidc.Identity{ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com"})
 			s.Require().NoError(err)
 			cookies := rec.Result().Cookies()
 			s.Require().Len(cookies, 1)

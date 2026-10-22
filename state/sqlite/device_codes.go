@@ -40,11 +40,11 @@ var ErrDeviceCodeNotPending = fmt.Errorf("%w: sqlite", oidc.ErrDeviceCodeNotPend
 func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO device_codes
-		   (device_code_hash, user_code, client_id, scope, subject, email,
+		   (device_code_hash, user_code, client_id, scope, connector_id, subject, email,
 		    approved_at, denied_at, last_polled_at, interval_seconds,
 		    created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		secret.Hash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Subject), nullString(dc.Email),
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		secret.Hash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.ConnectorID), nullString(dc.Subject), nullString(dc.Email),
 		nullTime(dc.ApprovedAt), nullTime(dc.DeniedAt), nullTime(dc.LastPolledAt),
 		dc.IntervalSeconds, dc.CreatedAt, dc.ExpiresAt,
 	)
@@ -82,6 +82,7 @@ func (s *Store) LookupDeviceCodeByUserCode(ctx context.Context, userCode string)
 func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oidc.DeviceCode, error) {
 	var (
 		dc           oidc.DeviceCode
+		connectorID  sql.NullString
 		subject      sql.NullString
 		email        sql.NullString
 		approvedAt   sql.NullTime
@@ -89,14 +90,14 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 		lastPolledAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT user_code, client_id, scope, subject, email,
+		`SELECT user_code, client_id, scope, connector_id, subject, email,
 		        approved_at, denied_at, last_polled_at, interval_seconds,
 		        created_at, expires_at
 		 FROM device_codes
 		 WHERE `+column+` = ?`,
 		value,
 	).Scan(
-		&dc.UserCode, &dc.ClientID, &dc.Scope, &subject, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &connectorID, &subject, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	)
@@ -106,6 +107,7 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 	if err != nil {
 		return oidc.DeviceCode{}, s.fail("lookup_device_code", fmt.Errorf("sqlite: lookup device code by %s: %w", column, err))
 	}
+	dc.ConnectorID = connectorID.String
 	dc.Subject = subject.String
 	dc.Email = email.String
 	dc.ApprovedAt = nullableTime(approvedAt)
@@ -181,11 +183,11 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 func (s *Store) ApproveDeviceCode(ctx context.Context, userCode string, id oidc.Identity, now time.Time) error {
 	return s.decideDeviceCode(ctx, now,
 		`UPDATE device_codes
-		 SET approved_at = ?, subject = ?, email = ?
+		 SET approved_at = ?, connector_id = ?, subject = ?, email = ?
 		 WHERE user_code = ?
 		   AND approved_at IS NULL
 		   AND denied_at IS NULL`,
-		[]any{now, id.Subject, id.Email, userCode},
+		[]any{now, id.ConnectorID, id.Subject, id.Email, userCode},
 		userCode,
 	)
 }
@@ -246,6 +248,7 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
 	var (
 		dc           = oidc.DeviceCode{Code: deviceCode}
+		connectorID  sql.NullString
 		subject      sql.NullString
 		email        sql.NullString
 		approvedAt   sql.NullTime
@@ -254,12 +257,12 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 	)
 	err := s.db.QueryRowContext(ctx,
 		`DELETE FROM device_codes WHERE device_code_hash = ?
-		 RETURNING user_code, client_id, scope, subject, email,
+		 RETURNING user_code, client_id, scope, connector_id, subject, email,
 		           approved_at, denied_at, last_polled_at, interval_seconds,
 		           created_at, expires_at`,
 		secret.Hash(deviceCode),
 	).Scan(
-		&dc.UserCode, &dc.ClientID, &dc.Scope, &subject, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &connectorID, &subject, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	)
@@ -269,6 +272,7 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 	if err != nil {
 		return oidc.DeviceCode{}, s.fail("consume_device_code", fmt.Errorf("sqlite: consume device code: %w", err))
 	}
+	dc.ConnectorID = connectorID.String
 	dc.Subject = subject.String
 	dc.Email = email.String
 	dc.ApprovedAt = nullableTime(approvedAt)

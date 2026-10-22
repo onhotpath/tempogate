@@ -117,7 +117,7 @@ func (t *Token) deviceCodeGrant(ctx context.Context, form url.Values, authHeader
 
 	// RFC 8628 has no nonce concept; minting with empty nonce is the correct
 	// behaviour and matches authorization_code on every other claim.
-	id := Identity{Subject: final.Subject, Email: final.Email}
+	id := Identity{ConnectorID: final.ConnectorID, Subject: final.Subject, Email: final.Email}
 	out, err := t.issue(ctx, id, final.ClientID, "", lineage{})
 	if errors.Is(err, errNoPermissions) {
 		// The verification page refuses such a person before approving, so

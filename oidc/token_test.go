@@ -284,6 +284,7 @@ func (s *TokenSuite) SetupTest() {
 		oidc.WithRefreshGenerator(func() (string, error) { return fixedRefresh, nil }),
 		oidc.WithDeviceCodeStore(s.deviceStore),
 		oidc.WithAllowedDomains("example.com"),
+		oidc.WithConnectors(googleConnectors(s.T(), nil, "")),
 	)
 	mux := http.NewServeMux()
 	tok.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -304,6 +305,7 @@ func (s *TokenSuite) authCode(code string) oidc.AuthCode {
 		Code:                code,
 		ClientID:            "ui",
 		RedirectURI:         testRedirectURI,
+		ConnectorID:         "google",
 		Subject:             "google-sub-alice",
 		Email:               "alice@example.com",
 		Scope:               "openid email",
@@ -340,6 +342,7 @@ func (s *TokenSuite) confAuthCode(code string) oidc.AuthCode {
 		Code:        code,
 		ClientID:    "webui",
 		RedirectURI: testRedirectURI,
+		ConnectorID: "google",
 		Subject:     "google-sub-alice",
 		Email:       "alice@example.com",
 		Scope:       "openid email",
@@ -387,7 +390,7 @@ func (s *TokenSuite) TestConfidentialClientSecretViaFormBodyMintsJWT() {
 	s.Require().NoError(err)
 	s.Equal("webui", clientID)
 	sub, _ := tok.Subject()
-	s.Equal("google-sub-alice", sub)
+	s.Equal("google:google-sub-alice", sub)
 
 	id := s.parseIDToken(body.IDToken)
 	aud, _ := id.Audience()
@@ -396,7 +399,7 @@ func (s *TokenSuite) TestConfidentialClientSecretViaFormBodyMintsJWT() {
 	s.Require().NoError(err)
 	s.Equal("rp-nonce-xyz", nonce, "nonce from /authorize must round-trip into the ID token")
 	idSub, _ := id.Subject()
-	s.Equal("google-sub-alice", idSub, "the ID token carries the same Google sub")
+	s.Equal("google:google-sub-alice", idSub, "the ID token carries the same sub")
 }
 
 func (s *TokenSuite) TestConfidentialClientSecretViaHTTPBasicMintsJWT() {
@@ -530,7 +533,7 @@ func (s *TokenSuite) TestAuthorizationCodeGrantMintsVerifiableJWT() {
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
-	s.Equal("google-sub-alice", sub, "sub is Google's stable, never-reused account id, not the email")
+	s.Equal("google:google-sub-alice", sub, "sub is the connector and Google's stable, never-reused account id, not the email")
 
 	email, err := jwxjwt.Get[string](tok, "email")
 	s.Require().NoError(err)
@@ -685,15 +688,16 @@ func (s *TokenSuite) TestGrantTypeDispatch() {
 
 func (s *TokenSuite) TestRefreshTokenGrantRotatesAndMintsSamePermissions() {
 	s.store.putRefresh(oidc.Refresh{
-		Token:     "old-refresh",
-		JTI:       "old-jti",
-		ClientID:  "ui",
-		Subject:   "google-sub-alice",
-		Email:     "alice@example.com",
-		FamilyID:  "old-family",
-		AuthTime:  signNow,
-		CreatedAt: signNow,
-		ExpiresAt: signNow.Add(7 * 24 * time.Hour),
+		Token:       "old-refresh",
+		JTI:         "old-jti",
+		ClientID:    "ui",
+		ConnectorID: "google",
+		Subject:     "google-sub-alice",
+		Email:       "alice@example.com",
+		FamilyID:    "old-family",
+		AuthTime:    signNow,
+		CreatedAt:   signNow,
+		ExpiresAt:   signNow.Add(7 * 24 * time.Hour),
 	})
 
 	f := url.Values{}
@@ -714,7 +718,7 @@ func (s *TokenSuite) TestRefreshTokenGrantRotatesAndMintsSamePermissions() {
 	s.Require().True(ok)
 	s.Equal([]string{"temporal-system:admin"}, toStringSlice(s.T(), perms))
 	sub, _ := tok.Subject()
-	s.Equal("google-sub-alice", sub, "a refreshed token keeps the original subject")
+	s.Equal("google:google-sub-alice", sub, "a refreshed token keeps the original subject")
 	email, err := jwxjwt.Get[string](tok, "email")
 	s.Require().NoError(err)
 	s.Equal("alice@example.com", email)
@@ -737,7 +741,7 @@ func (s *TokenSuite) TestRefreshTokenGrantErrors() {
 		{"missing refresh_token", "", nil, "invalid_request"},
 		{"unknown refresh_token", "nope", nil, "invalid_grant"},
 		{"expired refresh_token", "stale", &oidc.Refresh{
-			Token: "stale", Subject: "google-sub-alice", Email: "alice@example.com", ClientID: "ui",
+			Token: "stale", ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com", ClientID: "ui",
 			CreatedAt: signNow.Add(-48 * time.Hour), ExpiresAt: signNow.Add(-time.Second),
 		}, "invalid_grant"},
 		// Minted before migration 0010 (no subject, and without the hd

@@ -20,10 +20,10 @@ var ErrDuplicateAuthCode = errors.New("postgres: auth code with this value alrea
 func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO auth_codes
-		   (code_hash, client_id, redirect_uri, subject, email, scope,
+		   (code_hash, client_id, redirect_uri, connector_id, subject, email, scope,
 		    code_challenge, code_challenge_method, nonce, created_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		secret.Hash(ac.Code), ac.ClientID, ac.RedirectURI, ac.Subject, ac.Email, ac.Scope,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		secret.Hash(ac.Code), ac.ClientID, ac.RedirectURI, ac.ConnectorID, ac.Subject, ac.Email, ac.Scope,
 		ac.CodeChallenge, ac.CodeChallengeMethod, ac.Nonce, ac.CreatedAt, ac.ExpiresAt,
 	)
 	if isUniqueViolation(err) {
@@ -48,11 +48,11 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 	err := s.pool.QueryRow(ctx,
 		`UPDATE auth_codes SET consumed_at = $1, family_id = $2
 		 WHERE code_hash = $3 AND consumed_at IS NULL
-		 RETURNING client_id, redirect_uri, subject, email, scope,
+		 RETURNING client_id, redirect_uri, connector_id, subject, email, scope,
 		           code_challenge, code_challenge_method, nonce, family_id, created_at, expires_at`,
 		at, familyID, secret.Hash(code),
 	).Scan(
-		&ac.ClientID, &ac.RedirectURI, &ac.Subject, &ac.Email, &ac.Scope,
+		&ac.ClientID, &ac.RedirectURI, &ac.ConnectorID, &ac.Subject, &ac.Email, &ac.Scope,
 		&ac.CodeChallenge, &ac.CodeChallengeMethod, &ac.Nonce, &ac.FamilyID, &ac.CreatedAt, &ac.ExpiresAt,
 	)
 	if err == nil {
@@ -63,10 +63,10 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 	}
 
 	err = s.pool.QueryRow(ctx,
-		`SELECT client_id, redirect_uri, subject, email, family_id, created_at, expires_at
+		`SELECT client_id, redirect_uri, connector_id, subject, email, family_id, created_at, expires_at
 		 FROM auth_codes WHERE code_hash = $1 AND consumed_at IS NOT NULL`,
 		secret.Hash(code),
-	).Scan(&ac.ClientID, &ac.RedirectURI, &ac.Subject, &ac.Email, &ac.FamilyID, &ac.CreatedAt, &ac.ExpiresAt)
+	).Scan(&ac.ClientID, &ac.RedirectURI, &ac.ConnectorID, &ac.Subject, &ac.Email, &ac.FamilyID, &ac.CreatedAt, &ac.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return oidc.AuthCode{}, oidc.ErrAuthCodeNotFound
 	}

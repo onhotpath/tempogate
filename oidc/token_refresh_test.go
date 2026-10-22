@@ -2,10 +2,14 @@ package oidc_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	jwxjwt "github.com/lestrrat-go/jwx/v4/jwt"
 
 	"github.com/onhotpath/tempogate/oidc"
@@ -108,8 +112,60 @@ func (s *TokenSuite) TestRejectedRefreshLeavesTokenForLegitimateClient() {
 
 func (s *TokenSuite) seedRefresh(token, clientID string) {
 	s.store.putRefresh(oidc.Refresh{
-		Token: token, JTI: "jti-" + token, ClientID: clientID, Subject: "google-sub-alice", Email: "alice@example.com",
+		Token: token, JTI: "jti-" + token, ClientID: clientID, ConnectorID: "google", Subject: "google-sub-alice", Email: "alice@example.com",
 		FamilyID: "family-" + token, AuthTime: signNow,
 		CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
 	})
+}
+
+// TestRefreshForARemovedConnectorRevokesTheFamily: a session whose
+// connector is no longer configured has nobody left to vouch for it, so the
+// refresh is refused and the whole family revoked, and it stays revoked if a
+// connector with that id comes back.
+func (s *TokenSuite) TestRefreshForARemovedConnectorRevokesTheFamily() {
+	s.store.putRefresh(oidc.Refresh{
+		Token: "rt-okta", JTI: "jti-okta", ClientID: "ui", ConnectorID: "okta", Subject: "okta-sub-alice", Email: "alice@example.com",
+		FamilyID: "family-okta", AuthTime: signNow, CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
+	})
+
+	resp := s.post(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"rt-okta"}, "client_id": {"ui"}})
+	defer resp.Body.Close()
+
+	s.Equal(http.StatusBadRequest, resp.StatusCode)
+	s.Equal("invalid_grant", s.decodeOAuthError(resp))
+	s.Equal([]string{"refresh_connector_removed"}, s.observed.revocationCalls())
+	s.True(s.store.revokedFamilies["family-okta"])
+	s.Contains(s.logs.String(), "event=refresh_connector_removed")
+	s.Contains(s.logs.String(), "family_id=family-okta")
+}
+
+func (s *TokenSuite) TestRevokeFailureOnConnectorRefusalIsServerError() {
+	s.store.putRefresh(oidc.Refresh{
+		Token: "rt-okta", JTI: "jti-okta", ClientID: "ui", ConnectorID: "okta", Subject: "okta-sub-alice", Email: "alice@example.com",
+		FamilyID: "family-okta", AuthTime: signNow, CreatedAt: signNow, ExpiresAt: signNow.Add(time.Hour),
+	})
+	s.store.revokeErr = errors.New("db exploded")
+
+	resp := s.post(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"rt-okta"}, "client_id": {"ui"}})
+	defer resp.Body.Close()
+	s.Equal(http.StatusInternalServerError, resp.StatusCode)
+}
+
+// TestRefreshWithoutConnectorsIsRefused: a Token built without the
+// configured connectors cannot tell a live connector from a removed one, so
+// it fails closed.
+func (s *TokenSuite) TestRefreshWithoutConnectorsIsRefused() {
+	s.seedRefresh("rt-1", "ui")
+	tok := oidc.NewToken(s.store, nil, s.clients, oidc.WithPermissionResolver(permitAll), oidc.WithAllowedDomains("example.com"),
+		oidc.WithTokenClock(func() time.Time { return signNow }))
+	mux := http.NewServeMux()
+	tok.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.PostForm(srv.URL+"/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"rt-1"}, "client_id": {"ui"}})
+	s.Require().NoError(err)
+	defer resp.Body.Close()
+	s.Equal(http.StatusBadRequest, resp.StatusCode)
+	s.Equal("invalid_grant", s.decodeOAuthError(resp))
 }

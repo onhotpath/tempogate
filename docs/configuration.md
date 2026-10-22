@@ -369,11 +369,13 @@ That is no longer the default: with no rules and no default, `tempogate serve` s
 
 ### Token subject
 
-The `sub` of every token tempogate mints for a person is the Google account's `sub`: an opaque, stable id that Google never reuses.
+The `sub` of every token tempogate mints for a person is `<connector>:<upstream sub>`, for Google `google:<Google sub>`: the connector the person signed in through, then the account's `sub` there, an opaque, stable id that Google never reuses.
+The same token carries the connector alone in an `idp` claim (`google`), and `/userinfo` returns both.
+The connector is part of the identity because the same upstream `sub` at two identity providers is two people; Google is the only connector today.
 The email is in the `email` claim (the ID token also carries `email_verified: true`).
 Do not key users on the email: Google can re-issue an address to a different account, which would otherwise inherit the previous holder's identity.
 Temporal's default claim mapper authorizes from `permissions`, not `sub`.
-Integration keys are unchanged: their `sub` is still the key's owner.
+Integration keys are unchanged: their `sub` is still the key's owner, and they carry no `idp` claim.
 
 ### Google leg
 
@@ -398,7 +400,7 @@ Google is tempogate's one upstream connector (id `google`); the server keeps the
 | For | Temporal (gRPC frontend, Web UI API calls, `tempogate token`) | the relying party's login only ([OIDC Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)) |
 | JWS `typ` | `at+jwt` ([RFC 9068](https://datatracker.ietf.org/doc/html/rfc9068)) | `JWT` |
 | `aud` | `OIDC_ACCESS_TOKEN_AUDIENCE` (`temporal`) | the requesting `client_id` |
-| Claims | `sub`, `email`, `permissions`, `client_id` | `sub`, `email`, `email_verified`, `auth_time`, `nonce` (when sent at `/authorize`) |
+| Claims | `sub`, `idp`, `email`, `permissions`, `client_id` | `sub`, `idp`, `email`, `email_verified`, `auth_time`, `nonce` (when sent at `/authorize`) |
 | Lifetime | `OIDC_ACCESS_TOKEN_TTL` (`4h`) | 5 minutes |
 
 The ID token has no `permissions` claim, and Temporal's default ClaimMapper grants roles only from `permissions`, so an ID token presented to Temporal is refused.
@@ -430,16 +432,16 @@ Once the audience is enforced, integration keys minted before this release (no `
 ### Refresh-token sessions
 
 Each sign-in starts a session: a family of single-use refresh tokens that rotate on every exchange.
-A refresh is refused with `invalid_grant` when the session is idle past `OIDC_REFRESH_TOKEN_TTL`, older than `OIDC_REFRESH_MAX_LIFETIME`, revoked, its email domain is no longer in `OIDC_ALLOWED_DOMAINS`, or the [authorization rules](#authorization) no longer grant the person anything.
-Presenting a token that was already rotated revokes the whole family ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)) and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`; a domain refusal logs `refresh_domain_not_allowed` and an authorization refusal `refresh_authz_denied`, both revoking the family.
+A refresh is refused with `invalid_grant` when the session is idle past `OIDC_REFRESH_TOKEN_TTL`, older than `OIDC_REFRESH_MAX_LIFETIME`, revoked, its email domain is no longer in `OIDC_ALLOWED_DOMAINS`, the [authorization rules](#authorization) no longer grant the person anything, or the connector the person signed in through is no longer configured.
+Presenting a token that was already rotated revokes the whole family ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)) and logs a `refresh_token_reuse` warning with `family_id`, `client_id` and `email`; a domain refusal logs `refresh_domain_not_allowed`, an authorization refusal `refresh_authz_denied`, and a session from a connector that is no longer configured `refresh_connector_removed`, each revoking the family.
 Token values are never logged.
 
 Operators manage sessions with the server binary, against the same state store (`STATE_SQLITE_PATH`):
 
 ```bash
-tempogate sessions list [--email alice@example.com] [--subject <sub>]   # family id, client, email, Google subject, sign-in, last rotation, expiry
+tempogate sessions list [--email alice@example.com] [--subject google:<sub>]   # family id, client, email, token sub, sign-in, last rotation, expiry
 tempogate sessions revoke --email alice@example.com   # every session of a user
-tempogate sessions revoke --subject <google-sub>      # every session of a Google account, whatever its email
+tempogate sessions revoke --subject google:<sub>      # every session of a Google account, whatever its email
 tempogate sessions revoke --family <family-id>        # one session; fails if no such session exists
 ```
 
@@ -453,8 +455,9 @@ curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
   -d '{"email":"alice@example.com"}' http://127.0.0.1:8081/admin/sessions/revoke   # or {"subject":...} or {"family_id":...}
 ```
 
-`GET /admin/sessions` returns `{"items": [...]}` with `family_id`, `client_id`, `email`, `subject`, `auth_time`, `last_rotation_at` and `expires_at`; it never returns a token or its hash.
+`GET /admin/sessions` returns `{"items": [...]}` with `family_id`, `client_id`, `email`, `subject`, `connector`, `auth_time`, `last_rotation_at` and `expires_at`; it never returns a token or its hash.
 `POST /admin/sessions/revoke` takes exactly one of `email`, `subject` or `family_id` (anything else is 400) and answers `{"revoked": <n>}`, the number of live sessions it ended.
+A `subject`, as a filter or a selector, is the token's `sub` in the form `<connector>:<upstream sub>` (e.g. `google:1234`), exactly as `subject` is listed; a bare upstream `sub` is refused with 400 (and by `--subject` on the command line).
 Revoking is idempotent: a selector that matches nothing live answers 0, except a `family_id` that never existed, which answers 404 like an unknown integration key.
 
 Revocation stops refreshes immediately; access tokens already issued remain valid, at tempogate's `/userinfo` and at Temporal, until they expire (`OIDC_ACCESS_TOKEN_TTL`).
@@ -622,7 +625,7 @@ That makes the admin listener's bind the access control: keep it on loopback or 
 | `tempogate_tokens_issued_total` | counter | `grant` (`authorization_code`, `refresh_token`, `device_code`) | Tokens minted by `/token`. |
 | `tempogate_token_errors_total` | counter | `grant` (as above, or `other`), `error` | Failed `/token` requests by OAuth2 error code (`invalid_request`, `invalid_grant`, `invalid_client`, `unauthorized_client`, `unsupported_grant_type`, `authorization_pending`, `slow_down`, `access_denied`, `expired_token`) or `server_error` for a 500. `invalid_client` is a confidential client that failed to authenticate. Device-flow polling counts `authorization_pending` on every poll. Requests the rate limiter rejects never reach `/token` and are counted in `tempogate_rate_limited_total` instead. |
 | `tempogate_authz_denied_total` | counter | `stage` (`login`, `device_verification`, `authorization_code`, `refresh_token`, `device_code`) | Admitted people refused because no [authorization rule](#authorization) grants them anything: at the Google callback, on the device verification page, or at `/token` for the grant named (a rule removed after sign-in). The `login` refusals are also in `tempogate_logins_total{reason="authz_denied"}` and the `refresh_token` ones in `tempogate_refresh_family_revocations_total{event="refresh_authz_denied"}`. |
-| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`, `refresh_authz_denied`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`, or one the authorization rules no longer grant anything. The refused request is also counted as `invalid_grant`. Operator revocations (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) are not counted; the admin API's [audit log](#admin-api) records the latter. |
+| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`, `refresh_authz_denied`, `refresh_connector_removed`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`, one the authorization rules no longer grant anything, or one whose sign-in connector is no longer configured. The refused request is also counted as `invalid_grant`. Operator revocations (`tempogate sessions revoke`, `POST /admin/sessions/revoke`) are not counted; the admin API's [audit log](#admin-api) records the latter. |
 | `tempogate_rate_limited_total` | counter | `endpoint` (`authorize`, `device_authorization`, `device_verification`, `token`) | Requests answered `429` by the per-client [rate limits](#abuse-controls). The client address is never a label. |
 | `tempogate_upstream_request_duration_seconds` | histogram | `op` (`discovery`, `code_exchange`, `verify_id_token`) | Latency of calls to Google, failed calls included. `verify_id_token` includes the JWKS fetch on a key-cache miss. `discovery` runs on first use and again on each retry after a failure; a failure served from inside the retry backoff is not a call and is not counted. |
 | `tempogate_upstream_errors_total` | counter | `op`, `reason` (`timeout`, `error`) | Failed calls to Google. `timeout` is a call that got no answer within the [upstream timeout](#google-leg); `error` is any other failure, including an error answer from Google. |

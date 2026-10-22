@@ -93,15 +93,16 @@ var (
 // rotation: FamilyID names the chain so a replay or an operator can revoke
 // all of it at once, and AuthTime anchors the absolute session lifetime.
 type Refresh struct {
-	Token     string
-	JTI       string
-	ClientID  string
-	Subject   string
-	Email     string
-	FamilyID  string
-	AuthTime  time.Time
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	Token       string
+	JTI         string
+	ClientID    string
+	ConnectorID string
+	Subject     string
+	Email       string
+	FamilyID    string
+	AuthTime    time.Time
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 }
 
 // TokenStore is the consumer-side state interface for the /token handler (see
@@ -160,6 +161,7 @@ type Token struct {
 	devices        DeviceCodeStore
 	signer         *keys.Signer
 	clients        TokenClients
+	connectors     *Connectors
 	allowedDomains map[string]struct{}
 	logger         *slog.Logger
 	now            func() time.Time
@@ -193,6 +195,13 @@ func WithRefreshGenerator(fn func() (string, error)) TokenOption {
 // an empty allowlist admits nobody.
 func WithAllowedDomains(raw string) TokenOption {
 	return func(t *Token) { t.allowedDomains = ParseDomains(raw) }
+}
+
+// WithConnectors sets the configured upstream connectors. The refresh grant
+// honours only sessions whose connector is still configured; without it no
+// refresh is honoured.
+func WithConnectors(c *Connectors) TokenOption {
+	return func(t *Token) { t.connectors = c }
 }
 
 // WithTokenLifetimes sets the access-token TTL, the idle TTL of each rotated
@@ -506,7 +515,7 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 	}
 
 	return &AuthCodeRedemption{
-		Identity: Identity{Subject: ac.Subject, Email: ac.Email},
+		Identity: Identity{ConnectorID: ac.ConnectorID, Subject: ac.Subject, Email: ac.Email},
 		ClientID: ac.ClientID,
 		Nonce:    ac.Nonce,
 		FamilyID: familyID,
@@ -626,6 +635,16 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 	if rt.Subject == "" {
 		return nil, errLegacyGrant("refresh token")
 	}
+	// A session from a connector that is no longer configured cannot be
+	// vouched for by anyone: the family goes, so it does not come back if
+	// the connector is re-added under the same id.
+	if !t.connectorConfigured(rt.ConnectorID) {
+		if err := t.revokeFamily(ctx, rt, now, "refresh_connector_removed",
+			"oidc: refresh refused for a connector that is no longer configured; revoked the token family"); err != nil {
+			return nil, err
+		}
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "the sign-in method of this session is no longer available; sign in again")
+	}
 	// The allowlist is re-applied on every refresh, so removing a domain
 	// ends its sessions at their next refresh rather than at their absolute
 	// expiry. The family is revoked so no sibling token outlives the
@@ -645,7 +664,7 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 	// issue resolves the permissions afresh, so a changed rule takes effect
 	// at the next refresh (within OIDC_ACCESS_TOKEN_TTL). A person no longer
 	// granted anything loses the whole family, like a removed domain.
-	id := Identity{Subject: rt.Subject, Email: rt.Email}
+	id := Identity{ConnectorID: rt.ConnectorID, Subject: rt.Subject, Email: rt.Email}
 	out, err := t.issue(ctx, id, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
 	if errors.Is(err, errNoPermissions) {
 		t.authz.ObserveAuthzDenied(grantLabelRefreshToken)
@@ -656,6 +675,14 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", msgNoAccess)
 	}
 	return out, err
+}
+
+func (t *Token) connectorConfigured(id string) bool {
+	if t.connectors == nil {
+		return false
+	}
+	_, ok := t.connectors.Lookup(id)
+	return ok
 }
 
 // errLegacyGrant rejects a grant persisted before schema 0010 recorded the
@@ -719,9 +746,11 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 	// The access token is Temporal's credential: permissions, and the
 	// Signer's Temporal audience (OIDC_ACCESS_TOKEN_AUDIENCE). The ID token
 	// never carries permissions.
+	sub := TokenSubject(id.ConnectorID, id.Subject)
 	signed, jti, err := t.signer.Mint(ctx, keys.MintRequest{
-		Subject:     id.Subject,
+		Subject:     sub,
 		Email:       id.Email,
+		IDP:         id.ConnectorID,
 		TTL:         t.accessTTL,
 		Permissions: grant.ToClaim(),
 		ClientID:    clientID,
@@ -730,8 +759,9 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 		return nil, fmt.Errorf("oidc: mint access token: %w", err)
 	}
 	idToken, err := t.signer.MintIDToken(ctx, keys.IDTokenRequest{
-		Subject: id.Subject,
+		Subject: sub,
 		Email:   id.Email,
+		IDP:     id.ConnectorID,
 		// OIDC Core §2: the ID token's aud is the requesting client.
 		Audience: clientID,
 		// Echoed only when the client sent one at /authorize (empty on the
@@ -756,15 +786,16 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 		expiresAt = end
 	}
 	err = t.store.SaveRefresh(ctx, Refresh{
-		Token:     refreshTok,
-		JTI:       jti,
-		ClientID:  clientID,
-		Subject:   id.Subject,
-		Email:     id.Email,
-		FamilyID:  l.familyID,
-		AuthTime:  l.authTime,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
+		Token:       refreshTok,
+		JTI:         jti,
+		ClientID:    clientID,
+		ConnectorID: id.ConnectorID,
+		Subject:     id.Subject,
+		Email:       id.Email,
+		FamilyID:    l.familyID,
+		AuthTime:    l.authTime,
+		CreatedAt:   now,
+		ExpiresAt:   expiresAt,
 	})
 	if errors.Is(err, ErrRefreshFamilyRevoked) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "the session has been revoked")
