@@ -427,7 +427,7 @@ func (h *Keys) revoke(ctx context.Context, id string) (string, error) {
 	// MarkRevoked returns the jti regardless of whether this is the first
 	// or a repeat revoke, so the denylist hydrate below runs on every call
 	// without worrying about idempotency.
-	jti, err := h.registry.MarkRevoked(ctx, id)
+	jti, err := h.registry.MarkRevoked(ctx, id, h.now())
 	if err != nil {
 		return "", err
 	}

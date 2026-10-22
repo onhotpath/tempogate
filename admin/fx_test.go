@@ -147,7 +147,7 @@ func (s *FxSuite) TestFxRejectsNonPositiveMaxTTL() {
 			fx.Annotate(time.Duration(0), fx.ResultTags(`name:"admin_keys_max_ttl"`)),
 		),
 		fx.Supply(zap.NewNop()),
-		fx.Provide(func() admin.KeyRegistry { return newMemRegistry(time.Now) }),
+		fx.Provide(func() admin.KeyRegistry { return newMemRegistry() }),
 		fx.Provide(func() *keys.Keys { return keys.New(keys.WithStore(&fxFakeKeyStore{})) }),
 		fx.Provide(func(k *keys.Keys) *keys.Signer { return keys.NewSigner(keys.WithKeys(k)) }),
 		fx.Provide(func() *keys.DenylistCache { return keys.NewDenylistCache() }),

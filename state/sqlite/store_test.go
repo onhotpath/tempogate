@@ -89,7 +89,7 @@ func (s *StoreSuite) TestIsCurrentRejectsGapBelowMax() {
 func (s *StoreSuite) TestIsCurrentAllowsUnknownNewerVersions() {
 	// A newer binary migrated this DB; an older binary must still serve.
 	_, err := s.store.db.ExecContext(s.ctx,
-		`INSERT INTO schema_migrations (version, name) VALUES (999, 'from_newer_binary')`)
+		`INSERT INTO schema_migrations (version, name, applied_at) VALUES (999, 'from_newer_binary', ?)`, time.Now().UTC())
 	s.Require().NoError(err)
 
 	s.Require().NoError(s.store.IsCurrent(s.ctx))
@@ -651,12 +651,13 @@ func (s *StoreSuite) TestFxComposition() {
 		reaper        *Reaper
 		asDeviceStr   oidc.DeviceCodeStore
 		asBrowserSess oidc.BrowserSessionStore
+		asChanges     keys.ChangeFeed
 	)
 	a := fxtest.New(s.T(),
 		config.Fx(),
 		tlog.Fx(),
 		Fx(),
-		fx.Populate(&injected, &reaper, &asDeviceStr, &asBrowserSess),
+		fx.Populate(&injected, &reaper, &asDeviceStr, &asBrowserSess, &asChanges),
 	)
 	a.RequireStart()
 	defer a.RequireStop()
@@ -673,6 +674,9 @@ func (s *StoreSuite) TestFxComposition() {
 	// *Store; a refactor that drops the binding would silently break
 	// SessionManager graph construction in production.
 	s.Require().NotNil(asBrowserSess)
+	// keys.Fx takes the change feed as optional, so a dropped binding
+	// would not fail the graph, only slow reloads down to the ticker.
+	s.Require().Same(injected, asChanges)
 	s.Require().NotNil(reaper)
 	s.Equal(defaultReapInterval, reaper.interval, "STATE_REAPER_INTERVAL default reaches the reaper")
 	s.Equal(7*24*time.Hour, reaper.refreshMaxLifetime, "OIDC_REFRESH_MAX_LIFETIME reaches the reaper")

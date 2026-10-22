@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/onhotpath/tempogate/admin"
+	"github.com/onhotpath/tempogate/keys"
 )
 
 func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) error {
@@ -124,10 +126,10 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 	return out, nil
 }
 
-// MarkIntegrationKeyRevoked is idempotent. The UPDATE stamps revoked_at only
-// when it is currently NULL (`WHERE revoked_at IS NULL`); the RETURNING jti
-// fires regardless via a second guarded read so a second call returns the
-// same value the first one did. An unknown id reports
+// MarkIntegrationKeyRevoked is idempotent. The UPDATE stamps revoked_at with
+// at only when it is currently NULL (`WHERE revoked_at IS NULL`); the jti is
+// read regardless, so a second call returns the same value the first one did
+// and keeps the first revoked_at. An unknown id reports
 // ErrIntegrationKeyNotFound, distinguishing "never existed" from "already
 // revoked".
 //
@@ -136,7 +138,7 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 // together: a crash between the two would otherwise leave the verifier
 // accepting a token whose integration-key row says revoked, or rejecting a
 // token whose row says active.
-func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string) (string, error) {
+func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at time.Time) (string, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: begin tx for mark revoked: %w", err))
@@ -156,17 +158,17 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string) (strin
 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE integration_keys
-		 SET revoked_at = CURRENT_TIMESTAMP
+		 SET revoked_at = ?
 		 WHERE id = ? AND revoked_at IS NULL`,
-		id,
+		at, id,
 	); err != nil {
 		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: mark revoked update: %w", err))
 	}
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO jti_denylist (jti, revoked_at)
-		 VALUES (?, CURRENT_TIMESTAMP)`,
-		jti,
+		 VALUES (?, ?)`,
+		jti, at,
 	); err != nil {
 		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: mark revoked denylist insert: %w", err))
 	}
@@ -174,5 +176,6 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string) (strin
 	if err := tx.Commit(); err != nil {
 		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: commit mark revoked: %w", err))
 	}
+	s.changes.publish(keys.Change{Kind: keys.ChangeJTIRevoked, JTI: jti})
 	return jti, nil
 }

@@ -36,6 +36,7 @@ type serveParams struct {
 	Store         *sqlite.Store
 	Reaper        *sqlite.Reaper
 	Keys          *keys.Keys
+	Denylist      *keys.DenylistCache
 	Servers       *api.Servers
 	Readiness     *api.Readiness
 	Policy        *authz.Policy
@@ -134,7 +135,9 @@ func serve(ctx context.Context, p serveParams) error {
 
 	// Re-reading keypairs lets `tempogate keys generate|retire`, run from
 	// another process against the same store, take effect without a
-	// restart. The admin retire route reloads at once on its own.
+	// restart. The admin retire route reloads at once on its own. A store
+	// change feed, where the backend has one, makes both the reload and
+	// the denylist react sooner; the periodic paths stay authoritative.
 	keyReloader := xrun.ComponentFunc(func(ctx context.Context) error {
 		return p.Keys.Watch(ctx, p.KeysReload, func(err error) {
 			logger.Warn("signing keys reload failed; keeping the loaded set", zap.Error(err))
@@ -148,6 +151,7 @@ func serve(ctx context.Context, p serveParams) error {
 		// cancelled through ctx.
 		xrun.ComponentFunc(p.Reaper.Run),
 		keyReloader,
+		xrun.ComponentFunc(p.Denylist.Follow),
 		httpServer(httpServerOptions{
 			server:          public,
 			shutdownTimeout: p.Server.ShutdownTimeout,

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 
+	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
@@ -153,6 +154,7 @@ func (s *ServeCmdSuite) TestServesUntilCancelled() {
 		Store:         s.store,
 		Reaper:        sqlite.NewReaper(s.store),
 		Keys:          keys.New(keys.WithStore(s.store)),
+		Denylist:      keys.NewDenylistCache(),
 		Servers:       api.New(readiness),
 		Readiness:     readiness,
 		Listener:      loopback,
@@ -202,6 +204,7 @@ func (s *ServeCmdSuite) TestReloadsKeysWhileServing() {
 		Store:         s.store,
 		Reaper:        sqlite.NewReaper(s.store),
 		Keys:          serving,
+		Denylist:      keys.NewDenylistCache(),
 		Servers:       api.New(readiness),
 		Readiness:     readiness,
 		Listener:      loopback,
@@ -254,4 +257,79 @@ func (s *ServeCmdSuite) TestRejectsNonPositiveReloadInterval() {
 	err := cmd.ExecuteContext(ctx)
 	s.Require().Error(err)
 	s.Contains(err.Error(), "KEYS_RELOAD_INTERVAL")
+}
+
+// TestChangeFeedShortensReloadAndRevocation: with a store change feed wired
+// in, a key generated through the same store reloads, and a revoked jti is
+// refused, long before the hour-long reload interval or the denylist TTL
+// would get there.
+func (s *ServeCmdSuite) TestChangeFeedShortensReloadAndRevocation() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+
+	readiness := api.NewReadiness()
+	serving := keys.New(
+		keys.WithStore(s.store),
+		keys.WithChangeFeed(s.store),
+		keys.WithPublishDelay(0),
+		keys.WithGenerateOptions(keys.WithRSABits(2048)),
+	)
+	denylist := keys.NewDenylistCache(
+		keys.WithDenylistChecker(s.store),
+		keys.WithDenylistChangeFeed(s.store),
+		keys.WithDenylistTTL(time.Hour),
+	)
+	loopback := config.Listener{IP: net.IPv4(127, 0, 0, 1)}
+	cmd := newServeCmd(supply(serveParams{
+		Logger:        zap.NewNop(),
+		Store:         s.store,
+		Reaper:        sqlite.NewReaper(s.store),
+		Keys:          serving,
+		Denylist:      denylist,
+		Servers:       api.New(readiness),
+		Readiness:     readiness,
+		Listener:      loopback,
+		AdminListener: loopback,
+		Server:        config.ServerConfig{ShutdownTimeout: 5 * time.Second},
+		KeysReload:    time.Hour,
+		Policy:        testPolicy,
+	}))
+	cmd.SetOut(new(testWriter))
+	cmd.SetErr(new(testWriter))
+
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- cmd.ExecuteContext(ctx) }()
+	s.Require().Eventually(readiness.IsReady, 10*time.Second, 10*time.Millisecond)
+
+	key := admin.IntegrationKey{ID: "key-1", Namespace: "ns", Role: admin.RoleRead, Owner: "svc", JTI: "jti-1", CreatedAt: time.Now().UTC()}
+	s.Require().NoError(s.store.SaveIntegrationKey(s.ctx, key))
+	revoked, err := denylist.IsRevoked(s.ctx, key.JTI)
+	s.Require().NoError(err)
+	s.Require().False(revoked, "cached as active for the next hour")
+
+	// Both subscriptions start once serve runs; retry the writes until the
+	// feed is listening rather than racing it.
+	s.Require().Eventually(func() bool {
+		if _, err := s.store.MarkIntegrationKeyRevoked(s.ctx, key.ID, time.Now().UTC()); err != nil {
+			return false
+		}
+		revoked, err := denylist.IsRevoked(s.ctx, key.JTI)
+		return err == nil && revoked
+	}, 5*time.Second, 50*time.Millisecond, "a revocation must reach the cache through the feed")
+
+	rotated, err := keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048))).Generate(s.ctx, true)
+	s.Require().NoError(err)
+	s.Require().Eventually(func() bool {
+		kp, err := serving.Latest()
+		return err == nil && kp.Kid == rotated.Kid
+	}, 5*time.Second, 10*time.Millisecond, "a key change must reload through the feed")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		s.Require().NoError(err)
+	case <-time.After(10 * time.Second):
+		s.FailNow("serve did not stop after cancellation")
+	}
 }

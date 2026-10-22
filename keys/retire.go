@@ -154,20 +154,35 @@ func (k *Keys) checkReplacementPublished(ctx context.Context, kid string) error 
 	return nil
 }
 
-// Watch reloads the keypair set every interval until ctx is done. A failed
+// Watch reloads the keypair set every interval until ctx is done, and also
+// at once whenever the change feed (WithChangeFeed) reports a key change.
+// The periodic reload stays the correctness path: the feed only shortens
+// the wait, and a closed feed leaves the ticker running alone. A failed
 // reload is passed to onErr and the previous set stays in service, so a
 // transient store error never drops the signing key.
 func (k *Keys) Watch(ctx context.Context, interval time.Duration, onErr func(error)) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	var changes <-chan Change
+	if k.changes != nil {
+		changes = k.changes.SubscribeChanges(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
-			if err := k.Reload(ctx); err != nil && ctx.Err() == nil {
-				onErr(err)
+		case ch, ok := <-changes:
+			if !ok {
+				changes = nil // a nil channel never fires: periodic only
+				continue
 			}
+			if ch.Kind != ChangeKeys {
+				continue
+			}
+		}
+		if err := k.Reload(ctx); err != nil && ctx.Err() == nil {
+			onErr(err)
 		}
 	}
 }

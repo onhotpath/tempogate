@@ -38,15 +38,16 @@ type ListFilter struct {
 // the POST handler). ByID returns ErrIntegrationKeyNotFound for unknown ids.
 // List honours every set field on ListFilter and returns rows in id-DESC
 // order, fetching limit+1 rows so the handler can detect "has more" without
-// a second COUNT round trip. MarkRevoked is idempotent: a second call
-// against an already-revoked id returns the original jti without re-stamping
-// revoked_at, so any downstream denylist enqueue keyed on jti can call it
-// safely on every revoke request.
+// a second COUNT round trip. MarkRevoked stamps revoked_at with at (the
+// caller owns the clock) and writes the jti to the denylist atomically with
+// it. It is idempotent: a second call against an already-revoked id returns
+// the original jti without re-stamping revoked_at, so any downstream
+// denylist enqueue keyed on jti can call it safely on every revoke request.
 type KeyRegistry interface {
 	Save(ctx context.Context, k IntegrationKey) error
 	ByID(ctx context.Context, id string) (IntegrationKey, error)
 	List(ctx context.Context, f ListFilter) ([]IntegrationKey, error)
-	MarkRevoked(ctx context.Context, id string) (jti string, err error)
+	MarkRevoked(ctx context.Context, id string, at time.Time) (jti string, err error)
 }
 
 // DenylistHydrator pushes a freshly-revoked jti into any in-process verifier

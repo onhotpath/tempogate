@@ -194,7 +194,7 @@ func (s *StoreSuite) TestReapDenylistAfterTheTokenExpires() {
 	}
 	expired, withinGrace, notYet, forever := key(&longGone), key(&recently), key(&future), key(nil)
 	for _, k := range []admin.IntegrationKey{expired, withinGrace, notYet, forever} {
-		_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+		_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 		s.Require().NoError(err)
 	}
 	// A denylisted jti without a key row (not written today) is kept: its

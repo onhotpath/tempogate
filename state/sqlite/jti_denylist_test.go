@@ -33,7 +33,7 @@ func (s *StoreSuite) TestIsRevokedUnknownJTI() {
 
 func (s *StoreSuite) TestMarkIntegrationKeyRevokedAlsoHydratesDenylist() {
 	k := s.seedKey(denylistSeedOpts()...)
-	_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 	s.Require().NoError(err)
 
 	got, err := s.store.IsRevoked(s.ctx, k.JTI)
@@ -44,7 +44,7 @@ func (s *StoreSuite) TestMarkIntegrationKeyRevokedAlsoHydratesDenylist() {
 func (s *StoreSuite) TestDenylistEntryIsIdempotentAcrossRepeatRevokes() {
 	k := s.seedKey(denylistSeedOpts()...)
 	// First revoke writes both rows.
-	_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 	s.Require().NoError(err)
 
 	var rowsBefore int
@@ -55,7 +55,7 @@ func (s *StoreSuite) TestDenylistEntryIsIdempotentAcrossRepeatRevokes() {
 
 	// Second revoke must not blow up on the UNIQUE primary-key constraint;
 	// INSERT OR IGNORE keeps the original revoked_at unchanged.
-	_, err = s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	_, err = s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 	s.Require().NoError(err)
 
 	var rowsAfter int
@@ -80,7 +80,7 @@ func (s *StoreSuite) TestDenylistSurvivesStoreReopen() {
 	k := s.seedKey(denylistSeedOpts()...)
 	s.store = prevStore
 
-	_, err = first.MarkIntegrationKeyRevoked(s.ctx, k.ID)
+	_, err = first.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
 	s.Require().NoError(err)
 	s.Require().NoError(first.Close())
 

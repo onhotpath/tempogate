@@ -12,6 +12,7 @@ type fxParams struct {
 	fx.In
 
 	Store           KeyStore
+	Changes         ChangeFeed    `optional:"true"`
 	RetirementGrace time.Duration `name:"keys_retirement_grace"`
 	PublishDelay    time.Duration `name:"keys_publish_delay"`
 
@@ -37,6 +38,7 @@ func newFx(p fxParams) (*Keys, error) {
 		WithStore(p.Store),
 		WithRetirementGrace(p.RetirementGrace),
 		WithPublishDelay(p.PublishDelay),
+		WithChangeFeed(p.Changes),
 	}
 	if kek != nil {
 		opts = append(opts, WithEncryptionKey(kek))
@@ -104,19 +106,22 @@ type denylistParams struct {
 	fx.In
 
 	Checker DenylistChecker
+	Changes ChangeFeed `optional:"true"`
 }
 
 // newDenylistCache wraps the sqlite-backed DenylistChecker (provided by
 // state/sqlite via fx.As) in the verifier-side read-through cache.
-// DefaultDenylistTTL governs how stale a hot-path "active" answer can be.
+// DefaultDenylistTTL governs how stale a hot-path "active" answer can be;
+// the store's change feed, when there is one, only shortens it (Follow).
 func newDenylistCache(p denylistParams) *DenylistCache {
-	return NewDenylistCache(WithDenylistChecker(p.Checker))
+	return NewDenylistCache(WithDenylistChecker(p.Checker), WithDenylistChangeFeed(p.Changes))
 }
 
 // Fx wires *Keys plus the *Signer, *Verifier, and verifier-side
 // *DenylistCache over it into the composition root. The KeyStore and
 // DenylistChecker dependencies are both satisfied by state/sqlite via
-// fx.Annotate(..., fx.As(...)); oidc_issuer is contributed by config.
+// fx.Annotate(..., fx.As(...)), as is the optional ChangeFeed; oidc_issuer
+// is contributed by config.
 func Fx() fx.Option {
 	return fx.Options(
 		fx.Provide(newFx),

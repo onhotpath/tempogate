@@ -80,6 +80,7 @@ type Store struct {
 	db       *sql.DB
 	probe    *sql.DB
 	observer ErrorObserver
+	changes  changeHub
 }
 
 func New(opts ...Option) (*Store, error) {

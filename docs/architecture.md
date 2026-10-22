@@ -78,6 +78,10 @@ a PersistentVolumeClaim via the pure-Go `modernc.org/sqlite` driver — no CGO,
 no external database to run a small deployment. SQLite tolerates one writer,
 so the deployment is single-replica until a shared backend lands; the chart
 enforces this (`replicaCount: 1`, autoscaling off, `Recreate` strategy).
+What any backend must guarantee (consume-once, conditional transitions,
+ordering, an application-owned clock, optional change notifications) is
+written down in `state/doc.go` and checked by the `state/storetest`
+conformance suite.
 
 **Nothing in the state store is a usable credential on its own.** A copy of
 the database is the realistic leak (a backup, a volume snapshot, another
