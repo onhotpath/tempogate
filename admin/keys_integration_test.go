@@ -135,7 +135,7 @@ func (r *storeRegistry) MarkRevoked(ctx context.Context, id string) (string, err
 }
 
 func (s *KeysIntegrationSuite) TestPostedJWTVerifiesAgainstSameJWKS() {
-	body := postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon", ExpiresAt: inAnHour()}
+	body := postBody{Namespace: "payments", Role: "write", Owner: "svc-recon", ExpiresAt: inAnHour()}
 	raw, err := json.Marshal(body)
 	s.Require().NoError(err)
 	resp, err := authedClient.Post(s.srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
@@ -162,7 +162,7 @@ func (s *KeysIntegrationSuite) TestPostedJWTVerifiesAgainstSameJWKS() {
 	asSlice, ok := perms.([]any)
 	s.Require().True(ok)
 	s.Require().Len(asSlice, 1)
-	s.Equal("payments:worker", asSlice[0])
+	s.Equal("payments:write", asSlice[0])
 
 	_, hasExp := tok.Expiration()
 	s.True(hasExp, "every integration key carries an exp claim")
@@ -194,7 +194,7 @@ func (s *KeysIntegrationSuite) TestRevokeMakesVerifierRejectWithinCacheTTL() {
 	)
 
 	// Mint
-	body := postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon", ExpiresAt: inAnHour()}
+	body := postBody{Namespace: "payments", Role: "write", Owner: "svc-recon", ExpiresAt: inAnHour()}
 	raw, err := json.Marshal(body)
 	s.Require().NoError(err)
 	resp, err := authedClient.Post(srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
