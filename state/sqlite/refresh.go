@@ -44,11 +44,11 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return ErrDuplicateRefreshToken
 		}
-		return fmt.Errorf("sqlite: save refresh token: %w", err)
+		return s.fail("save_refresh", fmt.Errorf("sqlite: save refresh token: %w", err))
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("sqlite: save refresh token: %w", err)
+		return s.fail("save_refresh", fmt.Errorf("sqlite: save refresh token: %w", err))
 	}
 	if n == 0 {
 		return fmt.Errorf("%w: %s", oidc.ErrRefreshFamilyRevoked, r.FamilyID)
@@ -75,7 +75,7 @@ func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at t
 		return r, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return oidc.Refresh{}, fmt.Errorf("sqlite: consume refresh token: %w", err)
+		return oidc.Refresh{}, s.fail("consume_refresh", fmt.Errorf("sqlite: consume refresh token: %w", err))
 	}
 
 	r, err = scanRefresh(token, s.db.QueryRowContext(ctx,
@@ -87,7 +87,7 @@ func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at t
 		return oidc.Refresh{}, oidc.ErrRefreshNotFound
 	}
 	if err != nil {
-		return oidc.Refresh{}, fmt.Errorf("sqlite: look up consumed refresh token: %w", err)
+		return oidc.Refresh{}, s.fail("consume_refresh", fmt.Errorf("sqlite: look up consumed refresh token: %w", err))
 	}
 	return r, oidc.ErrRefreshReused
 }
@@ -114,7 +114,7 @@ func (s *Store) revokeRefresh(ctx context.Context, where, arg string, at time.Ti
 		at, arg,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("sqlite: revoke refresh tokens: %w", err)
+		return 0, s.fail("revoke_refresh", fmt.Errorf("sqlite: revoke refresh tokens: %w", err))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -122,14 +122,14 @@ func (s *Store) revokeRefresh(ctx context.Context, where, arg string, at time.Ti
 	for rows.Next() {
 		var wasLive bool
 		if err := rows.Scan(&wasLive); err != nil {
-			return 0, fmt.Errorf("sqlite: scan revoked refresh token: %w", err)
+			return 0, s.fail("revoke_refresh", fmt.Errorf("sqlite: scan revoked refresh token: %w", err))
 		}
 		if wasLive {
 			live++
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("sqlite: revoke refresh tokens: %w", err)
+		return 0, s.fail("revoke_refresh", fmt.Errorf("sqlite: revoke refresh tokens: %w", err))
 	}
 	return live, nil
 }
@@ -161,7 +161,7 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 		email, email,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: list refresh sessions: %w", err)
+		return nil, s.fail("list_refresh_sessions", fmt.Errorf("sqlite: list refresh sessions: %w", err))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -169,14 +169,14 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 	for rows.Next() {
 		var rs RefreshSession
 		if err := rows.Scan(&rs.FamilyID, &rs.ClientID, &rs.Subject, &rs.Email, &rs.AuthTime, &rs.RotatedAt, &rs.ExpiresAt); err != nil {
-			return nil, fmt.Errorf("sqlite: scan refresh session: %w", err)
+			return nil, s.fail("list_refresh_sessions", fmt.Errorf("sqlite: scan refresh session: %w", err))
 		}
 		if now.Before(rs.ExpiresAt) {
 			out = append(out, rs)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sqlite: list refresh sessions: %w", err)
+		return nil, s.fail("list_refresh_sessions", fmt.Errorf("sqlite: list refresh sessions: %w", err))
 	}
 	return out, nil
 }

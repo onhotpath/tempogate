@@ -67,19 +67,20 @@ jobs:
 
       # Rot guard: the distributed CLI is built with -tags lean and must not
       # link the heavy server/state subtree — the SQLite engine (modernc
-      # sqlite/libc, ~5 MB) or the api/state-store packages. (The CLI is an
-      # OIDC client, so the pure-Go oidc/keys/jwx packages are expected and
-      # fine.) Deterministic via the import graph, so it can't be masked by
-      # dead-code elimination. Fails loudly if a server import leaks in.
+      # sqlite/libc, ~5 MB), the api/state-store packages or the Prometheus
+      # client (server-only metrics). (The CLI is an OIDC client, so the
+      # pure-Go oidc/keys/jwx packages are expected and fine.) Deterministic
+      # via the import graph, so it can't be masked by dead-code elimination.
+      # Fails loudly if a server import leaks in.
       - name: Lean CLI build guard (no server subtree)
         run: |
           go build -tags lean -o /dev/null .
           leaked=$(go list -tags lean -deps . \
-            | grep -E '^github\.com/onhotpath/tempogate/(api|state/sqlite|cmd/servercmd)$|^modernc\.org/(sqlite|libc)' || true)
+            | grep -E '^github\.com/onhotpath/tempogate/(api|state/sqlite|cmd/servercmd|metrics)$|^modernc\.org/(sqlite|libc)|^github\.com/prometheus/' || true)
           if [ -n "$leaked" ]; then
             echo "server packages leaked into the lean CLI:"; echo "$leaked"; exit 1
           fi
-          echo "lean import graph clean (no api / state/sqlite / servercmd / modernc sqlite|libc)"
+          echo "lean import graph clean (no api / state/sqlite / servercmd / metrics / prometheus / modernc sqlite|libc)"
 
       - name: Save Go cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

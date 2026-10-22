@@ -232,6 +232,7 @@ type TokenSuite struct {
 	clients     oidc.ClientRegistry
 	srv         *httptest.Server
 	client      *http.Client
+	observed    *recordingObserver
 }
 
 // confidentialSecret is the shared secret for the test's older-style
@@ -268,7 +269,9 @@ func (s *TokenSuite) SetupTest() {
 
 	s.store = newMemTokenStore()
 	s.deviceStore = newMemDeviceFlowStore()
+	s.observed = &recordingObserver{}
 	tok := oidc.NewToken(s.store, signer, s.clients,
+		oidc.WithTokenObserver(s.observed),
 		oidc.WithTokenClock(func() time.Time { return signNow }),
 		oidc.WithRefreshGenerator(func() (string, error) { return fixedRefresh, nil }),
 		oidc.WithDeviceCodeStore(s.deviceStore),

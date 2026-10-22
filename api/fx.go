@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -39,6 +41,28 @@ type serversParams struct {
 	// AdminMiddlewares install middleware (the admin auth guard) on the
 	// admin Surface ahead of every admin registrar.
 	AdminMiddlewares []func(huma.API) `group:"admin_middlewares"`
+
+	// Metrics is the Prometheus exposition handler (metrics.Fx), mounted at
+	// GET /metrics on the admin surface outside /admin/*, so a scraper needs
+	// no admin token. Optional: graphs without metrics serve no /metrics.
+	Metrics http.Handler `name:"metrics_handler" optional:"true"`
+}
+
+type readinessParams struct {
+	fx.In
+
+	Logger *zap.Logger `optional:"true"`
+	// Store is optional so graphs without a state store (tests, gen-oas)
+	// keep a listener-only readiness.
+	Store StoreProbe `optional:"true"`
+}
+
+func newReadiness(p readinessParams) *Readiness {
+	opts := []ReadinessOption{WithStoreProbe(p.Store)}
+	if p.Logger != nil {
+		opts = append(opts, WithReadinessLogger(p.Logger.Named("readiness")))
+	}
+	return NewReadiness(opts...)
 }
 
 func newServers(p serversParams) *Servers {
@@ -62,6 +86,9 @@ func newServers(p serversParams) *Servers {
 	for _, m := range p.AdminMiddlewares {
 		opts = append(opts, WithAdminMiddleware(m))
 	}
+	if p.Metrics != nil {
+		opts = append(opts, WithAdminHandler("GET /metrics", p.Metrics))
+	}
 	return New(p.Readiness, opts...)
 }
 
@@ -74,7 +101,7 @@ func keysAsJWKSSource(k *keys.Keys) JWKSSource { return k }
 
 func Fx() fx.Option {
 	return fx.Options(
-		fx.Provide(NewReadiness),
+		fx.Provide(newReadiness),
 		fx.Provide(keysAsJWKSSource),
 		fx.Provide(newServers),
 	)

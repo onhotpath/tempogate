@@ -129,12 +129,13 @@ func aliceIdentity() oidc.UpstreamIdentity {
 type CallbackSuite struct {
 	suite.Suite
 
-	store   *memCallbackStore
-	up      *fakeUpstream
-	binding *oidc.UpstreamBinding
-	logs    *bytes.Buffer
-	srv     *httptest.Server
-	client  *http.Client
+	store    *memCallbackStore
+	up       *fakeUpstream
+	binding  *oidc.UpstreamBinding
+	logs     *bytes.Buffer
+	srv      *httptest.Server
+	client   *http.Client
+	observed *recordingObserver
 }
 
 func TestCallbackSuite(t *testing.T) {
@@ -146,6 +147,7 @@ func (s *CallbackSuite) SetupTest() {
 	s.up = &fakeUpstream{id: aliceIdentity()}
 	s.binding = newTestBinding(s.T(), testIssuer)
 	s.logs = &bytes.Buffer{}
+	s.observed = &recordingObserver{}
 	s.srv = s.serverFor(s.store, s.up)
 	s.client = &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -164,6 +166,7 @@ func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up oidc.Upstream) *h
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 		oidc.WithCallbackIssuer(testIssuer),
 		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(s.logs, nil))),
+		oidc.WithLoginObserver(s.observed),
 	)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))

@@ -31,6 +31,7 @@ becomes `OIDC_GOOGLE_CLIENT_ID`.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
+| `LOG_REQUESTS` | `true` | One structured access-log line per HTTP request on both listeners; see [Request logs](#request-logs). `false` turns it off, e.g. when an ingress or mesh already logs every request. |
 
 ### HTTP listener
 
@@ -92,6 +93,7 @@ Never list a range that clients can connect from directly, or they can choose th
 
 The admin API (`/admin/keys` for integration keys, `/admin/signing-keys` for [signing-key retirement](#revocation-and-signing-key-retirement), plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
 Every `/admin/*` route except `/admin/healthz` requires `Authorization: Bearer <admin token>`.
+The same listener serves Prometheus [`GET /metrics`](#metrics), outside `/admin/*` and without the token.
 Only the token's SHA-256 digest is configured, so the token itself never sits in env, yaml, or a ConfigMap.
 
 | Variable | Default | Notes |
@@ -440,6 +442,51 @@ Keep the headers above intact at the proxy: the anti-framing protection for the 
 
 The public `/healthz` answers `{"status":"ok"}` only.
 The build version is on the admin listener's `/admin/healthz` and from `tempogate version`.
+
+## Observability
+
+### Metrics
+
+`GET /metrics` on the **admin listener** serves Prometheus metrics.
+It is deliberately absent from the public listener (that returns 404) and sits outside `/admin/*`, so a scraper needs network access to the admin listener but no admin credentials.
+It is also exempt from `ADMIN_ALLOWED_HOSTS`: Prometheus addresses a target by its pod IP, which an allowlist of names would refuse, and the response carries nothing a DNS-rebinding page could use (no identities, tokens or keys).
+That makes the admin listener's bind the access control: keep it on loopback or a cluster-internal address restricted by a NetworkPolicy, never behind a public Service or Ingress.
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `tempogate_logins_total` | counter | `result` (`success`, `failure`), `reason` | Completed Google sign-in callbacks. `reason` is `none` on success, else one of `missing_state`, `state_not_bound` (the callback came from another browser than the one that started the sign-in), `unknown_state`, `expired_request`, `upstream_denied`, `missing_code`, `upstream_error`, `email_unverified`, `domain_not_allowed`, `hosted_domain_not_allowed` (the `hd` claim failed [Workspace mode](#hosted-domain-workspace-mode)), `internal`. |
+| `tempogate_tokens_issued_total` | counter | `grant` (`authorization_code`, `refresh_token`, `device_code`) | Tokens minted by `/token`. |
+| `tempogate_token_errors_total` | counter | `grant` (as above, or `other`), `error` | Failed `/token` requests by OAuth2 error code (`invalid_request`, `invalid_grant`, `invalid_client`, `unauthorized_client`, `unsupported_grant_type`, `authorization_pending`, `slow_down`, `access_denied`, `expired_token`) or `server_error` for a 500. `invalid_client` is a confidential client that failed to authenticate. Device-flow polling counts `authorization_pending` on every poll. Requests the rate limiter rejects never reach `/token` and are counted in `tempogate_rate_limited_total` instead. |
+| `tempogate_refresh_family_revocations_total` | counter | `event` (`auth_code_reuse`, `refresh_token_reuse`, `refresh_domain_not_allowed`) | Refresh-token families tempogate revoked on its own: a replayed authorization code or refresh token, or a refresh for an email domain no longer in `OIDC_ALLOWED_DOMAINS`. The refused request is also counted as `invalid_grant`. Revocations by `tempogate sessions revoke` run in another process and are not counted. |
+| `tempogate_rate_limited_total` | counter | `endpoint` (`authorize`, `device_authorization`, `device_verification`, `token`) | Requests answered `429` by the per-client [rate limits](#abuse-controls). The client address is never a label. |
+| `tempogate_upstream_request_duration_seconds` | histogram | `op` (`discovery`, `code_exchange`, `verify_id_token`) | Latency of calls to Google, failed calls included. `verify_id_token` includes the JWKS fetch on a key-cache miss. `discovery` runs on first use and again on each retry after a failure; a failure served from inside the retry backoff is not a call and is not counted. |
+| `tempogate_upstream_errors_total` | counter | `op` | Failed calls to Google. |
+| `tempogate_db_errors_total` | counter | `op` (the store operation, e.g. `consume_refresh`, `probe`, `reap`) | State-store operations that failed. A miss (unknown or replayed code or token) is not an error. |
+| `tempogate_build_info` | gauge | `version`, `commit` | Always `1`; identifies the running build. |
+
+The Go runtime (`go_*`) and process (`process_*`) collectors are exposed too.
+Every label value comes from a fixed set chosen by tempogate: emails, client IDs, tokens and raw request input never become labels.
+
+Tracing (OpenTelemetry) is not implemented yet.
+
+### Request logs
+
+With `LOG_REQUESTS=true` (the default) each request on either listener emits one structured line through the server logger:
+
+```
+INFO	http	http request	{"listener": "public", "method": "POST", "path": "/token", "status": 200, "duration": "3.1ms", "bytes": 1234, "remote_addr": "10.0.0.7:51234", "user_agent": "tempogate-cli/0.3.0", "request_id": "..."}
+```
+
+- **Allowlisted fields only.** The query string (OAuth codes, `state`, PKCE parameters), request headers (`Authorization`, cookies) and bodies (refresh tokens, client secrets) are never logged; `path` is the URL path alone.
+- **`request_id`** is copied from the `X-Request-Id` response header when one is set, and omitted otherwise.
+- **`remote_addr`** is the TCP peer. Behind a proxy that is the proxy; `X-Forwarded-For` is not logged, even from an `HTTP_TRUSTED_PROXIES` peer.
+- **Not an audit log.** The admin API's `admin audit` and `admin request rejected` lines record who did what; the access log records only that a request happened, so it carries no caller, token fingerprint or Host.
+- **Level.** Requests log at `info`, so they are an audit trail at the default `LOG_LEVEL`. Kubelet probes and scrapes (`/healthz`, `/readyz`, `/admin/healthz`, `/metrics`) log at `debug`: they arrive every few seconds per pod and would drown the real traffic.
+
+### Health probes
+
+- **`/healthz`** (liveness) only says the process serves HTTP. It never touches the state store: restarting cannot bring back a lost volume, it would only turn a storage outage into a crash loop.
+- **`/readyz`** (readiness) is `503` until the public listener is bound, and on every call checks the state store with a 500 ms budget (inside the kubelet's default 1 s probe timeout). The check pings the serving connection and also opens the database file at `STATE_SQLITE_PATH` read-only and reads the schema table, because the long-lived connection keeps working on a file that has been deleted, truncated or replaced underneath it. While it fails, `/readyz` answers `503` with a generic body (the cause is logged at `warn` and counted in `tempogate_db_errors_total{op="probe"}`), so the pod leaves the Service endpoints until the store is back.
 
 ## See also
 

@@ -145,6 +145,16 @@ key is published at once but signs only after `KEYS_PUBLISH_DELAY`, because
 Temporal never refetches JWKS on an unknown `kid`. See
 [docs/configuration.md](configuration.md#revocation-and-signing-key-retirement).
 
+**Observable without leaking.** Prometheus metrics (logins, tokens by grant,
+OAuth2 error codes, Google latency, state-store errors) are served on the
+private admin listener only, never the public one. Feature packages report
+through small observer interfaces of their own, so only the server build
+links the Prometheus client; the lean CLI does not. Every request is logged
+as one structured line from an allowlist of fields (path without query, no
+headers or bodies), and `/readyz` checks the state store on every call while
+`/healthz` stays a pure liveness probe. See
+[docs/configuration.md](configuration.md#observability).
+
 **Co-hostable.** `OIDC_ISSUER` may carry a path, so the whole OIDC surface
 can serve under a prefix on a shared hostname while health probes stay at the
 root. See [docs/configuration.md](configuration.md#sub-path-hosting).

@@ -13,6 +13,7 @@ import (
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/metrics"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/google"
 	"github.com/onhotpath/tempogate/state/sqlite"
@@ -77,12 +78,13 @@ func keysModules() []fx.Option {
 	return []fx.Option{sqlite.Fx(), keys.Fx()}
 }
 
-// serverModules is the full HTTP server stack `serve` and `gen-oas` need.
-// Building it validates the OIDC configuration, so only those two
-// subcommands fail when it is missing.
+// serverModules is the full HTTP server stack `serve` and `gen-oas` need,
+// Prometheus metrics included. Building it validates the OIDC configuration,
+// so only those two subcommands fail when it is missing.
 func serverModules() []fx.Option {
 	return []fx.Option{
 		fx.Invoke(checkIssuer),
+		metrics.Fx(),
 		sqlite.Fx(),
 		keys.Fx(),
 		oidc.Fx(),

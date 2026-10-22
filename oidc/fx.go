@@ -85,6 +85,7 @@ type callbackParams struct {
 	Upstream Upstream
 	Binding  *UpstreamBinding
 	Logger   *slog.Logger
+	Logins   LoginObserver `optional:"true"`
 
 	Issuer         string `name:"oidc_issuer"`
 	AllowedDomains string `name:"oidc_allowed_domains"`
@@ -110,6 +111,7 @@ func newCallbackRegistrar(p callbackParams) func(huma.API) {
 		WithCallbackIssuer(p.Issuer),
 		WithAllowedHostedDomains(p.HostedDomains),
 		WithCallbackLogger(p.Logger),
+		WithLoginObserver(p.Logins),
 	)
 	return c.Register
 }
@@ -122,6 +124,7 @@ type tokenParams struct {
 	Signer  *keys.Signer
 	Clients ClientRegistry
 	Logger  *slog.Logger
+	Tokens  TokenObserver `optional:"true"`
 
 	AllowedDomains     string        `name:"oidc_allowed_domains"`
 	AccessTokenTTL     time.Duration `name:"oidc_access_token_ttl"`
@@ -155,6 +158,7 @@ func newToken(p tokenParams) (*Token, error) {
 		WithAllowedDomains(p.AllowedDomains),
 		WithTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime),
 		WithTokenLogger(p.Logger),
+		WithTokenObserver(p.Tokens),
 	), nil
 }
 
@@ -307,6 +311,8 @@ type rateLimiterParams struct {
 	DeviceAuthorization int    `name:"http_rate_limit_device_authorization"`
 	DeviceVerification  int    `name:"http_rate_limit_device_verification"`
 	Token               int    `name:"http_rate_limit_token"`
+
+	Observer RateLimitObserver `optional:"true"`
 }
 
 // newRateLimitMiddleware builds the per-client rate limiter for the public
@@ -327,7 +333,11 @@ func newRateLimitMiddleware(p rateLimiterParams) (func(huma.Context, func(huma.C
 	if err != nil {
 		return nil, err
 	}
-	return NewRateLimiter(WithRateLimits(limits), WithTrustedProxies(proxies)).Middleware, nil
+	return NewRateLimiter(
+		WithRateLimits(limits),
+		WithTrustedProxies(proxies),
+		WithRateLimitObserver(p.Observer),
+	).Middleware, nil
 }
 
 // Fx contributes the /authorize, /callback/google, /token, /userinfo,

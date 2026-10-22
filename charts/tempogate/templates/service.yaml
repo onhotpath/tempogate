@@ -18,8 +18,8 @@ spec:
 {{- if .Values.service.admin.enabled }}
 ---
 # Admin API (/admin/keys). Bearer-token authenticated and Host-checked by the
-# binary; keep it cluster-internal and restrict it further with a
-# NetworkPolicy.
+# binary, except Prometheus GET /metrics, which needs neither; keep it
+# cluster-internal and restrict it further with a NetworkPolicy.
 apiVersion: v1
 kind: Service
 metadata:

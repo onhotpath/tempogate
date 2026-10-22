@@ -32,7 +32,7 @@ func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return ErrDuplicateAuthCode
 		}
-		return fmt.Errorf("sqlite: save auth code: %w", err)
+		return s.fail("save_auth_code", fmt.Errorf("sqlite: save auth code: %w", err))
 	}
 	return nil
 }
@@ -62,7 +62,7 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 		return ac, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return oidc.AuthCode{}, fmt.Errorf("sqlite: consume auth code: %w", err)
+		return oidc.AuthCode{}, s.fail("consume_auth_code", fmt.Errorf("sqlite: consume auth code: %w", err))
 	}
 
 	err = s.db.QueryRowContext(ctx,
@@ -74,7 +74,7 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 		return oidc.AuthCode{}, oidc.ErrAuthCodeNotFound
 	}
 	if err != nil {
-		return oidc.AuthCode{}, fmt.Errorf("sqlite: look up consumed auth code: %w", err)
+		return oidc.AuthCode{}, s.fail("consume_auth_code", fmt.Errorf("sqlite: look up consumed auth code: %w", err))
 	}
 	return ac, oidc.ErrAuthCodeReused
 }

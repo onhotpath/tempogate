@@ -121,6 +121,7 @@ type Callback struct {
 	hostedDomains  map[string]struct{}
 	now            func() time.Time
 	newCode        func() (string, error)
+	logins         LoginObserver
 }
 
 type CallbackOption func(*Callback)
@@ -161,6 +162,16 @@ func WithCallbackLogger(l *slog.Logger) CallbackOption {
 	return func(c *Callback) { c.logger = l }
 }
 
+// WithLoginObserver reports every callback outcome (success or the failure
+// reason) to o, e.g. the Prometheus metrics. Nil keeps the no-op default.
+func WithLoginObserver(o LoginObserver) CallbackOption {
+	return func(c *Callback) {
+		if o != nil {
+			c.logins = o
+		}
+	}
+}
+
 func NewCallback(
 	store CallbackStore,
 	upstream Upstream,
@@ -176,6 +187,7 @@ func NewCallback(
 		allowedDomains: parseDomains(allowedDomains),
 		now:            func() time.Time { return time.Now().UTC() },
 		newCode:        randomCode,
+		logins:         nopObserver{},
 	}
 	for _, o := range opts {
 		o(c)
@@ -197,8 +209,20 @@ func (c *Callback) Register(api huma.API) {
 }
 
 func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutput, error) {
+	out, reason, err := c.complete(ctx, in)
+	result := loginFailure
+	if reason == reasonNone {
+		result = loginSuccess
+	}
+	c.logins.ObserveLogin(result, reason)
+	return out, err
+}
+
+// complete runs the callback and also returns why it ended the way it did
+// (reasonNone on success), so every exit path is observed exactly once.
+func (c *Callback) complete(ctx context.Context, in *callbackInput) (*callbackOutput, string, error) {
 	if in.State == "" {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "missing state")
+		return nil, reasonMissingState, oauthErr(http.StatusBadRequest, "invalid_request", "missing state")
 	}
 
 	// Checked before the state is consumed: a request from another browser
@@ -209,31 +233,32 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 			"op", logOpGoogleCallback,
 			"cause", "state_not_bound_to_browser",
 		)
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "sign-in was not started in this browser")
+		return nil, reasonStateNotBound, oauthErr(http.StatusBadRequest, "invalid_request", "sign-in was not started in this browser")
 	}
 
 	ar, err := c.store.ConsumeAuthRequest(ctx, in.State)
 	if errors.Is(err, ErrAuthRequestNotFound) {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "unknown or already-used state")
+		return nil, reasonUnknownState, oauthErr(http.StatusBadRequest, "invalid_request", "unknown or already-used state")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("oidc: consume auth request: %w", err)
+		return nil, reasonInternal, fmt.Errorf("oidc: consume auth request: %w", err)
 	}
 	if c.now().After(ar.ExpiresAt) {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "auth request expired")
+		return nil, reasonExpiredRequest, oauthErr(http.StatusBadRequest, "invalid_request", "auth request expired")
 	}
 
 	clearBinding := c.binding.clearCookie(in.State).String()
 
 	if in.UpstreamError != "" {
-		return c.redirect(ar, clearBinding, url.Values{
+		out, err := c.redirect(ar, clearBinding, url.Values{
 			"error":             {in.UpstreamError},
 			"error_description": {in.UpstreamErrorReason},
 		})
+		return out, reasonUpstreamDenied, err
 	}
 
 	if in.Code == "" {
-		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "missing code")
+		return nil, reasonMissingCode, oauthErr(http.StatusBadRequest, "invalid_request", "missing code")
 	}
 
 	id, err := c.upstream.ExchangeAndVerify(ctx, in.Code, c.binding.codeVerifier(in.State), c.binding.nonce(in.State))
@@ -242,18 +267,18 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 	}
 	if err != nil {
 		c.logUpstreamFailure(ctx, err)
-		return nil, oauthErr(http.StatusBadGateway, "upstream_error", "could not complete Google sign-in")
+		return nil, reasonUpstreamError, oauthErr(http.StatusBadGateway, "upstream_error", "could not complete Google sign-in")
 	}
 
-	if !id.EmailVerified || !emailDomainAllowed(c.allowedDomains, id.Email) || !c.hostedDomainAllowed(id.HostedDomain) {
+	if refused := c.refusal(id); refused != "" {
 		page := forbiddenPage(id.Email)
 		page.SetCookie = clearBinding
-		return page, nil
+		return page, refused, nil
 	}
 
 	code, err := c.newCode()
 	if err != nil {
-		return nil, fmt.Errorf("oidc: generate auth code: %w", err)
+		return nil, reasonInternal, fmt.Errorf("oidc: generate auth code: %w", err)
 	}
 
 	now := c.now()
@@ -270,10 +295,28 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(authCodeTTL),
 	}); err != nil {
-		return nil, fmt.Errorf("oidc: persist auth code: %w", err)
+		return nil, reasonInternal, fmt.Errorf("oidc: persist auth code: %w", err)
 	}
 
-	return c.redirect(ar, clearBinding, url.Values{"code": {code}})
+	out, err := c.redirect(ar, clearBinding, url.Values{"code": {code}})
+	if err != nil {
+		return nil, reasonInternal, err
+	}
+	return out, reasonNone, nil
+}
+
+// refusal names the gate an upstream identity failed, or "" when every gate
+// admits it.
+func (c *Callback) refusal(id UpstreamIdentity) string {
+	switch {
+	case !id.EmailVerified:
+		return reasonEmailUnverified
+	case !emailDomainAllowed(c.allowedDomains, id.Email):
+		return reasonDomainNotAllowed
+	case !c.hostedDomainAllowed(id.HostedDomain):
+		return reasonHostedDomainNotAllowed
+	}
+	return ""
 }
 
 // logUpstreamFailure records why a Google sign-in failed: a warning, since

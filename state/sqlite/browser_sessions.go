@@ -28,7 +28,7 @@ func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) 
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return ErrDuplicateBrowserSession
 		}
-		return fmt.Errorf("sqlite: save browser session: %w", err)
+		return s.fail("save_browser_session", fmt.Errorf("sqlite: save browser session: %w", err))
 	}
 	return nil
 }
@@ -47,7 +47,7 @@ func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.Brow
 		return oidc.BrowserSession{}, oidc.ErrBrowserSessionNotFound
 	}
 	if err != nil {
-		return oidc.BrowserSession{}, fmt.Errorf("sqlite: lookup browser session: %w", err)
+		return oidc.BrowserSession{}, s.fail("lookup_browser_session", fmt.Errorf("sqlite: lookup browser session: %w", err))
 	}
 	return bs, nil
 }
@@ -59,7 +59,7 @@ func (s *Store) DeleteBrowserSession(ctx context.Context, sid string) error {
 	if _, err := s.db.ExecContext(ctx,
 		`DELETE FROM browser_sessions WHERE sid_hash = ?`, secretHash(sid),
 	); err != nil {
-		return fmt.Errorf("sqlite: delete browser session: %w", err)
+		return s.fail("delete_browser_session", fmt.Errorf("sqlite: delete browser session: %w", err))
 	}
 	return nil
 }

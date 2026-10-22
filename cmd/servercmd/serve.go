@@ -40,6 +40,7 @@ type serveParams struct {
 	AdminListener config.Listener     `name:"admin"`
 	Server        config.ServerConfig `name:"http_server"`
 	KeysReload    time.Duration       `name:"keys_reload_interval"`
+	LogRequests   bool                `name:"log_requests"`
 
 	DocsEnabled     bool `name:"api_docs_enabled"`
 	IssuerPlainHTTP bool `name:"oidc_issuer_plain_http"`
@@ -49,7 +50,8 @@ type serveParams struct {
 // instances, two muxes: the public listener literally has no /admin/*
 // handler, so admin reachability is a property of binding, not of
 // middleware. Both share newHTTPServer so the admin listener is never
-// softer than the public one.
+// softer than the public one, and both get the access log when
+// LOG_REQUESTS is on.
 func httpServers(p serveParams) (public, admin *http.Server) {
 	publicMux := http.NewServeMux()
 	publicMux.Handle("/", p.Servers.Public.Handler)
@@ -57,8 +59,14 @@ func httpServers(p serveParams) (public, admin *http.Server) {
 	adminMux := http.NewServeMux()
 	adminMux.Handle("/", p.Servers.Admin.Handler)
 
-	return newHTTPServer(p.Listener.String(), publicMux, p.Server),
-		newHTTPServer(p.AdminListener.String(), adminMux, p.Server)
+	var publicHandler, adminHandler http.Handler = publicMux, adminMux
+	if p.LogRequests {
+		publicHandler = accessLog(p.Logger, "public", publicHandler)
+		adminHandler = accessLog(p.Logger, "admin", adminHandler)
+	}
+
+	return newHTTPServer(p.Listener.String(), publicHandler, p.Server),
+		newHTTPServer(p.AdminListener.String(), adminHandler, p.Server)
 }
 
 func newHTTPServer(addr string, handler http.Handler, cfg config.ServerConfig) *http.Server {

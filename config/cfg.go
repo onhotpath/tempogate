@@ -17,6 +17,12 @@ type Config struct {
 
 type LogConfig struct {
 	Level string `ferry:"level"`
+
+	// Requests emits one structured line per HTTP request on both listeners
+	// (method, path without query, status, duration, bytes, remote address,
+	// user agent, request id). On by default: tempogate is an auth server and
+	// its access log is the audit trail. Probe and scrape paths log at debug.
+	Requests bool `ferry:"requests"`
 }
 
 type HTTPConfig struct {

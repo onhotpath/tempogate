@@ -29,7 +29,7 @@ func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return fmt.Errorf("%w: %s", ErrDuplicateKid, kp.Kid)
 		}
-		return fmt.Errorf("sqlite: save keypair: %w", err)
+		return s.fail("save_keypair", fmt.Errorf("sqlite: save keypair: %w", err))
 	}
 	return nil
 }
@@ -41,7 +41,7 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 		 ORDER BY created_at ASC, kid ASC`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: load keypairs: %w", err)
+		return nil, s.fail("load_keypairs", fmt.Errorf("sqlite: load keypairs: %w", err))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -54,7 +54,7 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 		out = append(out, kp)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sqlite: rows: %w", err)
+		return nil, s.fail("load_keypairs", fmt.Errorf("sqlite: rows: %w", err))
 	}
 	return out, nil
 }
@@ -64,11 +64,11 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, privatePEM []byte) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE keypairs SET private_pem = ? WHERE kid = ?`, privatePEM, kid)
 	if err != nil {
-		return fmt.Errorf("sqlite: update keypair: %w", err)
+		return s.fail("update_keypair_private_pem", fmt.Errorf("sqlite: update keypair: %w", err))
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("sqlite: update keypair: %w", err)
+		return s.fail("update_keypair_private_pem", fmt.Errorf("sqlite: update keypair: %w", err))
 	}
 	if n == 0 {
 		return fmt.Errorf("sqlite: update keypair: no keypair with kid %s", kid)
@@ -89,11 +89,11 @@ func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (ke
 		at, kid, kid,
 	)
 	if err != nil {
-		return keys.Keypair{}, fmt.Errorf("sqlite: retire keypair: %w", err)
+		return keys.Keypair{}, s.fail("retire_keypair", fmt.Errorf("sqlite: retire keypair: %w", err))
 	}
 	changed, err := res.RowsAffected()
 	if err != nil {
-		return keys.Keypair{}, fmt.Errorf("sqlite: retire keypair: %w", err)
+		return keys.Keypair{}, s.fail("retire_keypair", fmt.Errorf("sqlite: retire keypair: %w", err))
 	}
 
 	kp, err := scanKeypair(s.db.QueryRowContext(ctx,

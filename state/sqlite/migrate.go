@@ -43,7 +43,7 @@ type migration struct {
 // serve surfaces either message to the operator.
 func (s *Store) IsCurrent(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaVersionDDL); err != nil {
-		return fmt.Errorf("sqlite: ensure schema_migrations: %w", err)
+		return s.fail("is_current", fmt.Errorf("sqlite: ensure schema_migrations: %w", err))
 	}
 
 	migs, err := loadMigrations()
@@ -53,7 +53,7 @@ func (s *Store) IsCurrent(ctx context.Context) error {
 
 	applied, err := loadAppliedVersions(ctx, s.db)
 	if err != nil {
-		return err
+		return s.fail("is_current", err)
 	}
 
 	dbMax := 0

@@ -24,7 +24,7 @@ func (s *Store) IsRevoked(ctx context.Context, jti string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("sqlite: is jti revoked: %w", err)
+		return false, s.fail("is_revoked", fmt.Errorf("sqlite: is jti revoked: %w", err))
 	}
 	return true, nil
 }

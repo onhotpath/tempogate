@@ -29,6 +29,15 @@ type options struct {
 	maxConns    int
 	busyTimeout time.Duration
 	logger      *zap.Logger
+	observer    ErrorObserver
+}
+
+// ErrorObserver is told every store operation that failed with a database
+// error, under a fixed op name (e.g. "consume_refresh"). Not-found results
+// are protocol outcomes, not errors, and are never reported. The metrics
+// package satisfies it; this package never imports Prometheus.
+type ErrorObserver interface {
+	ObserveDBError(op string)
 }
 
 type Option func(*options)
@@ -43,17 +52,34 @@ func WithLogger(l *zap.Logger) Option { return func(o *options) { o.logger = l }
 
 func WithBusyTimeout(d time.Duration) Option { return func(o *options) { o.busyTimeout = d } }
 
+// WithErrorObserver reports failed operations to obs. Nil keeps the no-op
+// default.
+func WithErrorObserver(obs ErrorObserver) Option {
+	return func(o *options) {
+		if obs != nil {
+			o.observer = obs
+		}
+	}
+}
+
+type nopObserver struct{}
+
+func (nopObserver) ObserveDBError(string) {}
+
 func defaultOptions() *options {
 	return &options{
 		path:        "/var/lib/tempogate/state.db",
 		maxConns:    1,
 		busyTimeout: 5 * time.Second,
 		logger:      zap.NewNop(),
+		observer:    nopObserver{},
 	}
 }
 
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	probe    *sql.DB
+	observer ErrorObserver
 }
 
 func New(opts ...Option) (*Store, error) {
@@ -74,7 +100,17 @@ func New(opts ...Option) (*Store, error) {
 	}
 	db.SetMaxOpenConns(o.maxConns)
 
-	return &Store{db: db}, nil
+	probe, err := sql.Open("sqlite", probeDSN(o))
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("sqlite: open probe: %w", err)
+	}
+	// No idle connections: every Probe opens the file afresh, which is the
+	// point (see Probe).
+	probe.SetMaxIdleConns(0)
+	probe.SetMaxOpenConns(1)
+
+	return &Store{db: db, probe: probe, observer: o.observer}, nil
 }
 
 // restrictFiles makes the database owner-only before SQLite opens it: the
@@ -129,6 +165,42 @@ func dsn(o *options) string {
 	return "file:" + o.path + "?" + q.Encode()
 }
 
+// probeDSN opens the same file read-only, so a probe can never create an
+// empty database where the real one has vanished.
+func probeDSN(o *options) string {
+	q := url.Values{}
+	q.Add("mode", "ro")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", o.busyTimeout.Milliseconds()))
+	return "file:" + o.path + "?" + q.Encode()
+}
+
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
-func (s *Store) Close() error { return s.db.Close() }
+// Probe reports whether the store can serve requests right now; /readyz
+// calls it. Pinging the serving pool is not enough: its connection holds an
+// open descriptor, so it keeps reading and writing a database file that has
+// been deleted, replaced or truncated underneath it (a lost or remounted
+// volume), silently losing every write. Probe therefore also opens the file
+// the configured path names now, read-only, and reads the migrations table
+// from it.
+func (s *Store) Probe(ctx context.Context) error {
+	if err := s.db.PingContext(ctx); err != nil {
+		return s.fail("probe", fmt.Errorf("sqlite: ping: %w", err))
+	}
+	var one int
+	if err := s.probe.QueryRowContext(ctx, `SELECT 1 FROM schema_migrations LIMIT 1`).Scan(&one); err != nil {
+		return s.fail("probe", fmt.Errorf("sqlite: probe: %w", err))
+	}
+	return nil
+}
+
+// fail reports a failed operation to the observer and returns err unchanged,
+// so call sites keep their own error context.
+func (s *Store) fail(op string, err error) error {
+	s.observer.ObserveDBError(op)
+	return err
+}
+
+func (s *Store) Close() error {
+	return errors.Join(s.db.Close(), s.probe.Close())
+}

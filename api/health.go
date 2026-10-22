@@ -72,11 +72,11 @@ func registerHealth(api huma.API, readiness *Readiness) {
 		OperationID: "readyz",
 		Method:      http.MethodGet,
 		Path:        "/readyz",
-		Summary:     "Readiness probe (503 until the HTTP listener is bound)",
+		Summary:     "Readiness probe (503 until the HTTP listener is bound, and while the state store is unavailable)",
 		Tags:        []string{"health"},
-	}, func(_ context.Context, _ *struct{}) (*readyOutput, error) {
-		if !readiness.IsReady() {
-			return nil, huma.Error503ServiceUnavailable("not ready")
+	}, func(ctx context.Context, _ *struct{}) (*readyOutput, error) {
+		if err := readiness.Check(ctx); err != nil {
+			return nil, huma.Error503ServiceUnavailable("not ready: " + err.Error())
 		}
 		return &readyOutput{Body: readyBody{Status: "ready"}}, nil
 	})

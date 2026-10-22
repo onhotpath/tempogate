@@ -54,6 +54,20 @@ curl -fsS http://127.0.0.1:8000/healthz
   https deployment, `extraEnv` included, and the admin listener never
   serves them. Get the specs with `tempogate gen-oas` and
   `tempogate gen-oas --admin` instead.
+- **Metrics are not scraped by the chart.** Prometheus `GET /metrics` is
+  served on the admin listener, outside `/admin/*`: it needs no admin token
+  and is not Host-checked, so the listener's reachability is its only access
+  control. With `service.admin.enabled=false` (the default) it is on the
+  pod's loopback only. With `service.admin.enabled=true` a scraper inside the
+  cluster can reach it through the `<fullname>-admin` Service; restrict that
+  Service with a NetworkPolicy. The chart ships no ServiceMonitor or scrape
+  annotations, and the admin listener must never sit behind a public Service
+  or Ingress. See
+  [docs/configuration.md](../../docs/configuration.md#observability).
+- **Probes.** `livenessProbe` hits `/healthz` (process only);
+  `readinessProbe` hits `/readyz`, which also returns `503` while the
+  SQLite state store is unavailable, taking the pod out of rotation without
+  restarting it.
 - **Schema migrations** run in a `migrate` initContainer of the
   tempogate pod, before `serve` starts, on the same volume. With one
   replica and the `Recreate` strategy the previous pod has exited before
