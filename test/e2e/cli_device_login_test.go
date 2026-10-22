@@ -268,7 +268,7 @@ func (s *cliStack) spawnDeviceLogin(ctx context.Context, t *testing.T, done chan
 		[]string{"sh", "-c", "rm -f " + stdoutPath + " " + stderrPath},
 		tcexec.Multiplexed(),
 	)
-	args := append([]string{"tempogate", "login", "--device"}, extraArgs...)
+	args := append([]string{"tempogate", "login", "--device", insecureFlag}, extraArgs...)
 	cmd := shellQuote(args) + " > " + stdoutPath + " 2> " + stderrPath
 	go func() {
 		code, _, err := s.client.Exec(ctx,

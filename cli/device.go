@@ -100,6 +100,7 @@ type DeviceFlow struct {
 	scope        string
 	pollDeadline time.Duration
 	minSleep     time.Duration
+	insecure     bool
 
 	now        func() time.Time
 	sleep      func(ctx context.Context, d time.Duration) error
@@ -130,6 +131,13 @@ func WithDeviceClientID(id string) DeviceOption {
 			f.clientID = id
 		}
 	}
+}
+
+// WithDeviceInsecure allows a plain-http issuer on a non-loopback host
+// (--insecure). For development stacks only: the device code and the tokens
+// then cross the network in cleartext.
+func WithDeviceInsecure(insecure bool) DeviceOption {
+	return func(f *DeviceFlow) { f.insecure = insecure }
 }
 
 // WithDeviceScope overrides the scope sent on /device_authorization. Defaults
@@ -190,6 +198,7 @@ func NewDeviceFlow(opts ...DeviceOption) *DeviceFlow {
 	for _, o := range opts {
 		o(f)
 	}
+	f.httpClient = guardRedirects(f.httpClient, f.insecure)
 	return f
 }
 
@@ -247,6 +256,9 @@ const (
 func (f *DeviceFlow) Run(ctx context.Context) (Token, error) {
 	if f.issuer == "" {
 		return Token{}, errors.New("cli: issuer is required (pass --issuer or set TEMPOGATE_ISSUER)")
+	}
+	if err := checkIssuer(f.issuer, f.insecure); err != nil {
+		return Token{}, err
 	}
 
 	init, err := f.requestDeviceCode(ctx)
@@ -426,6 +438,11 @@ func (f *DeviceFlow) pollOnce(ctx context.Context, deviceCode string) (Token, po
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Token{}, 0, ctxErr
+		}
+		if errors.Is(err, ErrUnsafeRedirect) {
+			// Not a network blip: retrying would hit the same redirect until
+			// the device code expires.
+			return Token{}, 0, fmt.Errorf("cli: poll request: %w", err)
 		}
 		return Token{}, actionTransient, nil
 	}

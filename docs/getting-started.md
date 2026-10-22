@@ -83,9 +83,11 @@ Point it at the demo issuer and sign in once:
 
 ```bash
 export TEMPOGATE_ISSUER=http://tempogate:8000
-tempogate login                                  # browser sign-in, once
-export TEMPORAL_AUTH_TOKEN=$(tempogate token)    # thereafter; auto-refreshes
+tempogate login --insecure                                  # browser sign-in, once
+export TEMPORAL_AUTH_TOKEN=$(tempogate token --insecure)    # thereafter; auto-refreshes
 ```
+
+`--insecure` is needed because the demo issuer is plain `http` on a non-loopback host; against a real `https` deployment, drop it.
 
 `tempogate login` opens the same SSO flow on an ephemeral `127.0.0.1` port
 (pre-registered as the `tempogate-cli` client in the example), prints the
@@ -99,7 +101,7 @@ safe in `$(...)`. Details:
 > device-code flow instead:
 >
 > ```bash
-> tempogate login --device
+> tempogate login --device --insecure
 > ```
 >
 > The CLI prints a short code and a URL you open on any device with a

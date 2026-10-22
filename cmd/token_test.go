@@ -16,7 +16,7 @@ import (
 type TokenCmdSuite struct {
 	suite.Suite
 
-	orig func(context.Context, string, string) (cli.Token, error)
+	orig func(context.Context, string, string, ...cli.RefreshOption) (cli.Token, error)
 }
 
 func TestTokenCmdSuite(t *testing.T) {
@@ -54,7 +54,7 @@ func (s *TokenCmdSuite) TestRequiresIssuer() {
 
 func (s *TokenCmdSuite) TestPrintsAccessTokenOnly() {
 	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
-	tokenRefresher = func(_ context.Context, _, issuer string) (cli.Token, error) {
+	tokenRefresher = func(_ context.Context, _, issuer string, _ ...cli.RefreshOption) (cli.Token, error) {
 		s.Equal("https://tempogate.example.com", issuer, "env issuer must reach EnsureFresh")
 		return cli.Token{AccessToken: "fresh.jwt.token", RefreshToken: "r"}, nil
 	}
@@ -88,7 +88,7 @@ func (s *TokenCmdSuite) TestTokenPathResolutionFailurePropagates() {
 
 func (s *TokenCmdSuite) TestRefreshErrorPropagates() {
 	s.T().Setenv("TEMPOGATE_ISSUER", "https://tempogate.example.com")
-	tokenRefresher = func(_ context.Context, _, _ string) (cli.Token, error) {
+	tokenRefresher = func(_ context.Context, _, _ string, _ ...cli.RefreshOption) (cli.Token, error) {
 		return cli.Token{}, errors.New("cli: no token file; run `tempogate login` first")
 	}
 
@@ -104,4 +104,22 @@ func (s *TokenCmdSuite) TestRefreshErrorPropagates() {
 	s.Require().Error(err)
 	s.Contains(err.Error(), "no token file")
 	s.Empty(out.String())
+}
+
+// --insecure is the only way past the plain-http check, and it reaches
+// EnsureFresh: without it the missing file is never even read.
+func (s *TokenCmdSuite) TestInsecureFlagGatesPlainHTTPIssuer() {
+	missing := filepath.Join(s.T().TempDir(), "nope.json")
+	run := func(args ...string) error {
+		cmd := newTokenCmd(zap.NewNop())
+		cmd.SilenceUsage = true
+		cmd.SilenceErrors = true
+		cmd.SetOut(new(testWriter))
+		cmd.SetErr(new(testWriter))
+		cmd.SetArgs(append([]string{"--issuer", "http://tempogate:8000", "--token-file", missing}, args...))
+		return cmd.ExecuteContext(context.Background())
+	}
+
+	s.Require().ErrorIs(run(), cli.ErrInsecureIssuer)
+	s.Require().ErrorIs(run("--insecure"), cli.ErrNoToken)
 }

@@ -77,6 +77,9 @@ the loopback port is ignored, and the default client_id switches from
 how long the CLI keeps polling — useful in CI to fail fast; without it, the
 CLI follows the issuer's advertised `expires_in`.
 
+The issuer must be `https://` (or plain `http://` on a loopback host), as for the loopback flow.
+For a plain-http development stack, pass `--insecure`; see [https issuers only](cli-loopback-login.md#https-issuers-only).
+
 ## What happens in your browser
 
 When you open the URL on a second device:
@@ -238,6 +241,7 @@ in this release.
   same `permissions` claim, same Temporal `aud`, same JWKS-verified signature. The
   device flow changes *how* the human authenticates the CLI, not what the
   CLI gets.
+* **https only, unless `--insecure`.** The `device_code` and the tokens are refused to a plain-http issuer on a non-loopback host before any request is sent.
 * **PKCE does not apply.** RFC 8628 §5.1 binds the grant to the
   `device_code` itself (a server-issued opaque value) rather than to a
   client-generated verifier. Tempogate honours that: the `device_code` is
