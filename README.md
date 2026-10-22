@@ -138,7 +138,9 @@ session: a chain of single-use refresh tokens, each rotated on use.
 Every refresh is governed by:
 
 - **Idle lifetime** (`OIDC_REFRESH_TOKEN_TTL`, default 7 days): a session not refreshed for this long ends.
-- **Absolute lifetime** (`OIDC_REFRESH_MAX_LIFETIME`, default 30 days): counted from the original sign-in and never extended by rotation, so every user goes back through Google at least this often.
+- **Absolute lifetime** (`OIDC_REFRESH_MAX_LIFETIME`, default 7 days): counted from the original sign-in and never extended by rotation, so every user goes back through Google at least this often.
+  Refresh never calls Google, so this also bounds how long a user suspended upstream keeps a session nobody revoked.
+  At the defaults it equals the idle lifetime, so it is the limit that ends a session.
 - **Domain re-check**: `OIDC_ALLOWED_DOMAINS` is re-applied on every refresh. Removing a domain ends its users' sessions at their next refresh.
 - **Reuse detection** ([RFC 9700 §4.14.2](https://datatracker.ietf.org/doc/html/rfc9700#section-4.14.2)): presenting an already-rotated refresh token revokes the whole session, including the newer token, and logs a `refresh_token_reuse` warning with the session's family id, client and email (never the token).
   Two concurrent refreshes of the same token count as reuse too, so the loser's session ends and it signs in again.
@@ -344,7 +346,7 @@ See [docs/configuration.md](docs/configuration.md).
 | `OIDC_ACCESS_TOKEN_TTL` | No | `4h` | Lifetime of each access token (ID tokens live 5 minutes) |
 | `OIDC_ACCESS_TOKEN_AUDIENCE` | No | `temporal` | `aud` of every access token and integration key; set Temporal's `global.authorization.audience` (v1.29.0+) to match. See [Access tokens and ID tokens](docs/configuration.md#access-tokens-and-id-tokens) |
 | `OIDC_REFRESH_TOKEN_TTL` | No | `168h` (7 days) | Idle lifetime of each rotated refresh token |
-| `OIDC_REFRESH_MAX_LIFETIME` | No | `720h` (30 days) | Absolute session lifetime from sign-in; rotation never extends it. See [Sessions and refresh tokens](#sessions-and-refresh-tokens) |
+| `OIDC_REFRESH_MAX_LIFETIME` | No | `168h` (7 days) | Absolute session lifetime from sign-in; rotation never extends it. See [Sessions and refresh tokens](#sessions-and-refresh-tokens) |
 | `OIDC_GOOGLE_CLIENT_ID` | For any login | _(empty)_ | Upstream Google OAuth client |
 | `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
 | `OIDC_SESSION_SIGNING_KEY` | Yes | _(empty)_ | Base64url 32-byte HMAC key for the device-flow session cookie and SSO `state`, and for deriving the Google leg's PKCE verifier, nonce and browser binding; `serve` refuses to boot without it |

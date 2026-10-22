@@ -54,8 +54,11 @@ const (
 	// DefaultRefreshMaxLifetime is the absolute session lifetime counted
 	// from the original sign-in (OIDC_REFRESH_MAX_LIFETIME). Rotation never
 	// extends it, so a session is re-authenticated upstream (and re-checked
-	// against Google) at least this often.
-	DefaultRefreshMaxLifetime = 30 * 24 * time.Hour
+	// against Google) at least this often. It equals DefaultRefreshTokenTTL,
+	// so at the defaults this absolute limit is what ends a session: nothing
+	// tells TempoGate when a user is suspended upstream, and this bounds how
+	// long an unrevoked session outlives that.
+	DefaultRefreshMaxLifetime = 7 * 24 * time.Hour
 
 	refreshEntropyBytes  = 32
 	familyIDEntropyBytes = 16

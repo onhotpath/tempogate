@@ -675,7 +675,7 @@ func (s *StoreSuite) TestFxComposition() {
 	s.Require().NotNil(asBrowserSess)
 	s.Require().NotNil(reaper)
 	s.Equal(defaultReapInterval, reaper.interval, "STATE_REAPER_INTERVAL default reaches the reaper")
-	s.Equal(30*24*time.Hour, reaper.refreshMaxLifetime, "OIDC_REFRESH_MAX_LIFETIME reaches the reaper")
+	s.Equal(7*24*time.Hour, reaper.refreshMaxLifetime, "OIDC_REFRESH_MAX_LIFETIME reaches the reaper")
 }
 
 func (s *StoreSuite) TestFxRejectsNegativeReaperInterval() {

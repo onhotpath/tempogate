@@ -74,7 +74,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -126,7 +126,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -141,7 +141,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_ACCESS_TOKEN_TTL":      "30m",
 				"OIDC_ACCESS_TOKEN_AUDIENCE": "temporal-prod",
 				"OIDC_REFRESH_TOKEN_TTL":     "24h",
-				"OIDC_REFRESH_MAX_LIFETIME":  "168h",
+				"OIDC_REFRESH_MAX_LIFETIME":  "336h",
 			},
 			want: &Config{
 				Log: LogConfig{Level: "info", Requests: true},
@@ -179,7 +179,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      30 * time.Minute,
 					AccessTokenAudience: "temporal-prod",
 					RefreshTokenTTL:     24 * time.Hour,
-					RefreshMaxLifetime:  7 * 24 * time.Hour,
+					RefreshMaxLifetime:  14 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -261,7 +261,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -313,7 +313,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -363,7 +363,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -416,7 +416,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						ClientID:      "google-client-123.apps.googleusercontent.com",
 						AuthEndpoint:  "http://127.0.0.1:9999/mock/auth",
@@ -468,7 +468,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:            4 * time.Hour,
 					AccessTokenAudience:       "temporal",
 					RefreshTokenTTL:           7 * 24 * time.Hour,
-					RefreshMaxLifetime:        30 * 24 * time.Hour,
+					RefreshMaxLifetime:        7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
 						TokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -524,7 +524,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:       4 * time.Hour,
 					AccessTokenAudience:  "temporal",
 					RefreshTokenTTL:      7 * 24 * time.Hour,
-					RefreshMaxLifetime:   30 * 24 * time.Hour,
+					RefreshMaxLifetime:   7 * 24 * time.Hour,
 					Google: GoogleConfig{
 						ClientSecret:  "gocspx-secret",
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",
@@ -576,7 +576,7 @@ func (s *ConfigSuite) TestNew() {
 					AccessTokenTTL:      4 * time.Hour,
 					AccessTokenAudience: "temporal",
 					RefreshTokenTTL:     7 * 24 * time.Hour,
-					RefreshMaxLifetime:  30 * 24 * time.Hour,
+					RefreshMaxLifetime:  7 * 24 * time.Hour,
 					SessionSigningKey:   "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
 					Google: GoogleConfig{
 						AuthEndpoint:  "https://accounts.google.com/o/oauth2/v2/auth",

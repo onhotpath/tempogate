@@ -180,7 +180,7 @@ Failure modes are explicit, never silent:
 
 Refresh tokens are rotated on every exchange.
 If a captured `token.json` is used after the legitimate CLI has refreshed, or the CLI refreshes after the thief has, the server sees an already-used token and revokes the whole session, so both parties are signed out.
-A session also ends after `OIDC_REFRESH_MAX_LIFETIME` (default 30 days) from the original login, however often it is refreshed, and an operator can end it with `tempogate sessions revoke`.
+A session also ends after `OIDC_REFRESH_MAX_LIFETIME` (default 7 days) from the original login, however often it is refreshed, and an operator can end it with `tempogate sessions revoke`.
 Two `tempogate token` processes presenting the same refresh token would look like reuse too, so renewal is serialized.
 `tempogate token` takes an exclusive lock on `<token-file>.lock` (created `0600` next to the token file and left in place) before refreshing, then re-reads the file: if another process refreshed while it waited, it prints that token instead of refreshing again.
 This makes `tempogate token` safe to run concurrently, e.g. as a credential helper that tctl or the temporal CLI invokes in parallel.
