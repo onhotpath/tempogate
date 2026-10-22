@@ -10,6 +10,7 @@ package servercmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -39,7 +40,16 @@ type serveParams struct {
 	Listener      config.Listener `name:"http"`
 	AdminListener config.Listener `name:"admin"`
 	KeysReload    time.Duration   `name:"keys_reload_interval"`
+
+	DocsEnabled     bool `name:"api_docs_enabled"`
+	IssuerPlainHTTP bool `name:"oidc_issuer_plain_http"`
 }
+
+// errAPIDocsNeedDevIssuer refuses API docs anywhere but a local dev stack,
+// whatever the deployment method: they map every public endpoint without
+// authentication, and the docs page loosens its CSP to load from a CDN.
+var errAPIDocsNeedDevIssuer = errors.New("API_DOCS_ENABLED is for local development only and requires a plain-http OIDC_ISSUER; " +
+	"use `tempogate gen-oas` (and `tempogate gen-oas --admin`) to get the OpenAPI specs elsewhere")
 
 func newServeCmd(load deps[serveParams]) *cobra.Command {
 	return &cobra.Command{
@@ -52,6 +62,9 @@ func newServeCmd(load deps[serveParams]) *cobra.Command {
 }
 
 func serve(ctx context.Context, p serveParams) error {
+	if p.DocsEnabled && !p.IssuerPlainHTTP {
+		return errAPIDocsNeedDevIssuer
+	}
 	if err := storeReady(ctx, p.Store); err != nil {
 		return err
 	}

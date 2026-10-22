@@ -4,8 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -167,8 +165,10 @@ type sessionManagerParams struct {
 	SigningKey sessionSigningKey
 
 	TTL      time.Duration `name:"oidc_session_ttl"`
-	Issuer   string        `name:"oidc_issuer"`
 	BasePath string        `name:"oidc_base_path"`
+	// IssuerPlainHTTP is true for a local or docker-compose issuer: a
+	// browser never returns a Secure cookie over plain http.
+	IssuerPlainHTTP bool `name:"oidc_issuer_plain_http"`
 }
 
 // newSessionManager builds the device-flow verification-page session manager
@@ -180,20 +180,12 @@ func newSessionManager(p sessionManagerParams) *SessionManager {
 		// cookie must be too, or the browser never sends it to
 		// /device/confirm.
 		WithCookiePath(p.BasePath + DevicePath),
-		WithCookieSecure(!issuerIsPlainHTTP(p.Issuer)),
+		WithCookieSecure(!p.IssuerPlainHTTP),
 	}
 	if p.TTL > 0 {
 		opts = append(opts, WithSessionTTL(p.TTL))
 	}
 	return NewSessionManager(p.Store, p.SigningKey, opts...)
-}
-
-// issuerIsPlainHTTP reports whether the issuer is served over plain http
-// (local and docker-compose setups). Anything else, including an unparseable
-// issuer, keeps the cookie Secure.
-func issuerIsPlainHTTP(issuer string) bool {
-	u, err := url.Parse(strings.TrimSpace(issuer))
-	return err == nil && strings.EqualFold(u.Scheme, "http")
 }
 
 type userInfoParams struct {

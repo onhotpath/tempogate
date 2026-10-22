@@ -8,6 +8,10 @@
 // prefix is covered by the oidc/api unit guards plus the unchanged root-issuer
 // e2e (regression). Deliberately a single container — no mock Google / Temporal
 // / headless Chrome — so it stays a fast, targeted check.
+//
+// It also runs with API_DOCS_ENABLED, which a plain-http issuer like this one
+// allows: the docs are served under the prefix on the public listener and
+// never on the admin one.
 package e2e
 
 import (
@@ -16,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -37,6 +42,8 @@ func TestSubPathIssuerHosting(t *testing.T) {
 
 	env := map[string]string{
 		"HTTP_LISTENER":              "0.0.0.0:8000",
+		"ADMIN_LISTENER":             "0.0.0.0:8081",
+		"API_DOCS_ENABLED":           "true",
 		"STATE_SQLITE_PATH":          "/state/state.db",
 		"OIDC_ISSUER":                issuer,
 		"OIDC_CLIENTS":               "ui:https://app.example.com/",
@@ -51,7 +58,10 @@ func TestSubPathIssuerHosting(t *testing.T) {
 	// lives under the prefix; pass the prefixed issuer so the registration
 	// matches what the verification-UI handler builds.
 	addDeviceUIServerEnv(env, issuer)
+	// Registered before the containers so it runs after they are terminated
+	// (t.Cleanup is LIFO): a volume in use cannot be removed.
 	stateVol := fmt.Sprintf("tempogate-prefix-e2e-state-%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", stateVol).Run() })
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
 	migrate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -80,8 +90,11 @@ func TestSubPathIssuerHosting(t *testing.T) {
 			Env:            env,
 			User:           "0:0",
 			Mounts:         testcontainers.Mounts(testcontainers.VolumeMount(stateVol, "/state")),
-			ExposedPorts:   []string{"8000/tcp"},
-			WaitingFor:     wait.ForHTTP("/readyz").WithPort("8000/tcp").WithStartupTimeout(2 * time.Minute),
+			ExposedPorts:   []string{"8000/tcp", "8081/tcp"},
+			WaitingFor: wait.ForAll(
+				wait.ForHTTP("/readyz").WithPort("8000/tcp"),
+				wait.ForHTTP("/admin/healthz").WithPort("8081/tcp"),
+			).WithDeadline(2 * time.Minute),
 		},
 		Started: true,
 	})
@@ -89,14 +102,19 @@ func TestSubPathIssuerHosting(t *testing.T) {
 	track(ctx, t, "tempogate", tempogate)
 
 	base := mappedHTTP(ctx, t, tempogate, "8000")
+	admin := mappedHTTP(ctx, t, tempogate, "8081")
 
-	getStatus := func(path string) (int, []byte) {
+	getURL := func(u string) (int, []byte) {
 		t.Helper()
-		resp, err := http.Get(base + path)
+		resp, err := http.Get(u)
 		require.NoError(t, err)
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
 		return resp.StatusCode, b
+	}
+	getStatus := func(path string) (int, []byte) {
+		t.Helper()
+		return getURL(base + path)
 	}
 
 	// OIDC discovery is served UNDER the prefix and advertises issuer-relative
@@ -132,4 +150,19 @@ func TestSubPathIssuerHosting(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rc, "discovery must not be at root in base-path mode")
 	ph, _ := getStatus(basePath + "/healthz")
 	require.Equal(t, http.StatusNotFound, ph, "/healthz must not move under the prefix")
+
+	// API docs: on the public listener, under the prefix.
+	for _, p := range []string{"/openapi.json", "/docs", "/schemas/HealthBody.json"} {
+		code, body := getStatus(basePath + p)
+		require.Equalf(t, http.StatusOK, code, "public %s%s with API_DOCS_ENABLED: %s", basePath, p, body)
+	}
+
+	// Never on the admin listener: there they would sit outside the admin
+	// token and Host allowlist. No body links a schema it does not serve.
+	for _, p := range []string{"/openapi.json", "/openapi.yaml", "/docs", "/schemas/HealthBody.json", "/schemas/AdminHealthBody.json"} {
+		code, _ := getURL(admin + p)
+		require.Equalf(t, http.StatusNotFound, code, "admin %s must 404 even with API_DOCS_ENABLED", p)
+	}
+	_, body = getURL(admin + "/admin/healthz")
+	require.NotContains(t, string(body), `"$schema"`, "admin bodies must not link a schema route that does not exist")
 }

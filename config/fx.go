@@ -36,6 +36,7 @@ type Result struct {
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
 	OIDCIssuer            string        `name:"oidc_issuer"`
 	OIDCBasePath          string        `name:"oidc_base_path"`
+	OIDCIssuerPlainHTTP   bool          `name:"oidc_issuer_plain_http"`
 	OIDCClients           string        `name:"oidc_clients"`
 	OIDCClientSecrets     string        `name:"oidc_client_secrets"`
 	OIDCAllowInsecureURIs bool          `name:"oidc_allow_insecure_redirect_uris"`
@@ -96,6 +97,7 @@ func project(cfg *Config) Result {
 		SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,
 		OIDCIssuer:            cfg.OIDC.Issuer,
 		OIDCBasePath:          issuerBasePath(cfg.OIDC.Issuer),
+		OIDCIssuerPlainHTTP:   issuerIsPlainHTTP(cfg.OIDC.Issuer),
 		OIDCClients:           cfg.OIDC.Clients,
 		OIDCClientSecrets:     cfg.OIDC.ClientSecrets,
 		OIDCAllowInsecureURIs: cfg.OIDC.AllowInsecureRedirectURIs,

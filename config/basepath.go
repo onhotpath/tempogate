@@ -21,3 +21,12 @@ func issuerBasePath(issuer string) string {
 	}
 	return strings.TrimRight(u.Path, "/")
 }
+
+// issuerIsPlainHTTP reports whether OIDC_ISSUER is served over plain http,
+// which only a local or docker-compose dev stack does. Anything else, an
+// unparseable issuer included, counts as a real deployment: the session
+// cookie stays Secure and serve refuses API_DOCS_ENABLED.
+func issuerIsPlainHTTP(issuer string) bool {
+	u, err := url.Parse(strings.TrimSpace(issuer))
+	return err == nil && strings.EqualFold(u.Scheme, "http")
+}
