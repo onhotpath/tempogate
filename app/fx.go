@@ -5,6 +5,8 @@
 package app
 
 import (
+	"time"
+
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
@@ -13,6 +15,9 @@ import (
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/log"
 )
+
+// stopTimeout is fx's hard ceiling on stopping the app.
+const stopTimeout = time.Minute
 
 type appConfig struct {
 	extra []fx.Option
@@ -33,6 +38,11 @@ func New(opts ...Option) fx.Option {
 	}
 	base := []fx.Option{
 		fx.Supply(config.ProcessPath()),
+		// The HTTP servers bound their own drain with SERVER_SHUTDOWN_TIMEOUT
+		// (default 15s). fx's 15s default would race that grace and abort the
+		// remaining stop hooks (e.g. closing SQLite), so this is only a
+		// backstop above any sane grace.
+		fx.StopTimeout(stopTimeout),
 		config.Fx(),
 		log.Fx(),
 		fx.WithLogger(func(l *zap.Logger) fxevent.Logger {

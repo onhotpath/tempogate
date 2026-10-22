@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -26,8 +27,6 @@ import (
 	"github.com/onhotpath/tempogate/state/sqlite"
 )
 
-const readHeaderTimeout = 10 * time.Second
-
 type serveParams struct {
 	fx.In
 
@@ -37,12 +36,41 @@ type serveParams struct {
 	Keys          *keys.Keys
 	Servers       *api.Servers
 	Readiness     *api.Readiness
-	Listener      config.Listener `name:"http"`
-	AdminListener config.Listener `name:"admin"`
-	KeysReload    time.Duration   `name:"keys_reload_interval"`
+	Listener      config.Listener     `name:"http"`
+	AdminListener config.Listener     `name:"admin"`
+	Server        config.ServerConfig `name:"http_server"`
+	KeysReload    time.Duration       `name:"keys_reload_interval"`
 
 	DocsEnabled     bool `name:"api_docs_enabled"`
 	IssuerPlainHTTP bool `name:"oidc_issuer_plain_http"`
+}
+
+// httpServers builds the public and admin servers. Two http.Server
+// instances, two muxes: the public listener literally has no /admin/*
+// handler, so admin reachability is a property of binding, not of
+// middleware. Both share newHTTPServer so the admin listener is never
+// softer than the public one.
+func httpServers(p serveParams) (public, admin *http.Server) {
+	publicMux := http.NewServeMux()
+	publicMux.Handle("/", p.Servers.Public.Handler)
+
+	adminMux := http.NewServeMux()
+	adminMux.Handle("/", p.Servers.Admin.Handler)
+
+	return newHTTPServer(p.Listener.String(), publicMux, p.Server),
+		newHTTPServer(p.AdminListener.String(), adminMux, p.Server)
+}
+
+func newHTTPServer(addr string, handler http.Handler, cfg config.ServerConfig) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
+	}
 }
 
 // errAPIDocsNeedDevIssuer refuses API docs anywhere but a local dev stack,
@@ -81,19 +109,11 @@ func serve(ctx context.Context, p serveParams) error {
 		return fmt.Errorf("KEYS_RELOAD_INTERVAL must be positive, got %s", p.KeysReload)
 	}
 
-	// Two http.Server instances, two muxes - the public listener
-	// literally has no /admin/* handler, so admin reachability is a
-	// property of binding, not of middleware. Both run under
-	// xrun.All so a failure on either tears down the process.
-	publicAddr := p.Listener.String()
-	adminAddr := p.AdminListener.String()
+	// Both run under xrun.All so a failure on either tears down the
+	// process.
+	public, admin := httpServers(p)
+	publicAddr, adminAddr := public.Addr, admin.Addr
 	logger := p.Logger.Named("server")
-
-	publicMux := http.NewServeMux()
-	publicMux.Handle("/", p.Servers.Public.Handler)
-
-	adminMux := http.NewServeMux()
-	adminMux.Handle("/", p.Servers.Admin.Handler)
 
 	// Re-reading keypairs lets `tempogate keys generate|retire`, run from
 	// another process against the same store, take effect without a
@@ -112,12 +132,9 @@ func serve(ctx context.Context, p serveParams) error {
 		xrun.ComponentFunc(p.Reaper.Run),
 		keyReloader,
 		httpServer(httpServerOptions{
-			server: &http.Server{
-				Addr:              publicAddr,
-				Handler:           publicMux,
-				ReadHeaderTimeout: readHeaderTimeout,
-			},
-			onListening: func() {
+			server:          public,
+			shutdownTimeout: p.Server.ShutdownTimeout,
+			onListening: func(net.Addr) {
 				logger.Info("starting public http server", zap.String("addr", publicAddr))
 				p.Readiness.Mark()
 			},
@@ -126,12 +143,9 @@ func serve(ctx context.Context, p serveParams) error {
 			},
 		}),
 		httpServer(httpServerOptions{
-			server: &http.Server{
-				Addr:              adminAddr,
-				Handler:           adminMux,
-				ReadHeaderTimeout: readHeaderTimeout,
-			},
-			onListening: func() {
+			server:          admin,
+			shutdownTimeout: p.Server.ShutdownTimeout,
+			onListening: func(net.Addr) {
 				logger.Info("starting admin http server", zap.String("addr", adminAddr))
 			},
 			onStopping: func() {
