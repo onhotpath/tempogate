@@ -51,41 +51,53 @@ type Result struct {
 func Fx() fx.Option {
 	return fx.Options(
 		fx.Provide(New),
-		fx.Provide(func(cfg *Config) Result {
-			return Result{
-				LogLevel:              log.Level(cfg.Log.Level),
-				HTTPListener:          cfg.HTTP.Listener,
-				AdminListener:         cfg.Admin.Listener,
-				APIDocsEnabled:        cfg.API.DocsEnabled,
-				HTTPTrustedProxies:    cfg.HTTP.TrustedProxies,
-				RateLimitAuthorize:    cfg.HTTP.RateLimit.Authorize,
-				RateLimitDeviceAuthz:  cfg.HTTP.RateLimit.DeviceAuthorization,
-				RateLimitDeviceVerify: cfg.HTTP.RateLimit.DeviceVerification,
-				RateLimitToken:        cfg.HTTP.RateLimit.Token,
-				StateReaperInterval:   cfg.State.ReaperInterval,
-				SqlitePath:            cfg.State.Sqlite.Path,
-				SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
-				SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,
-				OIDCIssuer:            cfg.OIDC.Issuer,
-				OIDCBasePath:          issuerBasePath(cfg.OIDC.Issuer),
-				OIDCClients:           cfg.OIDC.Clients,
-				OIDCClientSecrets:     cfg.OIDC.ClientSecrets,
-				OIDCAllowInsecureURIs: cfg.OIDC.AllowInsecureRedirectURIs,
-				OIDCAllowedDomains:    cfg.OIDC.AllowedDomains,
-				OIDCSessionTTL:        cfg.OIDC.SessionTTL,
-				OIDCSessionSigningKey: cfg.OIDC.SessionSigningKey,
-				OIDCAccessTokenTTL:    cfg.OIDC.AccessTokenTTL,
-				OIDCAccessTokenAud:    cfg.OIDC.AccessTokenAudience,
-				OIDCRefreshTokenTTL:   cfg.OIDC.RefreshTokenTTL,
-				OIDCRefreshMaxLife:    cfg.OIDC.RefreshMaxLifetime,
-				GoogleClientID:        cfg.OIDC.Google.ClientID,
-				GoogleClientSecret:    cfg.OIDC.Google.ClientSecret,
-				GoogleAuthEndpoint:    cfg.OIDC.Google.AuthEndpoint,
-				GoogleTokenEndpoint:   cfg.OIDC.Google.TokenEndpoint,
-				GoogleIssuerURL:       cfg.OIDC.Google.IssuerURL,
-				KeysEncryptionKey:     cfg.Keys.EncryptionKey,
-				KeysEncryptionKeyFile: cfg.Keys.EncryptionKeyFile,
-			}
-		}),
+		fx.Provide(project),
 	)
+}
+
+// Supply provides an already-resolved *Config and the same projections as Fx,
+// for a sub-graph built after the root graph has loaded configuration (the
+// server subcommands build theirs only when they run).
+func Supply(cfg *Config) fx.Option {
+	return fx.Options(
+		fx.Supply(cfg),
+		fx.Provide(project),
+	)
+}
+
+func project(cfg *Config) Result {
+	return Result{
+		LogLevel:              log.Level(cfg.Log.Level),
+		HTTPListener:          cfg.HTTP.Listener,
+		AdminListener:         cfg.Admin.Listener,
+		APIDocsEnabled:        cfg.API.DocsEnabled,
+		HTTPTrustedProxies:    cfg.HTTP.TrustedProxies,
+		RateLimitAuthorize:    cfg.HTTP.RateLimit.Authorize,
+		RateLimitDeviceAuthz:  cfg.HTTP.RateLimit.DeviceAuthorization,
+		RateLimitDeviceVerify: cfg.HTTP.RateLimit.DeviceVerification,
+		RateLimitToken:        cfg.HTTP.RateLimit.Token,
+		StateReaperInterval:   cfg.State.ReaperInterval,
+		SqlitePath:            cfg.State.Sqlite.Path,
+		SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
+		SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,
+		OIDCIssuer:            cfg.OIDC.Issuer,
+		OIDCBasePath:          issuerBasePath(cfg.OIDC.Issuer),
+		OIDCClients:           cfg.OIDC.Clients,
+		OIDCClientSecrets:     cfg.OIDC.ClientSecrets,
+		OIDCAllowInsecureURIs: cfg.OIDC.AllowInsecureRedirectURIs,
+		OIDCAllowedDomains:    cfg.OIDC.AllowedDomains,
+		OIDCSessionTTL:        cfg.OIDC.SessionTTL,
+		OIDCSessionSigningKey: cfg.OIDC.SessionSigningKey,
+		OIDCAccessTokenTTL:    cfg.OIDC.AccessTokenTTL,
+		OIDCAccessTokenAud:    cfg.OIDC.AccessTokenAudience,
+		OIDCRefreshTokenTTL:   cfg.OIDC.RefreshTokenTTL,
+		OIDCRefreshMaxLife:    cfg.OIDC.RefreshMaxLifetime,
+		GoogleClientID:        cfg.OIDC.Google.ClientID,
+		GoogleClientSecret:    cfg.OIDC.Google.ClientSecret,
+		GoogleAuthEndpoint:    cfg.OIDC.Google.AuthEndpoint,
+		GoogleTokenEndpoint:   cfg.OIDC.Google.TokenEndpoint,
+		GoogleIssuerURL:       cfg.OIDC.Google.IssuerURL,
+		KeysEncryptionKey:     cfg.Keys.EncryptionKey,
+		KeysEncryptionKeyFile: cfg.Keys.EncryptionKeyFile,
+	}
 }

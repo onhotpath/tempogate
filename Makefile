@@ -23,7 +23,7 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go ci vuln go-version-check check-supply-chain gen-oas clean help tools \
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
         gci golangci-lint govulncheck actionlint
 
 start: ## Run the binary directly with build-info ldflags injected
@@ -135,6 +135,22 @@ test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 		go test -tags e2e -timeout 40m -count=1 ./test/e2e/...
 
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
+
+# Deployment smoke tests: install the Helm chart into a throwaway kind
+# cluster (migrate Job completes, pod becomes Ready) and run the
+# docker-compose example's migrate service. Need docker; kind + helm +
+# kubectl for the chart. Both build DEPLOY_IMAGE first unless SKIP_BUILD=1.
+DEPLOY_IMAGE    ?= tempogate:smoke
+KIND_CLUSTER    ?= tempogate-smoke
+COMPOSE_PROJECT ?= tempogate-smoke
+
+test-deploy-kind: ## helm template + install into a throwaway kind cluster
+	IMAGE=$(DEPLOY_IMAGE) CLUSTER=$(KIND_CLUSTER) test/deploy/kind-smoke.sh
+
+test-deploy-compose: ## docker-compose example: tempogate-migrate must exit 0
+	IMAGE=$(DEPLOY_IMAGE) PROJECT=$(COMPOSE_PROJECT) test/deploy/compose-smoke.sh
+
+test-deploy: test-deploy-kind test-deploy-compose ## both deployment smoke tests
 
 ci: check lint vuln check-supply-chain test-run ## fmt/vet/imports + lint + govulncheck + supply-chain pins + tests (used by GitHub Actions)
 	@go tool cover -func=coverage.out | tail -1

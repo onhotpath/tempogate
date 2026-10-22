@@ -11,8 +11,10 @@ bash bootstrap.sh
 ```
 
 `bootstrap.sh` creates a kind cluster (if absent), builds the image, loads it
-into the node, installs the chart with `values.yaml`, waits for rollout, and
-proves `/healthz` returns `200`. It is idempotent — re-run to upgrade.
+into the node, creates the `tempogate-kind` Secret (a random session signing
+key and `tempogate-device-ui` client secret, which `serve` requires),
+installs the chart with `values.yaml`, waits for rollout, and proves
+`/healthz` returns `200`. It is idempotent - re-run to upgrade.
 
 Then reach the server yourself:
 

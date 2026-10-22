@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 
@@ -21,7 +22,7 @@ type genOASParams struct {
 // so their specs are too: the default --admin=false produces the OIDC + health
 // public spec, and --admin produces the admin-only spec. Running both and
 // diffing makes leakage between them surface as a spec change.
-func newGenOASCmd(p genOASParams) *cobra.Command {
+func newGenOASCmd(load deps[genOASParams]) *cobra.Command {
 	var (
 		admin  bool
 		format string
@@ -30,11 +31,17 @@ func newGenOASCmd(p genOASParams) *cobra.Command {
 		Use:   "gen-oas",
 		Short: "Emit OpenAPI 3.1 spec for the public (default) or admin (--admin) surface",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			surface := p.Servers.Public
-			if admin {
-				surface = p.Servers.Admin
+			var oapi *huma.OpenAPI
+			if err := load(cmd.Context(), func(p genOASParams) error {
+				surface := p.Servers.Public
+				if admin {
+					surface = p.Servers.Admin
+				}
+				oapi = surface.API.OpenAPI()
+				return nil
+			}); err != nil {
+				return err
 			}
-			oapi := surface.API.OpenAPI()
 
 			var (
 				b   []byte

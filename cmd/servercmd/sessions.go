@@ -23,44 +23,46 @@ type sessionsParams struct {
 // (one per sign-in, i.e. per refresh-token family) directly on the state
 // store, like `keys`. It is the revocation path until the admin HTTP API
 // gains an authenticated equivalent.
-func newSessionsCmd(p sessionsParams) *cobra.Command {
+func newSessionsCmd(load deps[sessionsParams]) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sessions",
 		Short: "List and revoke refresh-token sessions",
 	}
-	root.AddCommand(newSessionsListCmd(p), newSessionsRevokeCmd(p))
+	root.AddCommand(newSessionsListCmd(load), newSessionsRevokeCmd(load))
 	return root
 }
 
-func newSessionsListCmd(p sessionsParams) *cobra.Command {
+func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 	var email string
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List live sessions (never prints token values)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			if err := storeReady(ctx, p.Store); err != nil {
-				return err
-			}
-			sessions, err := p.Store.ListRefreshSessions(ctx, email, time.Now().UTC())
-			if err != nil {
-				return err
-			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "FAMILY_ID\tCLIENT_ID\tEMAIL\tAUTH_TIME\tLAST_ROTATION\tEXPIRES_AT")
-			for _, s := range sessions {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					s.FamilyID, s.ClientID, s.Email,
-					rfc3339(s.AuthTime), rfc3339(s.RotatedAt), rfc3339(s.ExpiresAt))
-			}
-			return w.Flush()
+			return load(ctx, func(p sessionsParams) error {
+				if err := storeReady(ctx, p.Store); err != nil {
+					return err
+				}
+				sessions, err := p.Store.ListRefreshSessions(ctx, email, time.Now().UTC())
+				if err != nil {
+					return err
+				}
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "FAMILY_ID\tCLIENT_ID\tEMAIL\tAUTH_TIME\tLAST_ROTATION\tEXPIRES_AT")
+				for _, s := range sessions {
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+						s.FamilyID, s.ClientID, s.Email,
+						rfc3339(s.AuthTime), rfc3339(s.RotatedAt), rfc3339(s.ExpiresAt))
+				}
+				return w.Flush()
+			})
 		},
 	}
 	c.Flags().StringVar(&email, "email", "", "only sessions of this email (case-insensitive)")
 	return c
 }
 
-func newSessionsRevokeCmd(p sessionsParams) *cobra.Command {
+func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 	var email, family string
 	c := &cobra.Command{
 		Use:   "revoke",
@@ -74,24 +76,26 @@ func newSessionsRevokeCmd(p sessionsParams) *cobra.Command {
 				return errors.New("one of --email or --family must be non-empty")
 			}
 			ctx := cmd.Context()
-			if err := storeReady(ctx, p.Store); err != nil {
-				return err
-			}
-			now := time.Now().UTC()
-			var (
-				n   int
-				err error
-			)
-			if email != "" {
-				n, err = p.Store.RevokeRefreshByEmail(ctx, email, now)
-			} else {
-				n, err = p.Store.RevokeRefreshFamily(ctx, family, now)
-			}
-			if err != nil {
-				return err
-			}
-			cmd.Printf("revoked %d session(s)\n", n)
-			return nil
+			return load(ctx, func(p sessionsParams) error {
+				if err := storeReady(ctx, p.Store); err != nil {
+					return err
+				}
+				now := time.Now().UTC()
+				var (
+					n   int
+					err error
+				)
+				if email != "" {
+					n, err = p.Store.RevokeRefreshByEmail(ctx, email, now)
+				} else {
+					n, err = p.Store.RevokeRefreshFamily(ctx, family, now)
+				}
+				if err != nil {
+					return err
+				}
+				cmd.Printf("revoked %d session(s)\n", n)
+				return nil
+			})
 		},
 	}
 	c.Flags().StringVar(&email, "email", "", "revoke every session of this email (case-insensitive)")

@@ -167,7 +167,6 @@ export OIDC_CLIENTS='tempogate-device-ui:http://127.0.0.1/device/sso-callback'
 export OIDC_CLIENT_SECRETS="tempogate-device-ui:$(openssl rand -hex 32)"
 docker volume create tempogate-state
 docker run --rm --mount source=tempogate-state,target=/var/lib/tempogate \
-  -e OIDC_SESSION_SIGNING_KEY -e OIDC_CLIENTS -e OIDC_CLIENT_SECRETS \
   "$TEMPOGATE_IMAGE" migrate
 docker run --rm -d --name tempogate -p 8000:8000 \
   --mount source=tempogate-state,target=/var/lib/tempogate \

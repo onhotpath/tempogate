@@ -49,7 +49,7 @@ func (s *SessionsCmdSuite) seed(token, family, email string) {
 
 func (s *SessionsCmdSuite) run(args ...string) (string, error) {
 	var out bytes.Buffer
-	root := newSessionsCmd(sessionsParams{Store: s.store})
+	root := newSessionsCmd(supply(sessionsParams{Store: s.store}))
 	root.SetArgs(args)
 	root.SetOut(&out)
 	root.SetErr(new(testWriter))

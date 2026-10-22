@@ -47,10 +47,10 @@ func (s *KeysCmdSuite) TearDownTest() {
 // subcommand, so the test exercises newKeysCmd's wiring and
 // newKeysGenerateCmd's RunE together (mirroring how the dispatcher invokes it).
 func (s *KeysCmdSuite) generateCmd(out *bytes.Buffer) *cobra.Command {
-	root := newKeysCmd(keysParams{
+	root := newKeysCmd(supply(keysParams{
 		Store: s.store,
 		Keys:  keys.New(keys.WithStore(s.store)),
-	})
+	}))
 	root.SetArgs([]string{"generate"})
 	if out != nil {
 		root.SetOut(out)
@@ -93,7 +93,7 @@ func (s *KeysCmdSuite) TestGeneratesKeypairOnMigratedStore() {
 }
 
 func (s *KeysCmdSuite) encryptCmd(k *keys.Keys, out *bytes.Buffer) *cobra.Command {
-	root := newKeysCmd(keysParams{Store: s.store, Keys: k})
+	root := newKeysCmd(supply(keysParams{Store: s.store, Keys: k}))
 	root.SetArgs([]string{"encrypt"})
 	root.SetOut(out)
 	root.SetErr(new(testWriter))

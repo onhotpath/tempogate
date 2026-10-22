@@ -72,7 +72,7 @@ func (s *MigrateCmdSuite) TestRun() {
 
 			tc.prepare()
 
-			cmd := newMigrateCmd(s.params())
+			cmd := newMigrateCmd(supply(s.params()))
 			cmd.SetOut(s.out)
 			cmd.SetErr(s.out)
 			s.Require().NoError(cmd.ExecuteContext(s.ctx))
@@ -85,7 +85,7 @@ func (s *MigrateCmdSuite) TestRun() {
 func (s *MigrateCmdSuite) TestRunReturnsErrorOnClosedStore() {
 	s.Require().NoError(s.store.Close())
 
-	cmd := newMigrateCmd(s.params())
+	cmd := newMigrateCmd(supply(s.params()))
 	cmd.SetOut(s.out)
 	cmd.SetErr(s.out)
 	s.Require().Error(cmd.ExecuteContext(s.ctx))

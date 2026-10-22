@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CHART_DIR="$REPO_ROOT/charts/tempogate"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: '$1' is required but not on PATH" >&2; exit 1; }; }
-need docker; need kind; need kubectl; need helm
+need docker; need kind; need kubectl; need helm; need openssl
 
 echo "==> kind cluster '$CLUSTER'"
 if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
@@ -34,6 +34,17 @@ docker build -t "$IMAGE" "$REPO_ROOT"
 
 echo "==> loading $IMAGE into '$CLUSTER'"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
+
+# The Secret examples/kind/values.yaml references. Created once and reused on
+# re-runs: the session signing key must stay stable across restarts.
+echo "==> secret tempogate-kind"
+if ! kubectl get secret tempogate-kind >/dev/null 2>&1; then
+  kubectl create secret generic tempogate-kind \
+    --from-literal=session-signing-key="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" \
+    --from-literal=client-secrets="tempogate-device-ui:$(openssl rand -hex 32)"
+else
+  echo "    exists, reusing"
+fi
 
 echo "==> helm upgrade --install $RELEASE"
 helm upgrade --install "$RELEASE" "$CHART_DIR" \

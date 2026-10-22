@@ -128,7 +128,7 @@ auth:
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |
 | `auth.upstream.google.clientSecretSecretRef` | `{name,key}` empty | Secret holding the Google client secret. |
 | `auth.upstream.google.authEndpoint` / `tokenEndpoint` / `issuerUrl` | `""` | Upstream endpoint overrides (testing). |
-| `extraEnv` | `[]` | Extra env vars (Deployment). |
+| `extraEnv` | `[]` | Extra env vars (Deployment and migrate Job). |
 | `volumes` / `volumeMounts` | `[]` | Extra volumes/mounts. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |
 
