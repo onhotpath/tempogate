@@ -177,6 +177,11 @@ func (h *DeviceAuthorization) handle(ctx context.Context, in *deviceAuthorizatio
 		// cannot probe which client_ids are configured confidential.
 		return nil, oauthErr(http.StatusUnauthorized, "invalid_client", "client_id is not a registered public client")
 	}
+	if !client.Allows(GrantTypeDeviceCode) {
+		// A redirect-URI client is registered for the authorization-code
+		// flow only; the device grant needs the device-only registration.
+		return nil, oauthErr(http.StatusBadRequest, "unauthorized_client", "client_id is not registered for the device authorization grant")
+	}
 
 	dc, err := h.mint(ctx, clientID, form.Get("scope"))
 	if err != nil {

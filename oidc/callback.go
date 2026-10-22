@@ -188,9 +188,11 @@ func (c *Callback) domainAllowed(email string) bool {
 	return ok
 }
 
-// redirectTo merges params into the client's registered redirect URI and
-// returns a 302. The URI was validated at /authorize against the client's
-// prefix, so re-parsing it here cannot widen where the browser is sent.
+// redirectTo merges params into the client's redirect URI and returns a 302.
+// The URI was matched exactly against the client's registration at
+// /authorize; the Location is rebuilt from the parsed url.URL with the query
+// set through url.Values rather than by string concatenation, so a parameter
+// value can never change the scheme, host or path the browser is sent to.
 func redirectTo(redirectURI string, params url.Values) (*callbackOutput, error) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {

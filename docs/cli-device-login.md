@@ -132,18 +132,19 @@ a fresh flow.
 
 ## Operator setup
 
-Register **two** new clients in `OIDC_CLIENTS`, on top of any existing entries:
+Register **two** new clients in `OIDC_CLIENTS`, on top of any existing entries
+(here alongside the loopback CLI):
 
 ```
 OIDC_CLIENTS=\
-  tempogate-cli:http://127.0.0.1:,\
+  tempogate-cli:http://127.0.0.1/callback,\
   tempogate-device:,\
   tempogate-device-ui:https://tempogate.example.com/device/sso-callback
 ```
 
 | client_id              | Visibility | Why it exists                                                                             |
 | ---------------------- | ---------- | ----------------------------------------------------------------------------------------- |
-| `tempogate-device`     | external   | The public client the CLI presents at `/device_authorization` and `/token`. No redirect URI — the device flow does not use redirects on the CLI side. |
+| `tempogate-device`     | external   | The public client the CLI presents at `/device_authorization` and `/token`. Registered with an empty value, which makes it **device-only**: it may use the device authorization grant and refresh tokens, and `/authorize` refuses it with `unauthorized_client`. A client registered with redirect URIs is likewise refused at `/device_authorization`. |
 | `tempogate-device-ui`  | internal   | Confidential client that tempogate **uses as a client of itself** to drive the verification page through `/authorize` + Google SSO. Its callback is `<issuer>/device/sso-callback`. |
 
 `tempogate-device-ui` is confidential — register a secret for it:

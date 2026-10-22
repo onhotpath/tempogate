@@ -22,7 +22,8 @@ const (
 
 	// defaultDeviceClientID is the public client_id the headless CLI presents
 	// to tempogate for the device flow. The operator registers it once in
-	// OIDC_CLIENTS; it is deliberately distinct from the loopback CLI
+	// OIDC_CLIENTS as the device-only entry "tempogate-device:" (no redirect
+	// URI); it is deliberately distinct from the loopback CLI
 	// (tempogate-cli) and from tempogate's own internal verification-page
 	// client (tempogate-device-ui) so the audit log answers cleanly which
 	// flow any given event belongs to.

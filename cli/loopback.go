@@ -31,7 +31,9 @@ const (
 	// tempogate's /callback/google — and only ever bound on 127.0.0.1, so it
 	// never needs registering with Google: Google sees tempogate's fixed
 	// upstream callback, and the loopback URI is validated solely against
-	// tempogate's own client registry prefix (see docs/cli-loopback-login.md).
+	// tempogate's own client registry. The path is fixed because tempogate
+	// matches it exactly; only the port may vary (see
+	// docs/cli-loopback-login.md).
 	callbackPath = "/callback"
 
 	// loginScope is the downstream scope. tempogate's /authorize requires
@@ -39,8 +41,9 @@ const (
 	loginScope = "openid email"
 
 	// defaultClientID is the client_id the CLI presents to tempogate. The
-	// operator registers it once as "<id>:http://127.0.0.1:" in OIDC_CLIENTS
-	// so any ephemeral loopback port is accepted by the prefix match.
+	// operator registers it once as "<id>:http://127.0.0.1/callback" in
+	// OIDC_CLIENTS; tempogate's RFC 8252 §7.3 loopback matching then accepts
+	// that exact path on any ephemeral port.
 	defaultClientID = "tempogate-cli"
 
 	// defaultCallbackTimeout bounds how long Run waits for the browser to come
@@ -87,8 +90,8 @@ func WithIssuer(rawURL string) Option {
 }
 
 // WithPort pins the loopback port. Zero (the default) asks the OS for a free
-// ephemeral port each run — the recommended mode, since tempogate validates
-// the loopback redirect by prefix, not exact port.
+// ephemeral port each run - the recommended mode, since tempogate matches a
+// loopback redirect on its exact path and lets the port vary.
 func WithPort(port int) Option {
 	return func(f *Flow) { f.port = port }
 }

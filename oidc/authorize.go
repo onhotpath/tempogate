@@ -138,6 +138,11 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 		if errors.Is(err, ErrUnknownClient) {
 			return nil, oauthErr(http.StatusBadRequest, "invalid_client", "unknown client_id")
 		}
+		// RFC 6749 §4.1.2.1: there is no registered redirect URI to report
+		// this through, so it is shown to the user agent directly.
+		if errors.Is(err, ErrUnauthorizedClient) {
+			return nil, oauthErr(http.StatusBadRequest, "unauthorized_client", "client is not registered for the authorization-code flow")
+		}
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "redirect_uri not registered for this client")
 	}
 	if !scopeContains(in.Scope, "openid") {

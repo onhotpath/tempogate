@@ -27,7 +27,7 @@ var testSigningKeyB64 = base64.RawURLEncoding.EncodeToString([]byte("0123456789a
 // the regular `ui` + `tempogate-device` registrations. Each test that
 // drives the graph successfully composes this with the matching secret in
 // supplyConfig*.
-const deviceUIFxClients = "ui:https://app.example.com/auth,tempogate-device:cli,tempogate-device-ui:" + testIssuer + "/device/sso-callback"
+const deviceUIFxClients = "ui:https://app.example.com/auth,tempogate-device:,tempogate-device-ui:" + testIssuer + "/device/sso-callback"
 
 type FxSuite struct {
 	suite.Suite
@@ -38,18 +38,19 @@ func TestFxSuite(t *testing.T) {
 }
 
 func (s *FxSuite) supplyConfig(clients string) fx.Option {
-	return s.supplyConfigFull(clients, "tempogate-device-ui:"+deviceUIInternalSecret, testSigningKeyB64)
+	return s.supplyConfigFull(clients, "tempogate-device-ui:"+deviceUIInternalSecret, testSigningKeyB64, false)
 }
 
 func (s *FxSuite) supplyConfigWithSessionKey(clients, signingKeyB64 string) fx.Option {
-	return s.supplyConfigFull(clients, "tempogate-device-ui:"+deviceUIInternalSecret, signingKeyB64)
+	return s.supplyConfigFull(clients, "tempogate-device-ui:"+deviceUIInternalSecret, signingKeyB64, false)
 }
 
 // supplyConfigFull is the underlying knob the suite's helpers compose on.
 // It exists so a small number of tests — the device-ui graph-failure
 // regression guards — can vary the secrets independently of the clients
-// list without forcing every other test to plumb a fourth argument.
-func (s *FxSuite) supplyConfigFull(clients, secrets, signingKeyB64 string) fx.Option {
+// list (or the insecure-redirect flag) without forcing every other test to
+// plumb the extra arguments.
+func (s *FxSuite) supplyConfigFull(clients, secrets, signingKeyB64 string, allowInsecureRedirectURIs bool) fx.Option {
 	return fx.Options(
 		fx.Provide(func() oidc.AuthRequestStore { return &memAuthStore{} }),
 		fx.Provide(func() oidc.BrowserSessionStore { return newMemBrowserSessionStore() }),
@@ -68,6 +69,7 @@ func (s *FxSuite) supplyConfigFull(clients, secrets, signingKeyB64 string) fx.Op
 			fx.Annotated{Name: "oidc_issuer", Target: testIssuer},
 			fx.Annotated{Name: "oidc_clients", Target: clients},
 			fx.Annotated{Name: "oidc_client_secrets", Target: secrets},
+			fx.Annotated{Name: "oidc_allow_insecure_redirect_uris", Target: allowInsecureRedirectURIs},
 			fx.Annotated{Name: "oidc_allowed_domains", Target: "example.com"},
 			fx.Annotated{Name: "oidc_session_ttl", Target: 5 * time.Minute},
 			fx.Annotated{Name: "oidc_session_signing_key", Target: signingKeyB64},
@@ -184,6 +186,46 @@ func (s *FxSuite) TestMalformedClientsFailsGraph() {
 	s.Require().Error(app.Err())
 }
 
+// TestPrefixShapedClientsFailGraph pins the C1 fail-fast: the old documented
+// prefix registration must stop the graph from building instead of quietly
+// turning into a URI that /authorize can never (or too often) match.
+func (s *FxSuite) TestPrefixShapedClientsFailGraph() {
+	app := fx.New(
+		fx.NopLogger,
+		s.supplyConfig("tempogate-cli:http://127.0.0.1:,"+deviceUIFxClients),
+		oidc.Fx(),
+		fx.Invoke(func(registrarParams) {}),
+	)
+	s.Require().Error(app.Err())
+	s.ErrorIs(app.Err(), oidc.ErrInvalidClientRegistration)
+}
+
+// TestInsecureRedirectURIsNeedTheFlag proves OIDC_ALLOW_INSECURE_REDIRECT_URIS
+// reaches the registry parser: a plain-http, non-loopback registration fails
+// the graph by default and builds once the dev-only flag is set.
+func (s *FxSuite) TestInsecureRedirectURIsNeedTheFlag() {
+	const clients = "temporal-ui:http://temporal-ui:8080/auth/sso/callback,tempogate-device-ui:http://tempogate:8000/device/sso-callback"
+	secrets := "tempogate-device-ui:" + deviceUIInternalSecret
+
+	strict := fx.New(
+		fx.NopLogger,
+		s.supplyConfigFull(clients, secrets, testSigningKeyB64, false),
+		oidc.Fx(),
+		fx.Invoke(func(registrarParams) {}),
+	)
+	s.Require().ErrorIs(strict.Err(), oidc.ErrInvalidClientRegistration)
+
+	var got registrarParams
+	app := fxtest.New(s.T(),
+		s.supplyConfigFull(clients, secrets, testSigningKeyB64, true),
+		oidc.Fx(),
+		fx.Populate(&got),
+	)
+	app.RequireStart()
+	defer app.RequireStop()
+	s.NotEmpty(got.Registrars)
+}
+
 func (s *FxSuite) TestProvidesSessionManager() {
 	var sm *oidc.SessionManager
 	app := fxtest.New(s.T(),
@@ -261,7 +303,7 @@ func (s *FxSuite) TestDeviceUIMissingInternalClientFailsGraph() {
 		// list, mirroring the operator-misconfiguration the registrar guards
 		// against. Graph construction must surface that as an actionable
 		// failure rather than silently disabling the UI surface.
-		s.supplyConfigFull("ui:https://app.example.com/auth,tempogate-device:cli", "", testSigningKeyB64),
+		s.supplyConfigFull("ui:https://app.example.com/auth,tempogate-device:", "", testSigningKeyB64, false),
 		oidc.Fx(),
 		fx.Invoke(func(registrarParams) {}),
 	)
@@ -274,7 +316,7 @@ func (s *FxSuite) TestDeviceUIPublicInternalClientFailsGraph() {
 		fx.NopLogger,
 		// tempogate-device-ui is registered but no secret accompanies it —
 		// the registrar must reject the public registration.
-		s.supplyConfigFull(deviceUIFxClients, "", testSigningKeyB64),
+		s.supplyConfigFull(deviceUIFxClients, "", testSigningKeyB64, false),
 		oidc.Fx(),
 		fx.Invoke(func(registrarParams) {}),
 	)

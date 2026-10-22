@@ -17,6 +17,9 @@ data:
   {{- with .Values.auth.clients }}
   OIDC_CLIENTS: {{ . | quote }}
   {{- end }}
+  {{- if .Values.auth.allowInsecureRedirectUris }}
+  OIDC_ALLOW_INSECURE_REDIRECT_URIS: "true"
+  {{- end }}
   {{- with .Values.auth.allowedDomains }}
   OIDC_ALLOWED_DOMAINS: {{ join "," . | quote }}
   {{- end }}

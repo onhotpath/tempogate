@@ -47,10 +47,18 @@ type OIDCConfig struct {
 	Issuer string `ferry:"issuer"`
 
 	// Clients is the v1 client registry: a comma-separated list of
-	// "id:redirect_uri_prefix" entries. The first ':' splits id from prefix,
-	// so the prefix may itself contain a scheme (e.g. "ui:https://x/cb").
-	// Every client declared here is public: PKCE is mandatory.
+	// "id:redirect_uri" entries. The first ':' splits id from URI, so the URI
+	// keeps its scheme (e.g. "ui:https://x/cb"). Each URI is matched exactly
+	// (loopback http://127.0.0.1/<path> and http://[::1]/<path> match any
+	// port); repeat an id to register several. An empty URI ("id:")
+	// registers a device-only client. Every client declared here is public:
+	// PKCE is mandatory.
 	Clients string `ferry:"clients"`
+
+	// AllowInsecureRedirectURIs lets Clients register plain-http,
+	// non-loopback redirect URIs. Dev only: for local stacks whose hosts
+	// are http-only Docker names. Defaults to false.
+	AllowInsecureRedirectURIs bool `ferry:"allow_insecure_redirect_uris"`
 
 	// ClientSecrets is the deliberately-separate opt-in for the confidential
 	// PKCE carve-out: a comma-separated list of "id:secret" for clients in

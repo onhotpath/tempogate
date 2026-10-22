@@ -20,8 +20,9 @@ const sessionSigningKeyBytes = 32
 type clientRegistryParams struct {
 	fx.In
 
-	Clients string `name:"oidc_clients"`
-	Secrets string `name:"oidc_client_secrets"`
+	Clients       string `name:"oidc_clients"`
+	Secrets       string `name:"oidc_client_secrets"`
+	AllowInsecure bool   `name:"oidc_allow_insecure_redirect_uris"`
 }
 
 // newClientRegistry parses the single shared ClientRegistry both /authorize
@@ -30,7 +31,7 @@ type clientRegistryParams struct {
 // here rather than surfacing as a per-request error later, so the PKCE
 // carve-out can never be half-configured at runtime.
 func newClientRegistry(p clientRegistryParams) (ClientRegistry, error) {
-	reg, err := ParseClientRegistry(p.Clients)
+	reg, err := ParseClientRegistry(p.Clients, AllowInsecureRedirectURIs(p.AllowInsecure))
 	if err != nil {
 		return nil, err
 	}

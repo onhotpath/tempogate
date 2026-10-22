@@ -82,6 +82,36 @@ func TestCLIDeviceLogin(t *testing.T) {
 
 	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedEmail, true)
 
+	// The documented device-only registration (`tempogate-device:`) carries
+	// grant types, not just "no redirect URI": the device client cannot be
+	// used for the authorization-code flow, and a code-flow client cannot
+	// start a device authorization.
+	t.Run("grant types: device-only client is refused at /authorize and vice versa", func(t *testing.T) {
+		noFollow := &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		q := url.Values{
+			"response_type":         {"code"},
+			"client_id":             {deviceClientID},
+			"redirect_uri":          {"http://127.0.0.1:1234/callback"},
+			"scope":                 {"openid email"},
+			"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+			"code_challenge_method": {"S256"},
+		}
+		resp, err := noFollow.Get(st.tempogateBaseURL + "/authorize?" + q.Encode())
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		require.Empty(t, resp.Header.Get("Location"))
+		require.Equal(t, "unauthorized_client", decodeOAuthErrorCode(t, resp))
+
+		resp, err = http.PostForm(st.tempogateBaseURL+oidc.DeviceAuthorizationPath,
+			url.Values{"client_id": {cliClientID}, "scope": {"openid"}})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		require.Equal(t, "unauthorized_client", decodeOAuthErrorCode(t, resp))
+	})
+
 	t.Run("happy path: approve in the UI, JWT authenticates against temporal-frontend", func(t *testing.T) {
 		loginDone := make(chan loginResult, 1)
 		st.spawnDeviceLogin(ctx, t, loginDone,
@@ -459,4 +489,14 @@ func slugSafe(r rune) rune {
 	default:
 		return -1
 	}
+}
+
+func decodeOAuthErrorCode(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	return body.Error
 }

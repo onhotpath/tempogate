@@ -48,7 +48,7 @@ func (s *DeviceAuthorizationE2ESuite) SetupTest() {
 	s.keys = keys.New(keys.WithStore(store), keys.WithGenerateOptions(keys.WithRSABits(2048)))
 	s.Require().NoError(s.keys.Init(ctx))
 
-	reg, err := oidc.ParseClientRegistry("tempogate-device:cli")
+	reg, err := oidc.ParseClientRegistry("tempogate-device:")
 	s.Require().NoError(err)
 
 	s.issuer = testIssuer
@@ -141,7 +141,7 @@ func (s *DeviceAuthorizationE2ESuite) TestPathPrefixedIssuerRoundTrip() {
 	k := keys.New(keys.WithStore(store), keys.WithGenerateOptions(keys.WithRSABits(2048)))
 	s.Require().NoError(k.Init(context.Background()))
 
-	reg, err := oidc.ParseClientRegistry("tempogate-device:cli")
+	reg, err := oidc.ParseClientRegistry("tempogate-device:")
 	s.Require().NoError(err)
 
 	device := oidc.NewDeviceAuthorization(store, reg, prefixedIssuer)

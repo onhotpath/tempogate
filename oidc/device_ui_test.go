@@ -35,7 +35,7 @@ const (
 	deviceUITestEmail         = "alice@example.com"
 	deviceUITestStateNonce    = "fixed-state-nonce"
 	deviceUIInternalSecret    = "device-ui-secret"
-	deviceUIClientsRaw        = "tempogate-device:cli,tempogate-device-ui:https://tempogate.example.com/device/sso-callback"
+	deviceUIClientsRaw        = "tempogate-device:,tempogate-device-ui:https://tempogate.example.com/device/sso-callback"
 )
 
 var deviceUINow = time.Unix(1700000000, 0).UTC()
@@ -1215,7 +1215,7 @@ func (s *DeviceUISuite) TestTemplatesEmitNoExternalAssets() {
 }
 
 func TestNewDeviceUIRejectsMissingInternalClient(t *testing.T) {
-	reg, err := oidc.ParseClientRegistry("tempogate-device:cli")
+	reg, err := oidc.ParseClientRegistry("tempogate-device:")
 	if err != nil {
 		t.Fatalf("parse clients: %v", err)
 	}
@@ -1453,7 +1453,7 @@ func formActionSlice(body string) string {
 }
 
 func TestNewDeviceUIAcceptsCustomInternalClientID(t *testing.T) {
-	reg, err := oidc.ParseClientRegistry("tempogate-device:cli,my-custom-ui:" + testIssuer + "/device/sso-callback")
+	reg, err := oidc.ParseClientRegistry("tempogate-device:,my-custom-ui:" + testIssuer + "/device/sso-callback")
 	if err != nil {
 		t.Fatalf("parse clients: %v", err)
 	}
@@ -1524,7 +1524,7 @@ func TestSSOCallbackCompletesWhenIssuerHostIsUnreachable(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
 	signingKey := []byte("0123456789abcdef0123456789abcdef")
 
-	reg, err := oidc.ParseClientRegistry("tempogate-device:cli,tempogate-device-ui:" + unreachableIssuer + callbackPath)
+	reg, err := oidc.ParseClientRegistry("tempogate-device:,tempogate-device-ui:" + unreachableIssuer + callbackPath)
 	if err != nil {
 		t.Fatalf("parse clients: %v", err)
 	}
