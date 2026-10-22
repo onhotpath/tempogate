@@ -151,6 +151,31 @@ func TestUpstreamLegHardening(t *testing.T) {
 		require.NotContains(t, logs, u.Query().Get("code"), "the upstream code must never be logged")
 	})
 
+	t.Run("a hung Google token endpoint fails the login within the upstream timeout", func(t *testing.T) {
+		setMockFaults(t, mockBase, url.Values{"token_hang": {"true"}})
+		t.Cleanup(func() { setMockFaults(t, mockBase, url.Values{}) })
+
+		browser := b.newBrowser(t)
+		callbackURL := browser.consent(t)
+		// The default browser timeout (15s) is close to tempogate's 10s
+		// upstream bound; give the callback room so a hang shows up as a
+		// slow answer, not as this client giving up.
+		browser.client.Timeout = time.Minute
+		start := time.Now()
+		resp := browser.get(t, callbackURL)
+		took := time.Since(start)
+
+		require.Equal(t, http.StatusBadGateway, resp.status)
+		require.Contains(t, resp.body, "upstream_error")
+		require.Empty(t, resp.location, "no code may be minted without an id_token")
+		require.Less(t, took, 20*time.Second, "the callback must not wait on Google past the upstream timeout")
+		require.GreaterOrEqual(t, took, 9*time.Second, "the call is given its full budget before failing")
+
+		logs := containerLogs(ctx, t, tg.serve)
+		require.Contains(t, logs, "code_exchange_failed")
+		require.Regexp(t, `"timeout": ?true`, logs, "the log must say the call timed out")
+	})
+
 	t.Run("mock Google refuses an authorize request without PKCE", func(t *testing.T) {
 		// Guards the mock itself: if it stopped enforcing PKCE, the positive
 		// e2e logins would no longer prove tempogate sends it.

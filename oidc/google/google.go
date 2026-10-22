@@ -11,6 +11,8 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -31,17 +33,35 @@ const (
 	// down IdP sees at most one discovery request per window.
 	discoveryInitialBackoff = time.Second
 	discoveryMaxBackoff     = 30 * time.Second
+
+	// upstreamTimeout bounds each call to Google: discovery, the code
+	// exchange, and id_token verification including a JWKS fetch. Without
+	// it the only bound is the browser hanging up, so a stalled Google held
+	// /callback/google handlers open indefinitely. Google answers in well
+	// under a second; 10s leaves room for a slow network while still
+	// failing a login before a user gives up on it. A constant, not a
+	// config key: the upstream is always Google, so there is no endpoint
+	// that needs a different budget, and a key can be added if one ever does.
+	upstreamTimeout = 10 * time.Second
+
+	// Connection setup gets a smaller share of the budget, so an
+	// unreachable or black-holed endpoint fails fast and is not mistaken for
+	// a slow response.
+	upstreamDialTimeout         = 5 * time.Second
+	upstreamTLSHandshakeTimeout = 5 * time.Second
 )
 
 // Client exchanges a Google authorization code for a verified identity. The
 // OIDC provider is resolved lazily on first use: discovery is a network call
 // we must not make at fx graph-construction time.
 type Client struct {
-	oauth     *oauth2.Config
-	issuerURL string
-	clientID  string
-	now       func() time.Time
-	observer  Observer
+	oauth      *oauth2.Config
+	issuerURL  string
+	clientID   string
+	now        func() time.Time
+	observer   Observer
+	timeout    time.Duration
+	httpClient *http.Client
 
 	// mu guards the discovery state below and serialises discovery itself,
 	// so concurrent callbacks during an outage share one attempt instead of
@@ -54,7 +74,9 @@ type Client struct {
 }
 
 // Observer is told the latency and outcome of every call tempogate makes to
-// Google, by operation: "discovery" (on first use and on each retry after a
+// Google, by operation. A failure is always an *oidc.UpstreamError, whose
+// Timeout flag tells a call that ran out of time from one Google answered.
+// The operations are "discovery" (on first use and on each retry after a
 // failure, never for a cached failure), "code_exchange" and
 // "verify_id_token" (which includes the JWKS fetch on a key-cache miss). The
 // metrics package satisfies it; this package never imports Prometheus.
@@ -77,6 +99,12 @@ func WithObserver(o Observer) Option {
 			c.observer = o
 		}
 	}
+}
+
+// WithTimeout replaces the per-call upstream timeout (upstreamTimeout by
+// default). For tests, which cannot wait 10s for a stalled mock.
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) { c.timeout = d }
 }
 
 // WithClock swaps the clock that spaces discovery retries. For tests.
@@ -106,11 +134,49 @@ func New(clientID, clientSecret, tokenEndpoint, redirectURL, issuerURL string, o
 		clientID:  clientID,
 		now:       time.Now,
 		observer:  nopObserver{},
+		timeout:   upstreamTimeout,
 	}
 	for _, o := range opts {
 		o(c)
 	}
+	c.httpClient = newUpstreamHTTPClient(c.timeout)
 	return c
+}
+
+// newUpstreamHTTPClient is the client every call to Google goes through, in
+// place of http.DefaultClient, which has no timeout at all. The overall
+// Timeout also covers reading the body, which ResponseHeaderTimeout alone
+// would not bound against an endpoint that trickles it.
+func newUpstreamHTTPClient(timeout time.Duration) *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = (&net.Dialer{Timeout: min(upstreamDialTimeout, timeout), KeepAlive: 30 * time.Second}).DialContext
+	t.TLSHandshakeTimeout = min(upstreamTLSHandshakeTimeout, timeout)
+	t.ResponseHeaderTimeout = timeout
+	return &http.Client{Transport: t, Timeout: timeout}
+}
+
+// callContext bounds one upstream call. It carries the upstream client under
+// oauth2.HTTPClient, the key both oauth2 and go-oidc read it from, and a
+// deadline that bounds the call even where a library does not use that
+// client for every wait (go-oidc's Verify waits on a JWKS fetch it runs in
+// the background).
+func (c *Client) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(coreosoidc.ClientContext(ctx, c.httpClient), c.timeout)
+}
+
+// timedOut reports whether a call made under callCtx failed because it ran
+// out of time. go-oidc flattens some errors with %v, so a call that failed
+// once its deadline had passed counts as timed out whatever the error says:
+// the client's own timer can fire a moment before the context's.
+func timedOut(callCtx context.Context, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if dl, ok := callCtx.Deadline(); ok && !time.Now().Before(dl) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // ExchangeAndVerify swaps a Google authorization code for an id_token,
@@ -128,16 +194,9 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 		return oidc.UpstreamIdentity{}, err
 	}
 
-	start := time.Now()
-	tok, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
-	c.observer.ObserveUpstream("code_exchange", time.Since(start), err)
+	tok, err := c.exchange(ctx, code, codeVerifier)
 	if err != nil {
-		ue := &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, Err: fmt.Errorf("google: code exchange: %w", err)}
-		var re *oauth2.RetrieveError
-		if errors.As(err, &re) {
-			ue.OAuthError = re.ErrorCode
-		}
-		return oidc.UpstreamIdentity{}, ue
+		return oidc.UpstreamIdentity{}, err
 	}
 
 	rawID, ok := tok.Extra("id_token").(string)
@@ -145,11 +204,9 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, errors.New("google: token response missing id_token"))
 	}
 
-	start = time.Now()
-	idToken, err := verifier.Verify(ctx, rawID)
-	c.observer.ObserveUpstream("verify_id_token", time.Since(start), err)
+	idToken, err := c.verify(ctx, verifier, rawID)
 	if err != nil {
-		return oidc.UpstreamIdentity{}, upstreamErr(oidc.UpstreamReasonIDToken, fmt.Errorf("google: verify id_token: %w", err))
+		return oidc.UpstreamIdentity{}, err
 	}
 	// go-oidc leaves the nonce to the caller. A missing or different nonce
 	// means the id_token was minted for some other authorization request.
@@ -179,6 +236,45 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, codeVerifier, nonc
 	}, nil
 }
 
+func (c *Client) exchange(ctx context.Context, code, codeVerifier string) (*oauth2.Token, error) {
+	callCtx, cancel := c.callContext(ctx)
+	defer cancel()
+	start := time.Now()
+	tok, err := c.oauth.Exchange(callCtx, code, oauth2.VerifierOption(codeVerifier))
+	if err == nil {
+		c.observer.ObserveUpstream("code_exchange", time.Since(start), nil)
+		return tok, nil
+	}
+	ue := c.callErr(callCtx, oidc.UpstreamReasonExchange, fmt.Errorf("google: code exchange: %w", err))
+	var re *oauth2.RetrieveError
+	if errors.As(err, &re) {
+		ue.OAuthError = re.ErrorCode
+	}
+	c.observer.ObserveUpstream("code_exchange", time.Since(start), ue)
+	return nil, ue
+}
+
+func (c *Client) verify(ctx context.Context, verifier *coreosoidc.IDTokenVerifier, rawID string) (*coreosoidc.IDToken, error) {
+	callCtx, cancel := c.callContext(ctx)
+	defer cancel()
+	start := time.Now()
+	idToken, err := verifier.Verify(callCtx, rawID)
+	if err == nil {
+		c.observer.ObserveUpstream("verify_id_token", time.Since(start), nil)
+		return idToken, nil
+	}
+	ue := c.callErr(callCtx, oidc.UpstreamReasonIDToken, fmt.Errorf("google: verify id_token: %w", err))
+	c.observer.ObserveUpstream("verify_id_token", time.Since(start), ue)
+	return nil, ue
+}
+
+// callErr classifies the failure of a call made under callCtx.
+func (c *Client) callErr(callCtx context.Context, reason string, err error) *oidc.UpstreamError {
+	ue := upstreamErr(reason, err)
+	ue.Timeout = timedOut(callCtx, err)
+	return ue
+}
+
 // idVerifier lazily performs OIDC discovery against issuerURL. Only success
 // is cached: a failure is remembered just until a backoff window (doubling
 // up to discoveryMaxBackoff) elapses, so a transient outage on the first
@@ -195,15 +291,23 @@ func (c *Client) idVerifier(ctx context.Context) (*coreosoidc.IDTokenVerifier, e
 		return nil, c.lastErr
 	}
 
+	// The provider keeps this context (minus its deadline) for the JWKS
+	// fetches it makes later, so those go through the upstream client too.
+	callCtx, cancel := c.callContext(ctx)
+	defer cancel()
 	start := time.Now()
-	provider, err := coreosoidc.NewProvider(ctx, c.issuerURL)
-	c.observer.ObserveUpstream("discovery", time.Since(start), err)
+	provider, err := coreosoidc.NewProvider(callCtx, c.issuerURL)
 	if err != nil {
+		// A timeout is backed off like any other failure and, like any
+		// other failure, never cached past the backoff window.
+		ue := c.callErr(callCtx, oidc.UpstreamReasonDiscovery, fmt.Errorf("google: discovery (%s): %w", c.issuerURL, err))
+		c.observer.ObserveUpstream("discovery", time.Since(start), ue)
 		c.backoff = min(max(2*c.backoff, discoveryInitialBackoff), discoveryMaxBackoff)
 		c.retryAt = now.Add(c.backoff)
-		c.lastErr = upstreamErr(oidc.UpstreamReasonDiscovery, fmt.Errorf("google: discovery (%s): %w", c.issuerURL, err))
+		c.lastErr = ue
 		return nil, c.lastErr
 	}
+	c.observer.ObserveUpstream("discovery", time.Since(start), nil)
 	c.verifier = provider.Verifier(&coreosoidc.Config{ClientID: c.clientID})
 	c.lastErr, c.backoff = nil, 0
 	return c.verifier, nil

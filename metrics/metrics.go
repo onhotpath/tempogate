@@ -8,15 +8,24 @@
 package metrics
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/onhotpath/tempogate/oidc"
 )
 
 const namespace = "tempogate"
+
+// Reasons for tempogate_upstream_errors_total.
+const (
+	upstreamReasonTimeout = "timeout"
+	upstreamReasonError   = "error"
+)
 
 type options struct {
 	version string
@@ -89,8 +98,8 @@ func New(opts ...Option) *Metrics {
 		upstreamErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "upstream_errors_total",
-			Help:      "Failed calls to the upstream IdP (Google), by operation.",
-		}, []string{"op"}),
+			Help:      "Failed calls to the upstream IdP (Google), by operation and reason (timeout or error).",
+		}, []string{"op", "reason"}),
 		dbErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "db_errors_total",
@@ -152,12 +161,20 @@ func (m *Metrics) ObserveRateLimited(endpoint string) {
 }
 
 // ObserveUpstream satisfies google.Observer. Failed calls are timed too: a
-// slow failure is still latency the user waited through.
+// slow failure is still latency the user waited through. A failure is
+// counted as a timeout when the client flagged it as one, so a stalled
+// Google is told apart from one that answers with an error.
 func (m *Metrics) ObserveUpstream(op string, took time.Duration, err error) {
 	m.upstreamDuration.WithLabelValues(op).Observe(took.Seconds())
-	if err != nil {
-		m.upstreamErrors.WithLabelValues(op).Inc()
+	if err == nil {
+		return
 	}
+	reason := upstreamReasonError
+	var ue *oidc.UpstreamError
+	if errors.As(err, &ue) && ue.Timeout {
+		reason = upstreamReasonTimeout
+	}
+	m.upstreamErrors.WithLabelValues(op, reason).Inc()
 }
 
 // ObserveDBError satisfies sqlite.ErrorObserver.

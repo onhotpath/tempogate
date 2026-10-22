@@ -642,11 +642,13 @@ func (s *CallbackSuite) TestUpstreamFailureIsLoggedWithReason() {
 		err       error
 		cause     string
 		oauthCode string
+		timeout   bool
 	}{
-		{"nonce mismatch", &oidc.UpstreamError{Reason: oidc.UpstreamReasonNonce, Err: errors.New("nonce secret-nonce-value")}, oidc.UpstreamReasonNonce, ""},
-		{"exchange rejected", &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, OAuthError: "invalid_grant", Err: errors.New("body with secret-token")}, oidc.UpstreamReasonExchange, "invalid_grant"},
-		{"wrapped", fmt.Errorf("outer: %w", &oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("dns")}), oidc.UpstreamReasonDiscovery, ""},
-		{"unclassified", errors.New("secret-token in an unknown error"), "unknown", ""},
+		{"nonce mismatch", &oidc.UpstreamError{Reason: oidc.UpstreamReasonNonce, Err: errors.New("nonce secret-nonce-value")}, oidc.UpstreamReasonNonce, "", false},
+		{"exchange rejected", &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, OAuthError: "invalid_grant", Err: errors.New("body with secret-token")}, oidc.UpstreamReasonExchange, "invalid_grant", false},
+		{"wrapped", fmt.Errorf("outer: %w", &oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("dns")}), oidc.UpstreamReasonDiscovery, "", false},
+		{"timed out", &oidc.UpstreamError{Reason: oidc.UpstreamReasonExchange, Timeout: true, Err: errors.New("deadline")}, oidc.UpstreamReasonExchange, "", true},
+		{"unclassified", errors.New("secret-token in an unknown error"), "unknown", "", false},
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {
@@ -664,6 +666,11 @@ func (s *CallbackSuite) TestUpstreamFailureIsLoggedWithReason() {
 			s.Equal(tc.cause, line["cause"])
 			if tc.oauthCode != "" {
 				s.Equal(tc.oauthCode, line["oauth_error"])
+			}
+			if tc.timeout {
+				s.Equal(true, line["timeout"])
+			} else {
+				s.NotContains(line, "timeout")
 			}
 			for _, secret := range []string{"google-code-secret", "secret-token", "secret-nonce-value"} {
 				s.NotContains(s.logs.String(), secret)

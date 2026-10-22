@@ -7,10 +7,12 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +44,9 @@ type mockGoogle struct {
 
 	mu    sync.Mutex
 	codes map[string]mockGrant
+
+	// stallToken makes the token endpoint hang until the client gives up.
+	stallToken atomic.Bool
 }
 
 // mockGrant is what /auth bound a code to.
@@ -150,6 +155,10 @@ func (mg *mockGoogle) token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing code", http.StatusBadRequest)
 		return
 	}
+	if mg.stallToken.Load() {
+		<-r.Context().Done()
+		return
+	}
 	mg.mu.Lock()
 	grant, ok := mg.codes[r.Form.Get("code")]
 	delete(mg.codes, r.Form.Get("code"))
@@ -223,13 +232,14 @@ func (s *CallbackIntegrationSuite) SetupTest() {
 
 // serverFor mounts /authorize and /callback/google over one store and the
 // real Google client pointed at mg.
-func (s *CallbackIntegrationSuite) serverFor(store *memCallbackStore, mg *mockGoogle) *httptest.Server {
+func (s *CallbackIntegrationSuite) serverFor(store *memCallbackStore, mg *mockGoogle, opts ...google.Option) *httptest.Server {
 	up := google.New(
 		mg.clientID,
 		"mock-secret",
 		mg.issuer()+"/token",
 		testIssuer+oidc.CallbackPath,
 		mg.issuer(),
+		opts...,
 	)
 	binding := newTestBinding(s.T(), testIssuer)
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
@@ -287,6 +297,28 @@ func (s *CallbackIntegrationSuite) TestRealGoogleFlowMintsCode() {
 	s.Require().Equal(1, store.codeCount())
 	s.Equal("alice@example.com", store.only().Email)
 	s.Equal("google-sub-123", store.only().Subject)
+}
+
+// A Google that never answers the code exchange fails the sign-in with the
+// usual 502 upstream_error once the upstream timeout passes, instead of
+// holding the callback open for as long as the browser waits.
+func (s *CallbackIntegrationSuite) TestStalledGoogleFailsTheCallback() {
+	mg := newMockGoogle(s.T(), testGoogleCID, "alice@example.com", true)
+	mg.stallToken.Store(true)
+	store := newMemCallbackStore()
+	srv := s.serverFor(store, mg, google.WithTimeout(200*time.Millisecond))
+	s.client.Timeout = 10 * time.Second
+
+	start := time.Now()
+	resp := s.login(srv, mg)
+	defer resp.Body.Close()
+
+	s.Less(time.Since(start), 5*time.Second)
+	s.Equal(http.StatusBadGateway, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	s.Require().NoError(err)
+	s.Contains(string(body), "upstream_error")
+	s.Zero(store.codeCount())
 }
 
 func (s *CallbackIntegrationSuite) TestRealGoogleFlowRejectsDisallowedDomain() {
