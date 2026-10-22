@@ -187,39 +187,116 @@ func (s *SignerSuite) TestMintOmitsEmailWhenEmpty() {
 	s.False(tok.Has("email"))
 }
 
-// TestMintPerRequestAudienceOverridesGlobal proves an OIDC ID token can carry
-// the requesting client_id as aud even though this Signer was built with a
-// different global audience ("temporal") — the /token handler relies on this
-// so each client's token validates against its own client_id.
-func (s *SignerSuite) TestMintPerRequestAudienceOverridesGlobal() {
+// TestMintIsAnAccessToken: Mint produces access tokens only. They are
+// explicitly typed (RFC 9068 §2.1, RFC 8725 §3.11) so no verifier can mistake
+// one for an ID token or vice versa, carry the Signer's audience (the Temporal
+// audience), and name the client they were issued to when there is one.
+func (s *SignerSuite) TestMintIsAnAccessToken() {
 	r := s.req()
-	r.Audience = "temporal-ui-client"
+	r.ClientID = "tempogate-cli"
 	signed, _, err := s.signer.Mint(s.ctx, r)
 	s.Require().NoError(err)
 
+	s.Equal(AccessTokenType, s.typ(signed))
 	tok := s.parseWithLatestPublicKey(signed)
 	aud, ok := tok.Audience()
 	s.Require().True(ok)
-	s.Equal([]string{"temporal-ui-client"}, aud, "per-request audience must win over the Signer's global one")
-}
-
-// TestMintStampsNonceWhenPresent covers the OIDC Core §2 round-trip: a nonce
-// the relying party sent at /authorize must come back as the nonce claim, and
-// must be absent when none was requested (the refresh path).
-func (s *SignerSuite) TestMintStampsNonceWhenPresent() {
-	r := s.req()
-	r.Nonce = "rp-supplied-nonce"
-	signed, _, err := s.signer.Mint(s.ctx, r)
+	s.Equal([]string{"temporal"}, aud)
+	clientID, err := jwt.Get[string](tok, "client_id")
 	s.Require().NoError(err)
-	tok := s.parseWithLatestPublicKey(signed)
-	got, err := jwt.Get[string](tok, "nonce")
-	s.Require().NoError(err)
-	s.Equal("rp-supplied-nonce", got)
+	s.Equal("tempogate-cli", clientID)
+	s.False(tok.Has("nonce"), "an access token never carries the OIDC nonce")
 
+	// Integration keys have no client: the claim is omitted, not empty.
 	signed, _, err = s.signer.Mint(s.ctx, s.req())
 	s.Require().NoError(err)
-	tok = s.parseWithLatestPublicKey(signed)
-	s.False(tok.Has("nonce"), "no nonce claim when the request carried none")
+	s.False(s.parseWithLatestPublicKey(signed).Has("client_id"))
+}
+
+// TestMintIDTokenCarriesIdentityOnly: the ID token is for the relying party's
+// login and nothing else. Its aud is the client (OIDC Core §2), it carries
+// the identity claims, and it has no permissions, so Temporal's default
+// ClaimMapper grants it nothing if it is presented as a bearer.
+func (s *SignerSuite) TestMintIDTokenCarriesIdentityOnly() {
+	authTime := s.now.Add(-time.Minute)
+	signed, err := s.signer.MintIDToken(s.ctx, IDTokenRequest{
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Audience: "temporal-ui",
+		Nonce:    "rp-nonce",
+		AuthTime: authTime,
+		TTL:      5 * time.Minute,
+	})
+	s.Require().NoError(err)
+
+	s.Equal("JWT", s.typ(signed))
+	tok := s.parseWithLatestPublicKey(signed)
+	iss, _ := tok.Issuer()
+	s.Equal("https://tempogate.test", iss)
+	aud, _ := tok.Audience()
+	s.Equal([]string{"temporal-ui"}, aud, "the ID token's aud is the client, never the Signer's audience")
+	sub, _ := tok.Subject()
+	s.Equal("alice@example.com", sub)
+	exp, _ := tok.Expiration()
+	s.Equal(s.now.Add(5*time.Minute), exp)
+	s.False(tok.Has("permissions"), "an ID token must grant nothing")
+	s.False(tok.Has("client_id"))
+
+	email, err := jwt.Get[string](tok, "email")
+	s.Require().NoError(err)
+	s.Equal("alice@example.com", email)
+	verified, err := jwt.Get[bool](tok, "email_verified")
+	s.Require().NoError(err)
+	s.True(verified)
+	nonce, err := jwt.Get[string](tok, "nonce")
+	s.Require().NoError(err)
+	s.Equal("rp-nonce", nonce)
+	at, err := jwt.Get[float64](tok, "auth_time")
+	s.Require().NoError(err)
+	s.Equal(float64(authTime.Unix()), at)
+
+	// No nonce requested (the refresh path): none echoed.
+	signed, err = s.signer.MintIDToken(s.ctx, IDTokenRequest{
+		Subject: "alice@example.com", Audience: "temporal-ui", AuthTime: authTime, TTL: time.Hour,
+	})
+	s.Require().NoError(err)
+	s.False(s.parseWithLatestPublicKey(signed).Has("nonce"))
+}
+
+func (s *SignerSuite) TestMintIDTokenRequiresAudience() {
+	_, err := s.signer.MintIDToken(s.ctx, IDTokenRequest{Subject: "alice@example.com", TTL: time.Minute})
+	s.Require().Error(err)
+}
+
+func (s *SignerSuite) TestMintIDTokenWithoutKeysReturnsError() {
+	_, err := NewSigner().MintIDToken(s.ctx, IDTokenRequest{Subject: "a", Audience: "c", TTL: time.Minute})
+	s.Require().ErrorIs(err, ErrNoSigningKeys)
+}
+
+// TestVerifierAcceptsAccessTokensOnly: the Verifier serves resource-server
+// checks (/userinfo), so a validly signed ID token is still refused.
+func (s *SignerSuite) TestVerifierAcceptsAccessTokensOnly() {
+	idToken, err := s.signer.MintIDToken(s.ctx, IDTokenRequest{
+		Subject: "alice@example.com", Audience: "temporal", TTL: time.Hour,
+	})
+	s.Require().NoError(err)
+
+	v := NewVerifier(
+		WithKeys(s.keys),
+		WithIssuer("https://tempogate.test"),
+		WithAudience("temporal"),
+		WithTokenClock(func() time.Time { return s.now.Add(time.Minute) }),
+	)
+	_, err = v.Verify(s.ctx, idToken)
+	s.Require().ErrorIs(err, ErrNotAccessToken, "aud matches, but an ID token is not an access token")
+}
+
+// typ reads the JWS protected header's typ.
+func (s *SignerSuite) typ(signed string) string {
+	msg, err := jws.Parse([]byte(signed))
+	s.Require().NoError(err)
+	typ, _ := msg.Signatures()[0].ProtectedHeaders().Type()
+	return typ
 }
 
 func (s *SignerSuite) TestMintWithoutKeysReturnsError() {

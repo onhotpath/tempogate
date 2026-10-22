@@ -67,6 +67,7 @@ type callbackParams struct {
 	Store    CallbackStore
 	Upstream Upstream
 
+	Issuer         string `name:"oidc_issuer"`
 	AllowedDomains string `name:"oidc_allowed_domains"`
 }
 
@@ -74,7 +75,7 @@ type callbackParams struct {
 // upstream is injected as oidc.Upstream (bound by the oidc/google provider
 // via fx.As), so this package never imports oauth2/go-oidc.
 func newCallbackRegistrar(p callbackParams) func(huma.API) {
-	c := NewCallback(p.Store, p.Upstream, p.AllowedDomains)
+	c := NewCallback(p.Store, p.Upstream, p.AllowedDomains, WithCallbackIssuer(p.Issuer))
 	return c.Register
 }
 

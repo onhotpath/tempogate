@@ -130,6 +130,7 @@ func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up oidc.Upstream) *h
 	c := oidc.NewCallback(store, up, allowedDomains,
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
+		oidc.WithCallbackIssuer(testIssuer),
 	)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -189,6 +190,7 @@ func (s *CallbackSuite) TestHappyPathRedirectsWithMintedCode() {
 	s.Equal(target.Path, loc.Path)
 	s.Equal(fixedCode, loc.Query().Get("code"))
 	s.Equal("client-state-abc", loc.Query().Get("state"))
+	s.Equal(testIssuer, loc.Query().Get("iss"), "RFC 9207: every authorization response names its issuer")
 
 	s.Require().Equal(1, s.store.codeCount())
 	ac := s.store.only()
@@ -347,6 +349,7 @@ func (s *CallbackSuite) TestGoogleErrorIsForwardedToClient() {
 	s.Equal("access_denied", loc.Query().Get("error"))
 	s.Equal("user refused consent", loc.Query().Get("error_description"))
 	s.Equal("client-state-abc", loc.Query().Get("state"))
+	s.Equal(testIssuer, loc.Query().Get("iss"))
 	s.Empty(loc.Query().Get("code"))
 	s.Zero(s.store.codeCount())
 }

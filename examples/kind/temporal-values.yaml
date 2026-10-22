@@ -28,6 +28,11 @@ server:
       # tempogate stamps; the default authorizer enforces it.
       authorizer: "default"
       claimMapper: "default"
+      # Temporal v1.29.0+ only: refuse tokens whose aud is not tempogate's
+      # OIDC_ACCESS_TOKEN_AUDIENCE (default "temporal"). Older releases have
+      # no such setting and ignore aud. ID tokens never authorize anything:
+      # they carry no `permissions`.
+      # audience: "temporal"
 
 # ── B. Temporal via auto-setup env (temporalio/auto-setup image) ────────────
 # Not Helm values — the equivalent environment variables. This is exactly

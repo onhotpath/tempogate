@@ -226,7 +226,7 @@ func (s *AuthorizeSuite) TestPublicClientStillRequiresPKCEEvenWhereCarveOutExist
 	resp := s.get(srv, q)
 	defer resp.Body.Close()
 
-	s.Equal(http.StatusBadRequest, resp.StatusCode)
+	s.assertErrorRedirect(resp, "invalid_request", "client-state-abc")
 	s.Zero(s.store.count())
 }
 
@@ -239,7 +239,8 @@ func (s *AuthorizeSuite) TestConfidentialClientWithChallengeStillEnforcesS256() 
 	resp := s.get(srv, q)
 	defer resp.Body.Close()
 
-	s.Equal(http.StatusBadRequest, resp.StatusCode, "PKCE is still enforced when a confidential client sends a challenge")
+	// PKCE is still enforced when a confidential client sends a challenge.
+	s.assertErrorRedirect(resp, "invalid_request", "client-state-abc")
 	s.Zero(s.store.count())
 }
 
@@ -272,7 +273,10 @@ func (s *AuthorizeSuite) TestNoncePersistedIntoAuthRequest() {
 	s.Equal("rp-nonce-123", s.store.only().Nonce)
 }
 
-func (s *AuthorizeSuite) TestInvalidRequestsReturnOAuth2Errors() {
+// TestErrorsBeforeRedirectURIValidationAreShownDirectly: RFC 6749 §4.1.2.1.
+// Until client_id and redirect_uri are known good there is nowhere safe to
+// send the user agent, so the error is the response itself.
+func (s *AuthorizeSuite) TestErrorsBeforeRedirectURIValidationAreShownDirectly() {
 	cases := []struct {
 		name      string
 		mutate    func(url.Values)
@@ -310,23 +314,11 @@ func (s *AuthorizeSuite) TestInvalidRequestsReturnOAuth2Errors() {
 			wantError: "unauthorized_client",
 		},
 		{
-			name:      "unsupported response_type",
-			mutate:    func(q url.Values) { q.Set("response_type", "token") },
-			wantError: "unsupported_response_type",
-		},
-		{
-			name:      "scope missing openid",
-			mutate:    func(q url.Values) { q.Set("scope", "email profile") },
-			wantError: "invalid_scope",
-		},
-		{
-			name:      "missing code_challenge (PKCE required)",
-			mutate:    func(q url.Values) { q.Del("code_challenge") },
-			wantError: "invalid_request",
-		},
-		{
-			name:      "code_challenge_method not S256",
-			mutate:    func(q url.Values) { q.Set("code_challenge_method", "plain") },
+			name: "invalid redirect_uri wins over a bad response_type",
+			mutate: func(q url.Values) {
+				q.Set("redirect_uri", "https://evil.example.com/cb")
+				q.Set("response_type", "token")
+			},
 			wantError: "invalid_request",
 		},
 	}
@@ -354,6 +346,105 @@ func (s *AuthorizeSuite) TestInvalidRequestsReturnOAuth2Errors() {
 	}
 }
 
+// TestErrorsAfterRedirectURIValidationRedirectToTheClient: RFC 6749
+// §4.1.2.1 and RFC 7636 §4.4.1. Once the redirect URI is validated, errors go
+// back to the client with its state, and with iss (RFC 9207) so the client
+// can tell which authorization server answered.
+func (s *AuthorizeSuite) TestErrorsAfterRedirectURIValidationRedirectToTheClient() {
+	cases := []struct {
+		name      string
+		mutate    func(url.Values)
+		wantError string
+	}{
+		{
+			name:      "unsupported response_type",
+			mutate:    func(q url.Values) { q.Set("response_type", "token") },
+			wantError: "unsupported_response_type",
+		},
+		{
+			name:      "missing response_type",
+			mutate:    func(q url.Values) { q.Del("response_type") },
+			wantError: "unsupported_response_type",
+		},
+		{
+			name:      "scope missing openid",
+			mutate:    func(q url.Values) { q.Set("scope", "email profile") },
+			wantError: "invalid_scope",
+		},
+		{
+			name:      "missing code_challenge (PKCE required)",
+			mutate:    func(q url.Values) { q.Del("code_challenge") },
+			wantError: "invalid_request",
+		},
+		{
+			name:      "code_challenge_method not S256",
+			mutate:    func(q url.Values) { q.Set("code_challenge_method", "plain") },
+			wantError: "invalid_request",
+		},
+		{
+			name:      "code_challenge shorter than 43",
+			mutate:    func(q url.Values) { q.Set("code_challenge", strings.Repeat("a", 42)) },
+			wantError: "invalid_request",
+		},
+		{
+			name:      "code_challenge longer than 43",
+			mutate:    func(q url.Values) { q.Set("code_challenge", strings.Repeat("a", 44)) },
+			wantError: "invalid_request",
+		},
+		{
+			name:      "code_challenge not base64url",
+			mutate:    func(q url.Values) { q.Set("code_challenge", strings.Repeat("a", 42)+"=") },
+			wantError: "invalid_request",
+		},
+	}
+
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			q := validParams()
+			tc.mutate(q)
+
+			resp := s.get(s.srv, q)
+			defer resp.Body.Close()
+
+			s.assertErrorRedirect(resp, tc.wantError, "client-state-abc")
+			s.Zero(s.store.count())
+		})
+	}
+}
+
+// TestErrorRedirectOmitsAbsentState: state is echoed only when the client
+// sent one (RFC 6749 §4.1.2.1).
+func (s *AuthorizeSuite) TestErrorRedirectOmitsAbsentState() {
+	q := validParams()
+	q.Del("state")
+	q.Set("response_type", "token")
+
+	resp := s.get(s.srv, q)
+	defer resp.Body.Close()
+
+	loc := s.assertErrorRedirect(resp, "unsupported_response_type", "")
+	s.False(loc.Query().Has("state"))
+}
+
+// assertErrorRedirect checks an RFC 6749 §4.1.2.1 error response and returns
+// the parsed Location.
+func (s *AuthorizeSuite) assertErrorRedirect(resp *http.Response, wantError, wantState string) *url.URL {
+	s.T().Helper()
+	s.Require().Equal(http.StatusFound, resp.StatusCode)
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	s.Require().NoError(err)
+	target, _ := url.Parse(testRedirectURI)
+	s.Equal(target.Scheme, loc.Scheme)
+	s.Equal(target.Host, loc.Host)
+	s.Equal(target.Path, loc.Path)
+	s.Equal(wantError, loc.Query().Get("error"))
+	s.NotEmpty(loc.Query().Get("error_description"))
+	s.Equal(wantState, loc.Query().Get("state"))
+	s.Equal(testIssuer, loc.Query().Get("iss"))
+	s.False(loc.Query().Has("code"))
+	return loc
+}
+
 // TestOversizedParamsRejected caps every client-controlled value before
 // anything is written: an anonymous caller could otherwise store ~1 MiB per
 // request (H4).
@@ -369,9 +460,6 @@ func (s *AuthorizeSuite) TestOversizedParamsRejected() {
 		{"scope over 1 KiB", "scope", "openid " + long(1024)},
 		{"client_id over 256 bytes", "client_id", long(257)},
 		{"redirect_uri over 2 KiB", "redirect_uri", testRedirectURI + "?" + long(2048)},
-		{"code_challenge shorter than 43", "code_challenge", long(42)},
-		{"code_challenge longer than 43", "code_challenge", long(44)},
-		{"code_challenge not base64url", "code_challenge", long(42) + "="},
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {

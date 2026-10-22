@@ -31,9 +31,9 @@ func TestUserInfoSuite(t *testing.T) {
 func (s *UserInfoSuite) SetupTest() {
 	s.keys = keys.New(keys.WithStore(&memKeyStore{}), keys.WithGenerateOptions(keys.WithRSABits(2048)))
 	s.Require().NoError(s.keys.Init(context.Background()))
-	s.signer = keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer))
+	s.signer = keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience))
 
-	verifier := keys.NewVerifier(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer))
+	verifier := keys.NewVerifier(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience))
 	mux := http.NewServeMux()
 	oidc.NewUserInfo(verifier).Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
 	s.srv = httptest.NewServer(mux)
@@ -43,9 +43,13 @@ func (s *UserInfoSuite) TearDownTest() {
 	s.srv.Close()
 }
 
-// mint signs a token directly via the Signer — the handler only ever sees a
-// minted JWT, so unit-isolating it from the /token endpoint is faithful.
+// mint signs a user access token directly via the Signer - the handler only
+// ever sees a minted JWT, so unit-isolating it from the /token endpoint is
+// faithful. Like /token, it names the client the token was issued to.
 func (s *UserInfoSuite) mint(req keys.MintRequest) string {
+	if req.ClientID == "" {
+		req.ClientID = "ui"
+	}
 	signed, _, err := s.signer.Mint(context.Background(), req)
 	s.Require().NoError(err)
 	return signed
@@ -112,10 +116,11 @@ func (s *UserInfoSuite) TestExpiredTokenIs401() {
 	past := keys.NewSigner(
 		keys.WithKeys(s.keys),
 		keys.WithIssuer(testIssuer),
+		keys.WithAudience(testAccessAudience),
 		keys.WithTokenClock(func() time.Time { return time.Now().Add(-2 * time.Hour) }),
 	)
 	signed, _, err := past.Mint(context.Background(), keys.MintRequest{
-		Subject: "alice@example.com", Email: "alice@example.com", TTL: time.Hour,
+		Subject: "alice@example.com", Email: "alice@example.com", TTL: time.Hour, ClientID: "ui",
 	})
 	s.Require().NoError(err)
 
@@ -125,9 +130,9 @@ func (s *UserInfoSuite) TestExpiredTokenIs401() {
 }
 
 func (s *UserInfoSuite) TestWrongIssuerIs401() {
-	other := keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer("https://attacker.example"))
+	other := keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer("https://attacker.example"), keys.WithAudience(testAccessAudience))
 	signed, _, err := other.Mint(context.Background(), keys.MintRequest{
-		Subject: "alice@example.com", Email: "alice@example.com", TTL: time.Hour,
+		Subject: "alice@example.com", Email: "alice@example.com", TTL: time.Hour, ClientID: "ui",
 	})
 	s.Require().NoError(err)
 
@@ -177,5 +182,69 @@ func (s *UserInfoSuite) TestMalformedOrMissingAuthorizationIs401() {
 			defer resp.Body.Close()
 			s.Equal(http.StatusUnauthorized, resp.StatusCode)
 		})
+	}
+}
+
+// TestIDTokenIs401: /userinfo is a protected resource and takes access
+// tokens only (OIDC Core §5.3). An ID token, though signed by tempogate and
+// unexpired, is refused.
+func (s *UserInfoSuite) TestIDTokenIs401() {
+	idToken, err := s.signer.MintIDToken(context.Background(), keys.IDTokenRequest{
+		Subject: "alice@example.com", Email: "alice@example.com", Audience: testAccessAudience, TTL: time.Hour,
+	})
+	s.Require().NoError(err)
+
+	resp := s.get("Bearer " + idToken)
+	defer resp.Body.Close()
+	s.Equal(http.StatusUnauthorized, resp.StatusCode)
+}
+
+// TestLegacyAccessTokenIs401: a token minted before access tokens were
+// typed and given the Temporal audience (aud = client, or none for an
+// integration key) is refused; re-minting is the migration.
+func (s *UserInfoSuite) TestLegacyAccessTokenIs401() {
+	legacy, err := s.signer.MintIDToken(context.Background(), keys.IDTokenRequest{
+		Subject: "alice@example.com", Email: "alice@example.com", Audience: "ui", TTL: time.Hour,
+	})
+	s.Require().NoError(err)
+	noAud := keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer))
+	untargeted, _, err := noAud.Mint(context.Background(), keys.MintRequest{Subject: "ci-bot", Permissions: []string{"default:writer"}})
+	s.Require().NoError(err)
+
+	for _, tok := range []string{legacy, untargeted} {
+		resp := s.get("Bearer " + tok)
+		s.Equal(http.StatusUnauthorized, resp.StatusCode)
+		resp.Body.Close()
+	}
+}
+
+// TestWrongAudienceIs401: the access token must be for this deployment's
+// Temporal audience.
+func (s *UserInfoSuite) TestWrongAudienceIs401() {
+	other := keys.NewSigner(keys.WithKeys(s.keys), keys.WithIssuer(testIssuer), keys.WithAudience("some-other-api"))
+	signed, _, err := other.Mint(context.Background(), keys.MintRequest{
+		Subject: "alice@example.com", Email: "alice@example.com", TTL: time.Hour, ClientID: "ui",
+	})
+	s.Require().NoError(err)
+
+	resp := s.get("Bearer " + signed)
+	defer resp.Body.Close()
+	s.Equal(http.StatusUnauthorized, resp.StatusCode)
+}
+
+// TestIntegrationKeyIsAccepted: integration keys are access tokens for the
+// Temporal audience, with or without an expiry; /userinfo describes their
+// owner, and the Verifier's denylist is what refuses a revoked one.
+func (s *UserInfoSuite) TestIntegrationKeyIsAccepted() {
+	for _, ttl := range []time.Duration{0, time.Hour} {
+		signed, _, err := s.signer.Mint(context.Background(), keys.MintRequest{
+			Subject: "ci-bot", Permissions: []string{"default:writer"}, TTL: ttl,
+		})
+		s.Require().NoError(err)
+
+		resp := s.get("Bearer " + signed)
+		s.Equal(http.StatusOK, resp.StatusCode, "ttl=%s", ttl)
+		s.Equal("ci-bot", s.decodeBody(resp)["sub"])
+		resp.Body.Close()
 	}
 }

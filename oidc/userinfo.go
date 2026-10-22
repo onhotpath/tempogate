@@ -19,10 +19,15 @@ const bearerPrefix = "Bearer "
 // literal so oidc does not reach into keys' unexported constants).
 const emailClaim = "email"
 
-// UserInfo serves GET /userinfo: the OIDC UserInfo endpoint. Temporal Web
-// UI's OIDC client calls it after the code exchange and uses the response
-// for the session's display name. It authenticates the caller solely by the
-// Bearer JWT tempogate itself minted — there is no separate session store.
+// UserInfo serves GET /userinfo: the OIDC UserInfo endpoint, a protected
+// resource (OIDC Core §5.3). Temporal Web UI's OIDC client calls it after the
+// code exchange and uses the response for the session's display name. It
+// authenticates the caller solely by a Bearer access token tempogate itself
+// minted - there is no separate session store. The Verifier accepts access
+// tokens for the configured Temporal audience only, so an ID token, a token
+// for another audience, or one minted before access tokens were typed is
+// refused. Integration keys are access tokens too; the Verifier's denylist
+// check is what makes their revocation visible here.
 type UserInfo struct {
 	verifier *keys.Verifier
 }

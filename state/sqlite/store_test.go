@@ -336,7 +336,8 @@ func (s *StoreSuite) TestConsumeAuthCodeRoundTripAndSingleUse() {
 	ac := s.authCode("consume-code-1")
 	s.Require().NoError(s.store.SaveAuthCode(s.ctx, ac))
 
-	got, err := s.store.ConsumeAuthCode(s.ctx, ac.Code)
+	at := ac.CreatedAt.Add(10 * time.Second)
+	got, err := s.store.ConsumeAuthCode(s.ctx, ac.Code, "fam-1", at)
 	s.Require().NoError(err)
 	s.Equal(ac.Code, got.Code)
 	s.Equal(ac.ClientID, got.ClientID)
@@ -346,23 +347,31 @@ func (s *StoreSuite) TestConsumeAuthCodeRoundTripAndSingleUse() {
 	s.Equal(ac.CodeChallenge, got.CodeChallenge)
 	s.Equal(ac.CodeChallengeMethod, got.CodeChallengeMethod)
 	s.Equal(ac.Nonce, got.Nonce)
+	s.Equal("fam-1", got.FamilyID)
 	s.True(ac.CreatedAt.Equal(got.CreatedAt))
 	s.True(ac.ExpiresAt.Equal(got.ExpiresAt))
 
-	_, err = s.store.ConsumeAuthCode(s.ctx, ac.Code)
-	s.Require().Error(err)
-	s.Truef(errors.Is(err, oidc.ErrAuthCodeNotFound),
-		"second consume should be ErrAuthCodeNotFound, got %v", err)
+	// A replay is refused and names the family the first redemption
+	// started, so the caller can revoke what that redemption issued. The
+	// replay's own family id is not recorded.
+	again, err := s.store.ConsumeAuthCode(s.ctx, ac.Code, "fam-2", at.Add(time.Second))
+	s.Require().ErrorIs(err, oidc.ErrAuthCodeReused)
+	s.Equal("fam-1", again.FamilyID)
+	s.Equal(ac.ClientID, again.ClientID)
 
-	var remaining int
+	// The consumed code stays behind as a tombstone (until the reaper
+	// removes it at expiry), still keyed by hash only.
+	var familyID string
+	var consumedAt time.Time
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT count(*) FROM auth_codes WHERE code_hash = ?`, sha256Hex(ac.Code))
-	s.Require().NoError(row.Scan(&remaining))
-	s.Zero(remaining)
+		`SELECT family_id, consumed_at FROM auth_codes WHERE code_hash = ?`, sha256Hex(ac.Code))
+	s.Require().NoError(row.Scan(&familyID, &consumedAt))
+	s.Equal("fam-1", familyID)
+	s.True(at.Equal(consumedAt))
 }
 
 func (s *StoreSuite) TestConsumeAuthCodeNotFound() {
-	_, err := s.store.ConsumeAuthCode(s.ctx, "never-saved")
+	_, err := s.store.ConsumeAuthCode(s.ctx, "never-saved", "fam", time.Now())
 	s.Require().Error(err)
 	s.Truef(errors.Is(err, oidc.ErrAuthCodeNotFound),
 		"expected ErrAuthCodeNotFound, got %v", err)
@@ -504,7 +513,7 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			return s.store.SaveAuthCode(s.ctx, s.authCode("closed"))
 		}},
 		{"ConsumeAuthCode", func() error {
-			_, err := s.store.ConsumeAuthCode(s.ctx, "closed")
+			_, err := s.store.ConsumeAuthCode(s.ctx, "closed", "fam", time.Now())
 			return err
 		}},
 		{"SaveRefresh", func() error {

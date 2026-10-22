@@ -20,6 +20,12 @@ var ErrAuthRequestNotFound = errors.New("oidc: auth request not found")
 // from a forged one to the caller.
 var ErrAuthCodeNotFound = errors.New("oidc: auth code not found")
 
+// ErrAuthCodeReused is returned by ConsumeAuthCode when the code was already
+// redeemed. Together with it the store returns the consumed code, whose
+// FamilyID names the refresh-token family the first redemption started, so
+// the /token handler can revoke the tokens issued from it (RFC 6749 §4.1.2).
+var ErrAuthCodeReused = errors.New("oidc: auth code already redeemed")
+
 // AuthCode is the authorization code tempogate mints after Google has
 // authenticated the user and the email passed the domain allowlist. It is
 // single-use and short-lived: the downstream /token call exchanges it —
@@ -38,6 +44,10 @@ type AuthCode struct {
 	// ID token's nonce claim (OIDC Core §2). Empty when the client sent no
 	// nonce at /authorize.
 	Nonce string
+
+	// FamilyID is the refresh-token family the code's redemption started,
+	// recorded atomically with the consume. Empty until redeemed.
+	FamilyID string
 
 	CreatedAt time.Time
 	ExpiresAt time.Time

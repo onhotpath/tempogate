@@ -55,7 +55,7 @@ func (s *TokenE2ESuite) SetupTest() {
 
 	k := keys.New(keys.WithStore(store), keys.WithGenerateOptions(keys.WithRSABits(2048)))
 	s.Require().NoError(k.Init(ctx))
-	signer := keys.NewSigner(keys.WithKeys(k), keys.WithIssuer(testIssuer))
+	signer := keys.NewSigner(keys.WithKeys(k), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience))
 
 	s.mg = newMockGoogle(s.T(), testGoogleCID, "alice@example.com", true)
 	upstream := google.New(
@@ -71,9 +71,9 @@ func (s *TokenE2ESuite) SetupTest() {
 	s.Require().NoError(reg.WithSecrets("webui:" + e2eConfidentialSecret))
 
 	authorizer := oidc.New(store, reg, testIssuer, testGoogleCID, s.mg.issuer()+"/auth")
-	callback := oidc.NewCallback(store, upstream, "example.com")
+	callback := oidc.NewCallback(store, upstream, "example.com", oidc.WithCallbackIssuer(testIssuer))
 	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store), oidc.WithAllowedDomains("example.com"))
-	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer)))
+	userinfo := oidc.NewUserInfo(keys.NewVerifier(keys.WithKeys(k), keys.WithIssuer(testIssuer), keys.WithAudience(testAccessAudience)))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
 
 	result := api.New(api.NewReadiness(),
@@ -187,12 +187,13 @@ func (s *TokenE2ESuite) TestFullFlowMintsJWTVerifiableAgainstPublishedJWKS() {
 	body := s.decode(resp)
 	s.Equal("Bearer", body.TokenType)
 	s.Equal(14400, body.ExpiresIn)
-	s.Equal(body.AccessToken, body.IDToken)
+	s.NotEqual(body.AccessToken, body.IDToken)
 	s.Require().NotEmpty(body.RefreshToken)
 
 	tok, err := jwt.Parse([]byte(body.AccessToken),
 		jwt.WithKeySet(s.jwksSet()),
 		jwt.WithIssuer(testIssuer),
+		jwt.WithAudience(testAccessAudience),
 	)
 	s.Require().NoError(err, "JWT must verify against the published JWKS")
 
@@ -355,7 +356,15 @@ func (s *TokenE2ESuite) TestConfidentialNoPKCEFlowMintsNonceAudJWT() {
 	s.Require().True(ok)
 	s.Equal(nonce, gotNonce, "nonce must round-trip so the UI's idToken.Nonce check passes")
 
-	perms, ok := tok.Field("permissions")
+	s.False(tok.Has("permissions"), "the ID token grants nothing")
+
+	access, err := jwt.Parse([]byte(body.AccessToken),
+		jwt.WithKeySet(s.jwksSet()),
+		jwt.WithIssuer(testIssuer),
+		jwt.WithAudience(testAccessAudience),
+	)
+	s.Require().NoError(err)
+	perms, ok := access.Field("permissions")
 	s.Require().True(ok)
 	s.Equal([]string{"temporal-system:admin"}, toStringSlice(s.T(), perms))
 
@@ -411,20 +420,21 @@ func (s *TokenE2ESuite) TestDeviceCodeFlowMintsJWTVerifiableAgainstPublishedJWKS
 	body := s.decode(resp)
 	s.Equal("Bearer", body.TokenType)
 	s.Equal(14400, body.ExpiresIn)
-	s.Equal(body.AccessToken, body.IDToken)
+	s.NotEqual(body.AccessToken, body.IDToken)
 	s.Require().NotEmpty(body.RefreshToken)
 
 	tok, err := jwt.Parse([]byte(body.AccessToken),
 		jwt.WithKeySet(s.jwksSet()),
 		jwt.WithIssuer(testIssuer),
+		jwt.WithAudience(testAccessAudience),
 	)
 	s.Require().NoError(err, "device-code JWT must verify against the same JWKS the auth-code JWT does")
 
 	sub, ok := tok.Subject()
 	s.Require().True(ok)
 	s.Equal("alice@example.com", sub)
-	aud, _ := tok.Audience()
-	s.Equal([]string{"tempogate-device"}, aud)
+	clientID, _ := tok.Field("client_id")
+	s.Equal("tempogate-device", clientID)
 	perms, _ := tok.Field("permissions")
 	s.Equal([]string{"temporal-system:admin"}, toStringSlice(s.T(), perms))
 	_, hasNonce := tok.Field("nonce")

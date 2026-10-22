@@ -65,6 +65,9 @@ type openIDConfig struct {
 	ScopesSupported                  []string `json:"scopes_supported"`
 	SubjectTypesSupported            []string `json:"subject_types_supported"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
+	// AuthorizationResponseISS advertises RFC 9207: every authorization
+	// response, success or error, carries iss.
+	AuthorizationResponseISS bool `json:"authorization_response_iss_parameter_supported"`
 }
 
 type openIDOutput struct {
@@ -129,18 +132,20 @@ func registerWellKnown(a huma.API, k JWKSSource, issuer string) {
 		return &openIDOutput{
 			CacheControl: wellKnownCacheControl,
 			Body: openIDConfig{
-				Issuer:                           issuer,
-				AuthorizationEndpoint:            issuer + oidc.AuthorizePath,
-				TokenEndpoint:                    issuer + oidc.TokenPath,
-				UserinfoEndpoint:                 issuer + oidc.UserInfoPath,
-				DeviceAuthorizationEndpoint:      issuer + oidc.DeviceAuthorizationPath,
-				JwksURI:                          issuer + jwksPath,
-				ResponseTypesSupported:           []string{"code"},
-				GrantTypesSupported:              []string{"authorization_code", "refresh_token", deviceCodeGrantType},
-				CodeChallengeMethodsSupported:    []string{"S256"},
-				ScopesSupported:                  []string{"openid", "profile", "email"},
+				Issuer:                        issuer,
+				AuthorizationEndpoint:         issuer + oidc.AuthorizePath,
+				TokenEndpoint:                 issuer + oidc.TokenPath,
+				UserinfoEndpoint:              issuer + oidc.UserInfoPath,
+				DeviceAuthorizationEndpoint:   issuer + oidc.DeviceAuthorizationPath,
+				JwksURI:                       issuer + jwksPath,
+				ResponseTypesSupported:        []string{"code"},
+				GrantTypesSupported:           []string{"authorization_code", "refresh_token", deviceCodeGrantType},
+				CodeChallengeMethodsSupported: []string{"S256"},
+				// No profile claims are issued, so profile is not offered.
+				ScopesSupported:                  []string{"openid", "email"},
 				SubjectTypesSupported:            []string{"public"},
 				IDTokenSigningAlgValuesSupported: []string{keys.AlgRS256},
+				AuthorizationResponseISS:         true,
 			},
 		}, nil
 	})

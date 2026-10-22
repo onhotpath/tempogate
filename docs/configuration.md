@@ -114,7 +114,8 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` | no | `false` | Dev only. Allows plain-`http` redirect URIs for non-loopback hosts in `OIDC_CLIENTS` (e.g. `http://temporal-ui:8080/auth/sso/callback` in a local Docker Compose stack). Leave it off in production: a code sent over plain http to a remote host can be read on the network. |
 | `OIDC_CLIENT_SECRETS` | no | _(empty)_ | Comma-separated `id:secret`. The deliberately-separate, auditable opt-in that promotes a registered client to **confidential** (the PKCE carve-out) — e.g. the Temporal Web UI, which does not implement PKCE; also `tempogate-device-ui`, which tempogate uses as a client of itself when bouncing the verification page through Google SSO. An entry for an unregistered id fails fast. See [docs/pkce-and-confidential-clients.md](pkce-and-confidential-clients.md). |
 | `OIDC_ALLOWED_DOMAINS` | for any login | _(empty)_ | Comma-separated, exact-match email-domain gate applied to Google's verified email after sign-in, and re-applied to the session's email on every refresh: removing a domain ends its users' sessions at their next refresh (and revokes them). **Empty means nobody is admitted.** |
-| `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; lifetime of each access/id token. This is also the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. |
+| `OIDC_ACCESS_TOKEN_TTL` | no | `4h` | Go duration; lifetime of each access token. This is also the revoke lag at the Temporal frontend, which verifies tokens against the JWKS only. Must be shorter than `OIDC_REFRESH_TOKEN_TTL`. ID tokens always live 5 minutes. |
+| `OIDC_ACCESS_TOKEN_AUDIENCE` | no | `temporal` | The `aud` of every access token, integration keys included. Set Temporal's `global.authorization.audience` (Temporal v1.29.0+) to the same value so the frontend refuses tokens minted for anything else. Must not be empty. See [Access tokens and ID tokens](#access-tokens-and-id-tokens). |
 | `OIDC_REFRESH_TOKEN_TTL` | no | `168h` | Go duration (7 days); idle lifetime of each rotated refresh token. A session not refreshed for this long ends. Must not exceed `OIDC_REFRESH_MAX_LIFETIME`. |
 | `OIDC_REFRESH_MAX_LIFETIME` | no | `720h` | Go duration (30 days); absolute session lifetime counted from the original sign-in. Rotation never extends it: no refresh token outlives sign-in + this value, so every user goes back through Google at least this often. Not to be confused with `OIDC_SESSION_TTL`, which is the device-flow verification page's cookie. See [Refresh-token sessions](#refresh-token-sessions). |
 | `OIDC_SESSION_SIGNING_KEY` | yes | _(empty)_ | Base64url-encoded 32-byte HMAC key. Signs the verification-page session cookie and the SSO-bounce `state` parameter used by the [device flow](cli-device-login.md), each under its own domain-separation label so neither verifies as the other. Generate once with `openssl rand -base64 32 \| tr '+/' '-_' \| tr -d '='`, keep stable across rolling restarts, and supply via a Secret. **Tempogate refuses to boot** if this is empty, not base64url, or does not decode to exactly 32 bytes. |
@@ -132,6 +133,44 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 **Device verification rate limits** have no configuration keys.
 Failed user-code attempts on the verification pages are limited to 20 per minute per client IP and 5 per minute per verification session, in memory on each replica (see [docs/cli-device-login.md](cli-device-login.md#security-notes)).
 The client IP is the TCP peer; `X-Forwarded-For` is not read, so behind a reverse proxy all clients share the proxy's IP budget (one client spending it throttles code entry for the rest for up to a minute) and the per-session budget still applies.
+
+### Access tokens and ID tokens
+
+`/token` returns two different JWTs, both signed with the keys published at `/.well-known/jwks.json`:
+
+| | `access_token` | `id_token` |
+| --- | --- | --- |
+| For | Temporal (gRPC frontend, Web UI API calls, `tempogate token`) | the relying party's login only ([OIDC Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)) |
+| JWS `typ` | `at+jwt` ([RFC 9068](https://datatracker.ietf.org/doc/html/rfc9068)) | `JWT` |
+| `aud` | `OIDC_ACCESS_TOKEN_AUDIENCE` (`temporal`) | the requesting `client_id` |
+| Claims | `sub`, `email`, `permissions`, `client_id` | `sub`, `email`, `email_verified`, `auth_time`, `nonce` (when sent at `/authorize`) |
+| Lifetime | `OIDC_ACCESS_TOKEN_TTL` (`4h`) | 5 minutes |
+
+The ID token has no `permissions` claim, and Temporal's default ClaimMapper grants roles only from `permissions`, so an ID token presented to Temporal is refused.
+A relying party that receives or leaks an ID token holds nothing Temporal would authorize.
+Integration keys minted on the admin API are access tokens with the same `typ` and `aud` (no `client_id`).
+`/userinfo` accepts access tokens for `OIDC_ACCESS_TOKEN_AUDIENCE` only; it refuses ID tokens, tokens for another audience, and tokens minted before this split.
+
+**Temporal Web UI.** The UI already sends the access token as its bearer and the ID token only in the `Authorization-Extras` header, which Temporal's default ClaimMapper ignores (temporalio/ui v2.32.0, `src/lib/utilities/request-from-api.ts`).
+No UI setting changes.
+Do not configure a custom ClaimMapper that authorizes from `Authorization-Extras`.
+
+**Temporal audience (defense in depth).** Temporal v1.29.0 added `global.authorization.audience` ([temporalio/temporal#8067](https://github.com/temporalio/temporal/pull/8067)); when set, the frontend refuses any token whose `aud` does not contain it.
+Set it to `OIDC_ACCESS_TOKEN_AUDIENCE` in the server config (it is not templated from an environment variable):
+
+```yaml
+global:
+  authorization:
+    jwtKeyProvider:
+      keySourceURIs:
+        - https://tempogate.example.com/.well-known/jwks.json
+    authorizer: default
+    claimMapper: default
+    audience: temporal   # = OIDC_ACCESS_TOKEN_AUDIENCE
+```
+
+Temporal v1.28 and earlier (including the `1.25.2` the examples and e2e tests run) have no audience setting and ignore `aud`; they keep working unchanged with any value.
+Once the audience is enforced, integration keys minted before this release (no `aud`) stop working and must be minted again.
 
 ### Refresh-token sessions
 
@@ -152,6 +191,9 @@ In Kubernetes, run them in the serving pod, e.g. `kubectl exec deploy/tempogate 
 Revocation stops refreshes immediately; access tokens already issued remain valid until they expire (`OIDC_ACCESS_TOKEN_TTL`).
 The integration-key jti denylist is not consulted for refresh tokens.
 
+Redeeming an authorization code twice is refused, and the session the first redemption started is revoked ([RFC 6749 §4.1.2](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2)), logged as `auth_code_reuse`.
+Redeemed codes are kept (hashed) until they expire so a replay is recognised; the access token already issued stays valid at Temporal until it expires.
+
 Upgrading to migration `0011` keeps existing sessions: each existing refresh token becomes its own family, with its sign-in time set to when it was last refreshed, so it ends at most `OIDC_REFRESH_MAX_LIFETIME` later.
 
 ### Redirect URI registration
@@ -169,6 +211,10 @@ Loopback entries must omit the port, because any port is accepted.
 Non-loopback entries must use `https` unless `OIDC_ALLOW_INSECURE_REDIRECT_URIS=true`.
 A client with redirect URIs cannot use `/device_authorization`, and a device-only entry cannot be combined with redirect URI entries for the same id.
 Prefix-shaped values from older releases (`tempogate-cli:http://127.0.0.1:`, `ui:https://ui.example.com`) are rejected at startup with an error naming the entry.
+
+Errors at `/authorize` before the client and `redirect_uri` are validated (unknown client, unregistered URI, oversized parameters) are shown to the browser as JSON.
+After that, errors (an unsupported `response_type`, a missing `openid` scope, missing or malformed PKCE) are sent back to the client's `redirect_uri` as `error` and `error_description`, with the client's `state` ([RFC 6749 §4.1.2.1](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1)).
+Every authorization response, success or error, carries `iss` ([RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207)), as discovery advertises with `authorization_response_iss_parameter_supported`.
 
 ### Client-side (the `tempogate` CLI, not the server)
 

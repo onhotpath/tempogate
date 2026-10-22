@@ -8,6 +8,7 @@ import (
 
 	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/lestrrat-go/jwx/v4/jwk"
+	"github.com/lestrrat-go/jwx/v4/jws"
 	"github.com/lestrrat-go/jwx/v4/jwt"
 )
 
@@ -22,8 +23,15 @@ var ErrNoVerificationKeys = errors.New("keys: verifier has no keys to verify aga
 // from signature/expiry failures.
 var ErrTokenRevoked = errors.New("keys: token has been revoked")
 
-// Verifier validates tempogate-issued JWTs for tempogate's own needs (e.g.
-// exchanging a refresh token). Temporal's gRPC frontend does not use this — it
+// ErrNotAccessToken is returned by Verify for a validly signed token that is
+// not an access token (an ID token, or a token minted before access tokens
+// were typed). Callers map it to the same 401 as any other invalid token.
+var ErrNotAccessToken = errors.New("keys: token is not an access token")
+
+// Verifier validates tempogate-issued access tokens for tempogate's own
+// resource-server needs (/userinfo). It accepts access tokens only: ID tokens
+// are signed by the same keys but are for relying-party login, never a
+// credential. Temporal's gRPC frontend does not use this - it
 // runs its own JWKS-backed verifier against /.well-known/jwks.json. Verifier
 // exists so the parts of tempogate that consume their own tokens don't
 // re-implement signature + claim checks inconsistently with the Signer.
@@ -104,6 +112,14 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (jwt.Token, error) {
 	tok, err := jwt.Parse([]byte(raw), parseOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("keys: verify token: %w", err)
+	}
+	// The signature is verified, so the protected header is trustworthy.
+	msg, err := jws.Parse([]byte(raw))
+	if err != nil {
+		return nil, fmt.Errorf("keys: parse token header: %w", err)
+	}
+	if typ, _ := msg.Signatures()[0].ProtectedHeaders().Type(); typ != AccessTokenType {
+		return nil, ErrNotAccessToken
 	}
 
 	if v.denylist != nil {

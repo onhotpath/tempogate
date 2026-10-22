@@ -347,6 +347,8 @@ func (s *ClientRegistrySuite) TestAuthenticate() {
 		{"correct secret authenticates", "ui", "right-secret", true},
 		{"wrong secret fails", "ui", "wrong-secret", false},
 		{"empty presented secret fails", "ui", "", false},
+		{"prefix of the secret fails", "ui", "right-secre", false},
+		{"secret with a suffix fails", "ui", "right-secret!", false},
 		{"public client never authenticates by secret", "public", "anything", false},
 		{"unknown client fails", "ghost", "right-secret", false},
 	}

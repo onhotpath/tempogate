@@ -1,6 +1,10 @@
 package keys
 
-import "go.uber.org/fx"
+import (
+	"errors"
+
+	"go.uber.org/fx"
+)
 
 type fxParams struct {
 	fx.In
@@ -30,18 +34,26 @@ type signerParams struct {
 
 	Keys *Keys
 
-	Issuer string `name:"oidc_issuer"`
+	Issuer              string `name:"oidc_issuer"`
+	AccessTokenAudience string `name:"oidc_access_token_audience"`
 }
 
 // newSigner wires the JWT-minting Signer over the keypair aggregate. The
 // issuer it stamps is the same value the OIDC discovery document advertises,
-// so a relying party that fetched discovery sees a matching `iss`. Audience
-// is intentionally unset in v1: Temporal's default claim mapper does not
-// enforce `aud`, and leaving it empty avoids minting a claim no verifier
-// checks.
-func newSigner(p signerParams) *Signer {
-	return NewSigner(WithKeys(p.Keys), WithIssuer(p.Issuer))
+// so a relying party that fetched discovery sees a matching `iss`. Every
+// access token, integration keys included, carries the Temporal audience, so
+// a Temporal frontend configured to require it (global.authorization.audience,
+// Temporal v1.29.0+) accepts them and refuses tokens minted for anything else.
+func newSigner(p signerParams) (*Signer, error) {
+	if p.AccessTokenAudience == "" {
+		return nil, errEmptyAudience
+	}
+	return NewSigner(WithKeys(p.Keys), WithIssuer(p.Issuer), WithAudience(p.AccessTokenAudience)), nil
 }
+
+// errEmptyAudience stops startup rather than minting access tokens with no
+// aud, which no audience check could then tell apart.
+var errEmptyAudience = errors.New("keys: OIDC_ACCESS_TOKEN_AUDIENCE must not be empty")
 
 type verifierParams struct {
 	fx.In
@@ -49,21 +61,28 @@ type verifierParams struct {
 	Keys     *Keys
 	Denylist *DenylistCache
 
-	Issuer string `name:"oidc_issuer"`
+	Issuer              string `name:"oidc_issuer"`
+	AccessTokenAudience string `name:"oidc_access_token_audience"`
 }
 
-// newVerifier wires the Verifier tempogate uses to validate its own tokens
-// (the /userinfo bearer check, refresh-token exchange). Its issuer must match
-// newSigner's so a token this process mints verifies in the same process;
-// audience is unset for the same reason it is on the Signer. The denylist
-// cache is consulted on every verify so a revoked integration key stops
-// authorizing tempogate-mediated flows within the cache's TTL.
-func newVerifier(p verifierParams) *Verifier {
-	return NewVerifier(
+// newVerifier wires the Verifier tempogate uses to validate its own access
+// tokens (the /userinfo bearer check). Its issuer and audience must match
+// newSigner's so a token this process mints verifies in the same process.
+// The denylist cache is consulted on every verify so a revoked integration
+// key stops authorizing tempogate-mediated flows within the cache's TTL.
+func newVerifier(p verifierParams) (*Verifier, error) {
+	if p.AccessTokenAudience == "" {
+		return nil, errEmptyAudience
+	}
+	opts := []TokenOption{
 		WithKeys(p.Keys),
 		WithIssuer(p.Issuer),
-		WithDenylist(p.Denylist),
-	)
+		WithAudience(p.AccessTokenAudience),
+	}
+	if p.Denylist != nil {
+		opts = append(opts, WithDenylist(p.Denylist))
+	}
+	return NewVerifier(opts...), nil
 }
 
 type denylistParams struct {

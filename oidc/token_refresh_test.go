@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"time"
 
+	jwxjwt "github.com/lestrrat-go/jwx/v4/jwt"
+
 	"github.com/onhotpath/tempogate/oidc"
 )
 
@@ -73,9 +75,11 @@ func (s *TokenSuite) TestRefreshGrantBindsAndAuthenticatesClient() {
 			body := s.decodeTokenResponse(resp)
 			tok, err := s.verifier.Verify(context.Background(), body.AccessToken)
 			s.Require().NoError(err)
-			aud, ok := tok.Audience()
-			s.Require().True(ok)
-			s.Equal([]string{tc.wantAud}, aud, "aud must stay the client the refresh token was issued to")
+			clientID, err := jwxjwt.Get[string](tok, "client_id")
+			s.Require().NoError(err)
+			s.Equal(tc.wantAud, clientID, "the token must stay issued to the client the refresh token was issued to")
+			aud, _ := s.parseIDToken(body.IDToken).Audience()
+			s.Equal([]string{tc.wantAud}, aud, "the ID token's aud must stay that client")
 			s.Equal(tc.wantAud, s.store.lastRefresh().ClientID, "the rotated token must stay bound to the same client")
 			s.False(s.store.hasRefresh(tc.token), "a successful refresh consumes the token")
 		})

@@ -75,14 +75,15 @@ func (m *memKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error) {
 	return out, nil
 }
 
-// memTokenStore satisfies oidc.TokenStore structurally. ConsumeAuthCode
-// deletes the code and ConsumeRefresh tombstones the token, so single use,
-// rotation and reuse detection are exercised by the suite, not just asserted
-// in prose; ConsumeRefresh honours the client binding and family revocation
-// the same way the sqlite store's conditional UPDATE does.
+// memTokenStore satisfies oidc.TokenStore structurally. ConsumeAuthCode and
+// ConsumeRefresh both tombstone, so single use, rotation and reuse detection
+// are exercised by the suite, not just asserted in prose; ConsumeRefresh
+// honours the client binding and family revocation the same way the sqlite
+// store's conditional UPDATE does.
 type memTokenStore struct {
 	mu                sync.Mutex
 	codes             map[string]oidc.AuthCode
+	consumedCodes     map[string]bool
 	refresh           map[string]oidc.Refresh
 	consumed          map[string]bool
 	revokedFamilies   map[string]bool
@@ -96,16 +97,20 @@ type memTokenStore struct {
 func newMemTokenStore() *memTokenStore {
 	return &memTokenStore{
 		codes:           map[string]oidc.AuthCode{},
+		consumedCodes:   map[string]bool{},
 		refresh:         map[string]oidc.Refresh{},
 		consumed:        map[string]bool{},
 		revokedFamilies: map[string]bool{},
 	}
 }
 
+// putCode seeds a live code, replacing any earlier row or tombstone under
+// the same value.
 func (m *memTokenStore) putCode(ac oidc.AuthCode) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.codes[ac.Code] = ac
+	delete(m.consumedCodes, ac.Code)
 }
 
 // putRefresh seeds a live token, replacing any earlier row or tombstone
@@ -117,7 +122,7 @@ func (m *memTokenStore) putRefresh(r oidc.Refresh) {
 	delete(m.consumed, r.Token)
 }
 
-func (m *memTokenStore) ConsumeAuthCode(_ context.Context, code string) (oidc.AuthCode, error) {
+func (m *memTokenStore) ConsumeAuthCode(_ context.Context, code, familyID string, _ time.Time) (oidc.AuthCode, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.consumeCodeErr != nil {
@@ -127,7 +132,12 @@ func (m *memTokenStore) ConsumeAuthCode(_ context.Context, code string) (oidc.Au
 	if !ok {
 		return oidc.AuthCode{}, oidc.ErrAuthCodeNotFound
 	}
-	delete(m.codes, code)
+	if m.consumedCodes[code] {
+		return ac, oidc.ErrAuthCodeReused
+	}
+	ac.FamilyID = familyID
+	m.codes[code] = ac
+	m.consumedCodes[code] = true
 	return ac, nil
 }
 
@@ -237,11 +247,13 @@ func (s *TokenSuite) SetupTest() {
 	signer := keys.NewSigner(
 		keys.WithKeys(s.keys),
 		keys.WithIssuer(testIssuer),
+		keys.WithAudience(testAccessAudience),
 		keys.WithTokenClock(func() time.Time { return signNow }),
 	)
 	s.verifier = keys.NewVerifier(
 		keys.WithKeys(s.keys),
 		keys.WithIssuer(testIssuer),
+		keys.WithAudience(testAccessAudience),
 		keys.WithTokenClock(func() time.Time { return signNow.Add(time.Minute) }),
 	)
 
@@ -354,14 +366,18 @@ func (s *TokenSuite) TestConfidentialClientSecretViaFormBodyMintsJWT() {
 
 	tok, err := s.verifier.Verify(context.Background(), body.AccessToken)
 	s.Require().NoError(err)
-	aud, ok := tok.Audience()
-	s.Require().True(ok)
-	s.Equal([]string{"webui"}, aud, "OIDC ID token aud must be the requesting client_id")
-	nonce, err := jwxjwt.Get[string](tok, "nonce")
+	clientID, err := jwxjwt.Get[string](tok, "client_id")
 	s.Require().NoError(err)
-	s.Equal("rp-nonce-xyz", nonce, "nonce from /authorize must round-trip into the token")
+	s.Equal("webui", clientID)
 	sub, _ := tok.Subject()
 	s.Equal("alice@example.com", sub)
+
+	id := s.parseIDToken(body.IDToken)
+	aud, _ := id.Audience()
+	s.Equal([]string{"webui"}, aud, "OIDC ID token aud must be the requesting client_id")
+	nonce, err := jwxjwt.Get[string](id, "nonce")
+	s.Require().NoError(err)
+	s.Equal("rp-nonce-xyz", nonce, "nonce from /authorize must round-trip into the ID token")
 }
 
 func (s *TokenSuite) TestConfidentialClientSecretViaHTTPBasicMintsJWT() {
@@ -378,9 +394,9 @@ func (s *TokenSuite) TestConfidentialClientSecretViaHTTPBasicMintsJWT() {
 
 	s.Require().Equal(http.StatusOK, resp.StatusCode)
 	body := s.decodeTokenResponse(resp)
-	tok, err := s.verifier.Verify(context.Background(), body.AccessToken)
+	_, err := s.verifier.Verify(context.Background(), body.AccessToken)
 	s.Require().NoError(err)
-	aud, _ := tok.Audience()
+	aud, _ := s.parseIDToken(body.IDToken).Audience()
 	s.Equal([]string{"webui"}, aud)
 }
 
@@ -437,11 +453,10 @@ func (s *TokenSuite) TestPKCEPathStampsAudAndNonce() {
 	defer resp.Body.Close()
 	s.Require().Equal(http.StatusOK, resp.StatusCode)
 
-	tok, err := s.verifier.Verify(context.Background(), s.decodeTokenResponse(resp).AccessToken)
-	s.Require().NoError(err)
-	aud, _ := tok.Audience()
+	id := s.parseIDToken(s.decodeTokenResponse(resp).IDToken)
+	aud, _ := id.Audience()
 	s.Equal([]string{"ui"}, aud)
-	nonce, err := jwxjwt.Get[string](tok, "nonce")
+	nonce, err := jwxjwt.Get[string](id, "nonce")
 	s.Require().NoError(err)
 	s.Equal("rp-nonce-pkce", nonce)
 }
@@ -488,8 +503,8 @@ func (s *TokenSuite) TestAuthorizationCodeGrantMintsVerifiableJWT() {
 	s.Equal("Bearer", body.TokenType)
 	s.Equal(14400, body.ExpiresIn)
 	s.Equal(fixedRefresh, body.RefreshToken)
-	s.Equal(body.AccessToken, body.IDToken, "id_token must be the same signed JWT")
 	s.NotEmpty(body.AccessToken)
+	s.NotEqual(body.AccessToken, body.IDToken, "the ID token is a separate token")
 
 	tok, err := s.verifier.Verify(context.Background(), body.AccessToken)
 	s.Require().NoError(err, "JWT must verify against our JWKS")
@@ -548,7 +563,7 @@ func (s *TokenSuite) TestPKCEMismatchIsInvalidGrant() {
 	s.store.putCode(s.authCode("code-1"))
 
 	f := authCodeForm()
-	f.Set("code_verifier", "the-wrong-verifier")
+	f.Set("code_verifier", strings.Repeat("w", 43)) // well-formed, but not this code's
 	resp := s.post(f)
 	defer resp.Body.Close()
 

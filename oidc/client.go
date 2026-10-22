@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -316,5 +317,9 @@ func (r ClientRegistry) Authenticate(clientID, presented string) bool {
 	if !ok || c.Secret == "" || presented == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(c.Secret), []byte(presented)) == 1
+	// Comparing fixed-length digests keeps the compare constant-time in the
+	// secret's length too, which ConstantTimeCompare on the raw values is not.
+	want := sha256.Sum256([]byte(c.Secret))
+	got := sha256.Sum256([]byte(presented))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
 }

@@ -138,8 +138,14 @@ type OIDCConfig struct {
 	// construction at startup if it is missing or the wrong length.
 	SessionSigningKey string `ferry:"session_signing_key"`
 
-	// AccessTokenTTL is the lifetime of each minted access/id token.
+	// AccessTokenTTL is the lifetime of each minted access token.
 	AccessTokenTTL time.Duration `ferry:"access_token_ttl"`
+
+	// AccessTokenAudience is the aud of every access token, integration
+	// keys included: the audience a Temporal frontend can be configured to
+	// require (global.authorization.audience, Temporal v1.29.0+). ID tokens
+	// are unaffected; their aud is the requesting client.
+	AccessTokenAudience string `ferry:"access_token_audience"`
 
 	// RefreshTokenTTL is the idle lifetime of each rotated refresh token: a
 	// session that is not refreshed for this long ends.

@@ -36,6 +36,7 @@ type Result struct {
 	OIDCSessionTTL        time.Duration `name:"oidc_session_ttl"`
 	OIDCSessionSigningKey string        `name:"oidc_session_signing_key"`
 	OIDCAccessTokenTTL    time.Duration `name:"oidc_access_token_ttl"`
+	OIDCAccessTokenAud    string        `name:"oidc_access_token_audience"`
 	OIDCRefreshTokenTTL   time.Duration `name:"oidc_refresh_token_ttl"`
 	OIDCRefreshMaxLife    time.Duration `name:"oidc_refresh_max_lifetime"`
 	GoogleClientID        string        `name:"google_client_id"`
@@ -74,6 +75,7 @@ func Fx() fx.Option {
 				OIDCSessionTTL:        cfg.OIDC.SessionTTL,
 				OIDCSessionSigningKey: cfg.OIDC.SessionSigningKey,
 				OIDCAccessTokenTTL:    cfg.OIDC.AccessTokenTTL,
+				OIDCAccessTokenAud:    cfg.OIDC.AccessTokenAudience,
 				OIDCRefreshTokenTTL:   cfg.OIDC.RefreshTokenTTL,
 				OIDCRefreshMaxLife:    cfg.OIDC.RefreshMaxLifetime,
 				GoogleClientID:        cfg.OIDC.Google.ClientID,

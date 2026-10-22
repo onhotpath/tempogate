@@ -37,10 +37,15 @@ const (
 	// poll. The full URN is part of the contract — clients copy it verbatim.
 	grantDeviceCode = "urn:ietf:params:oauth:grant-type:device_code"
 
-	// DefaultAccessTokenTTL is the lifetime of a minted access/id token
+	// DefaultAccessTokenTTL is the lifetime of a minted access token
 	// (OIDC_ACCESS_TOKEN_TTL). Short enough that a leaked token has a
 	// bounded blast radius; the refresh token covers continuity.
 	DefaultAccessTokenTTL = 4 * time.Hour
+
+	// IDTokenTTL is the lifetime of a minted ID token. The relying party
+	// verifies it once, at login, and must not use it as a credential, so it
+	// lives only long enough to cover the exchange and clock skew.
+	IDTokenTTL = 5 * time.Minute
 
 	// DefaultRefreshTokenTTL is the idle lifetime of each rotated refresh
 	// token (OIDC_REFRESH_TOKEN_TTL): a session unused for this long ends.
@@ -101,11 +106,15 @@ type Refresh struct {
 // structurally; the type is exported only so the composition root can inject
 // it via fx.As.
 type TokenStore interface {
-	// ConsumeAuthCode atomically loads and deletes the authorization code,
-	// enforcing single use. It returns ErrAuthCodeNotFound when no row
-	// matches. Expiry is the caller's concern (it owns the clock); a
-	// consumed-but-expired code is still returned and then rejected.
-	ConsumeAuthCode(ctx context.Context, code string) (AuthCode, error)
+	// ConsumeAuthCode atomically marks the authorization code redeemed at
+	// the given time and records familyID as the refresh-token family the
+	// redemption starts, enforcing single use. The consumed code stays
+	// behind as a tombstone: presenting it again returns it, carrying the
+	// first redemption's FamilyID, with ErrAuthCodeReused. Any other miss
+	// returns ErrAuthCodeNotFound. Expiry is the caller's concern (it owns
+	// the clock); a consumed-but-expired code is still returned and then
+	// rejected.
+	ConsumeAuthCode(ctx context.Context, code, familyID string, at time.Time) (AuthCode, error)
 
 	// SaveRefresh persists a freshly minted refresh token. It returns
 	// ErrRefreshFamilyRevoked when r's family has been revoked.
@@ -270,14 +279,16 @@ type tokenOutput struct {
 }
 
 type tokenResponse struct {
+	// AccessToken is the credential for Temporal: it carries the
+	// permissions and the Temporal audience. ExpiresIn describes it.
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token"`
-	// IDToken is the same signed JWT as AccessToken. tempogate issues one
-	// token that is simultaneously the OAuth2 access token and the OIDC
-	// id_token; relying parties (Temporal) verify it the same way either
-	// way, so minting a second token would only add surface area.
+	// IDToken is the relying party's proof of login (OIDC Core §2): aud is
+	// the client, identity claims only, no permissions, short-lived. It is
+	// a separate token so a relying party that receives it, or leaks it,
+	// holds nothing Temporal would authorize.
 	IDToken string `json:"id_token"`
 }
 
@@ -348,6 +359,11 @@ type AuthCodeRedemption struct {
 	Email    string
 	ClientID string
 	Nonce    string
+
+	// FamilyID is the refresh-token family this redemption starts. It is
+	// recorded against the code as it is consumed, so a later replay of the
+	// code can revoke what was issued here.
+	FamilyID string
 }
 
 // RedeemAuthorizationCode validates a presented authorization code,
@@ -374,8 +390,33 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 	if c.Secret == "" && in.CodeVerifier == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_verifier is required (PKCE)")
 	}
+	// A malformed verifier is a malformed request, refused before the code
+	// is consumed so it cannot burn the legitimate client's code.
+	if in.CodeVerifier != "" && !validCodeVerifier(in.CodeVerifier) {
+		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code_verifier must be 43-128 characters of [A-Za-z0-9-._~] (RFC 7636)")
+	}
 
-	ac, err := t.store.ConsumeAuthCode(ctx, in.Code)
+	familyID, err := randomFamilyID()
+	if err != nil {
+		return nil, fmt.Errorf("oidc: generate refresh token family: %w", err)
+	}
+	now := t.now()
+	ac, err := t.store.ConsumeAuthCode(ctx, in.Code, familyID, now)
+	if errors.Is(err, ErrAuthCodeReused) {
+		// RFC 6749 §4.1.2: one of the two presenters is not the client, and
+		// the server cannot tell which, so what the first redemption issued
+		// is revoked. Access tokens already minted stay valid at Temporal
+		// until they expire; their refresh tokens end here. A tombstone
+		// always names its family; the guard keeps an empty id from ever
+		// matching unrelated rows.
+		if ac.FamilyID != "" {
+			if err := t.revokeFamily(ctx, Refresh{FamilyID: ac.FamilyID, ClientID: ac.ClientID, Email: ac.Email}, now,
+				"auth_code_reuse", "oidc: authorization code reuse detected; revoked the tokens issued from it"); err != nil {
+				return nil, err
+			}
+		}
+		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown or already-redeemed authorization code")
+	}
 	if errors.Is(err, ErrAuthCodeNotFound) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "unknown or already-redeemed authorization code")
 	}
@@ -383,7 +424,7 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 		return nil, fmt.Errorf("oidc: consume auth code: %w", err)
 	}
 
-	if t.now().After(ac.ExpiresAt) {
+	if now.After(ac.ExpiresAt) {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "authorization code expired")
 	}
 	if in.ClientID != ac.ClientID {
@@ -410,7 +451,7 @@ func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedempti
 		return nil, oauthErr(http.StatusBadRequest, "invalid_grant", "authorization code is not bound to a PKCE challenge")
 	}
 
-	return &AuthCodeRedemption{Email: ac.Email, ClientID: ac.ClientID, Nonce: ac.Nonce}, nil
+	return &AuthCodeRedemption{Email: ac.Email, ClientID: ac.ClientID, Nonce: ac.Nonce, FamilyID: familyID}, nil
 }
 
 // authenticateClient resolves the client a /token request speaks for,
@@ -453,7 +494,7 @@ func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, aut
 	if err != nil {
 		return nil, err
 	}
-	return t.issue(ctx, r.Email, r.ClientID, r.Nonce, lineage{})
+	return t.issue(ctx, r.Email, r.ClientID, r.Nonce, lineage{familyID: r.FamilyID, authTime: t.now()})
 }
 
 func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHeader string) (*tokenOutput, error) {
@@ -548,9 +589,9 @@ type lineage struct {
 	authTime time.Time
 }
 
-// issue mints the access/id token and a rotated refresh token, persisting the
-// latter before responding. It is the single place token shape and lifetimes
-// are decided, so the grants cannot drift apart.
+// issue mints the access token, the ID token and a rotated refresh token,
+// persisting the latter before responding. It is the single place token
+// shape and lifetimes are decided, so the grants cannot drift apart.
 func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l lineage) (*tokenOutput, error) {
 	now := t.now()
 	if l.familyID == "" {
@@ -561,22 +602,31 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l line
 		l = lineage{familyID: familyID, authTime: now}
 	}
 
+	// The access token is Temporal's credential: permissions, and the
+	// Signer's Temporal audience (OIDC_ACCESS_TOKEN_AUDIENCE).
 	signed, jti, err := t.signer.Mint(ctx, keys.MintRequest{
 		Subject:     email,
 		Email:       email,
 		TTL:         t.accessTTL,
 		Permissions: flatAdminPermissions(),
-		// OIDC Core: the ID token's aud must contain the requesting client.
-		// tempogate issues one token that is both access and id token, so it
-		// carries the client_id as aud; Temporal's frontend authorizer does
-		// not enforce aud, so this is additive for the gRPC path.
-		Audience: clientID,
-		// Echoed only when the client sent one at /authorize (empty on the
-		// refresh path); OIDC Core §2 requires the round-trip.
-		Nonce: nonce,
+		ClientID:    clientID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("oidc: mint access token: %w", err)
+	}
+	idToken, err := t.signer.MintIDToken(ctx, keys.IDTokenRequest{
+		Subject: email,
+		Email:   email,
+		// OIDC Core §2: the ID token's aud is the requesting client.
+		Audience: clientID,
+		// Echoed only when the client sent one at /authorize (empty on the
+		// refresh path); OIDC Core §2 requires the round-trip.
+		Nonce:    nonce,
+		AuthTime: l.authTime,
+		TTL:      IDTokenTTL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("oidc: mint id token: %w", err)
 	}
 
 	refreshTok, err := t.newRefresh()
@@ -615,7 +665,7 @@ func (t *Token) issue(ctx context.Context, email, clientID, nonce string, l line
 			TokenType:    "Bearer",
 			ExpiresIn:    int(t.accessTTL.Seconds()),
 			RefreshToken: refreshTok,
-			IDToken:      signed,
+			IDToken:      idToken,
 		},
 	}, nil
 }
@@ -641,6 +691,23 @@ func verifyPKCE(verifier, challenge string) bool {
 	sum := sha256.Sum256([]byte(verifier))
 	computed := base64.RawURLEncoding.EncodeToString(sum[:])
 	return subtle.ConstantTimeCompare([]byte(computed), []byte(challenge)) == 1
+}
+
+// validCodeVerifier enforces RFC 7636 §4.1: 43 to 128 characters from the
+// unreserved set [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~".
+func validCodeVerifier(v string) bool {
+	if len(v) < 43 || len(v) > 128 {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9',
+			c == '-', c == '.', c == '_', c == '~':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func randomRefresh() (string, error) {

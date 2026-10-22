@@ -157,6 +157,10 @@ services:
       TEMPORAL_JWT_KEY_REFRESH: "10s"
       TEMPORAL_AUTH_AUTHORIZER: default
       TEMPORAL_AUTH_CLAIM_MAPPER: default
+      # 1.25.2 has no audience check. On Temporal v1.29.0+ set
+      # global.authorization.audience to tempogate's
+      # OIDC_ACCESS_TOKEN_AUDIENCE ("temporal") in the server config; it is
+      # not templated from an env var. See docs/configuration.md.
     ports:
       - "7233:7233"
     depends_on:
@@ -166,7 +170,9 @@ services:
         condition: service_started
 
   # Temporal Web UI, configured ONLY via stock TEMPORAL_AUTH_* env vars —
-  # tempogate needs no Temporal-specific support code.
+  # tempogate needs no Temporal-specific support code. The UI sends
+  # tempogate's access token as its bearer; the ID token only proves the
+  # login to the UI and grants nothing at Temporal.
   temporal-ui:
     image: temporalio/ui:2.32.0
     environment:

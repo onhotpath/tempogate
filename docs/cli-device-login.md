@@ -235,7 +235,7 @@ in this release.
   bounce states issued before the upgrade; both live minutes, and an
   affected user just restarts the sign-in.
 * **The minted token is identical to a loopback token.** Same lifetime,
-  same `permissions` claim, same `aud`, same JWKS-verified signature. The
+  same `permissions` claim, same Temporal `aud`, same JWKS-verified signature. The
   device flow changes *how* the human authenticates the CLI, not what the
   CLI gets.
 * **PKCE does not apply.** RFC 8628 §5.1 binds the grant to the

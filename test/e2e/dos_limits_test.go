@@ -146,7 +146,9 @@ func TestDoSLimits(t *testing.T) {
 		require.NotEmpty(t, rt2)
 
 		counts := stateRowCounts(ctx, t, tg.serve)
-		require.Equal(t, 1, counts["auth_codes"], "the unredeemed code is stored")
+		// The redeemed code stays as a tombstone until it expires, so a
+		// replay can revoke what it issued.
+		require.Equal(t, 2, counts["auth_codes"], "the unredeemed code and the redeemed code's tombstone are stored")
 		require.Equal(t, 2, counts["refresh_tokens"], "tombstone + live token")
 
 		// Several reaper ticks later, still inside the 8 s absolute
