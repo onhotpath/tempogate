@@ -2,7 +2,7 @@
 
 > [!CAUTION]
 > **DEV ONLY. Never expose this stack to a network.**
-> The bundled mock IdP signs in **anyone who can reach it as any identity**, and that identity gets full Temporal access.
+> The bundled mock IdP signs in **anyone who can reach it as any identity**, and the demo identity gets full Temporal access.
 > Every port is published on `127.0.0.1` only, and the secrets have no defaults: you generate them locally with `./gen-env.sh`.
 > Do not change the port bindings to `0.0.0.0`, and do not reuse the generated secrets anywhere else.
 
@@ -109,6 +109,19 @@ Optional, non-secret knobs: `DEMO_EMAIL` (the identity the mock asserts,
 default `alice@example.com`), `TEMPOGATE_ALLOWED_DOMAINS` (default
 `example.com`), and `LOG_LEVEL` (default `info`). Full env-var reference:
 [`docs/configuration.md`](../../docs/configuration.md).
+
+## Who gets access
+
+tempogate denies by default: a signed-in person gets the Temporal permissions their authorization rules grant, and nothing else.
+The compose file grants the demo identity (`DEMO_EMAIL`) cluster admin with one rule:
+
+```yaml
+OIDC_AUTHZ_RULES_0: "email:${DEMO_EMAIL:-alice@example.com}=temporal-system:admin"
+```
+
+To try a narrower grant, add rules to the `tempogate` service and restart it, e.g. `OIDC_AUTHZ_RULES_1: "email:bob@example.com=default:read"`, then sign in as bob with `DEMO_EMAIL=bob@example.com docker compose up -d`.
+An identity no rule matches is refused at sign-in with `access_denied`.
+See [Authorization](../../docs/configuration.md#authorization).
 
 ## Next
 

@@ -83,6 +83,7 @@ func (s *FxSuite) supplyConfigAt(issuer, basePath string, plainHTTP bool, client
 		fx.Provide(func() oidc.TokenStore { return newMemTokenStore() }),
 		fx.Provide(func() oidc.DeviceCodeStore { return &memDeviceCodeStore{} }),
 		fx.Provide(func() oidc.Upstream { return &fakeUpstream{} }),
+		fx.Provide(func() oidc.PermissionResolver { return permitAll }),
 		fx.Provide(func() *keys.Signer { return keys.NewSigner() }),
 		fx.Provide(func() *keys.Verifier { return keys.NewVerifier() }),
 		// Discard-handler logger satisfies the DeviceUI logger dependency

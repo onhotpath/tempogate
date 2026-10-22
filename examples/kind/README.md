@@ -39,6 +39,11 @@ default StorageClass for the SQLite PVC, debug logging, and an issuer of
 chart installs, the `migrate` initContainer runs, and the server serves
 `/healthz`.
 
+`serve` refuses to start without authorization, so the overlay carries one
+rule, `email:alice@example.com=default:write`. Replace it with your own
+`authz.rules` (see
+[Authorization](../../docs/configuration.md#authorization)).
+
 It does **not** wire SSO — no upstream Google client is configured, so the
 login flow is not exercised here. The full interactive SSO + CLI-token story
 is the docker-compose example and the getting-started guide.
@@ -49,7 +54,8 @@ is the docker-compose example and the getting-started guide.
   ([`../google-oauth-setup.md`](../google-oauth-setup.md)), put its
   credentials in a Secret, and set `oidc.issuer`, `auth.clients`,
   `auth.allowedDomains` (plus `auth.allowedHostedDomains` for a Google
-  Workspace organization), and the Google `*SecretRef` chart values - see the
+  Workspace organization), `authz.rules` for who gets which Temporal
+  permissions, and the Google `*SecretRef` chart values - see the
   [chart README](../../charts/tempogate/README.md).
 - **Point Temporal at tempogate's JWKS:**
   [`temporal-values.yaml`](./temporal-values.yaml) — both the Temporal Helm

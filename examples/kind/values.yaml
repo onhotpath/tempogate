@@ -43,6 +43,14 @@ oidc:
     name: tempogate-kind
     key: session-signing-key
 
+# serve refuses to start without authorization. Replace this rule with your
+# own: "<email:address|domain:domain>=<namespace>:<role>[,...]", roles read,
+# write or admin, temporal-system for every namespace. See
+# docs/configuration.md#authorization.
+authz:
+  rules:
+    - "email:alice@example.com=default:write"
+
 # No upstream Google client is configured, so the SSO flow is not exercised
 # by this smoke overlay.
 auth:

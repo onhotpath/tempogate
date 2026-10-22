@@ -39,6 +39,7 @@ func (s *SubcommandsSuite) SetupTest() {
 	for _, k := range []string{
 		"OIDC_ISSUER", "OIDC_ALLOW_INSECURE_ISSUER", "OIDC_CLIENTS", "OIDC_CLIENT_SECRETS",
 		"OIDC_SESSION_SIGNING_KEY", "OIDC_ALLOWED_DOMAINS", "TEMPOGATE_CONFIG",
+		"OIDC_AUTHZ_RULES_0", "OIDC_AUTHZ_DEFAULT_PERMISSIONS",
 	} {
 		s.T().Setenv(k, "") // restores the original value on cleanup
 		s.Require().NoError(os.Unsetenv(k))
@@ -134,6 +135,59 @@ func (s *SubcommandsSuite) TestDocumentedClientsBuildServerGraph() {
 
 	code, logs := s.serveGraph()
 	s.Equalf(0, code, "logs:\n%s", logs)
+}
+
+// setServerConfig sets everything `serve` needs except authorization.
+func (s *SubcommandsSuite) setServerConfig() {
+	const fixtureSessionKey = "0123456789abcdef0123456789abcdef"
+	s.T().Setenv("OIDC_SESSION_SIGNING_KEY", base64.RawURLEncoding.EncodeToString([]byte(fixtureSessionKey)))
+	s.T().Setenv("OIDC_CLIENTS", "tempogate-device-ui:https://tempogate.example.com/idp/device/sso-callback")
+	s.T().Setenv("OIDC_CLIENT_SECRETS", "tempogate-device-ui:app-test-secret")
+	s.T().Setenv("OIDC_ISSUER", "https://tempogate.example.com/idp")
+	s.T().Setenv("OIDC_ALLOWED_DOMAINS", "example.com")
+}
+
+// TestServeRefusesWithoutAuthorization is the deny-by-default upgrade guard:
+// a configuration that used to make every admitted user cluster admin now
+// stops serve at startup, pointing at the upgrade note, while gen-oas, which
+// builds the same graph, still works.
+func (s *SubcommandsSuite) TestServeRefusesWithoutAuthorization() {
+	s.setServerConfig()
+	code, logs := s.run("migrate")
+	s.Require().Equalf(0, code, "logs:\n%s", logs)
+
+	code, logs = s.serveGraph()
+	s.Equalf(0, code, "gen-oas needs no rules; logs:\n%s", logs)
+
+	code, logs = s.run("serve")
+	s.Equal(1, code)
+	s.Contains(logs, "no authorization configured")
+	s.Contains(logs, "OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin")
+	s.Contains(logs, "docs/configuration.md#upgrading-to-deny-by-default-authorization")
+}
+
+// TestAuthzExplainNeedsOnlyTheRules runs the real command graph: explain
+// reads the rules and nothing else of the server configuration.
+func (s *SubcommandsSuite) TestAuthzExplainNeedsOnlyTheRules() {
+	s.T().Setenv("OIDC_AUTHZ_RULES_0", "email:alice@example.com=ns-a:read")
+	code, logs := s.run("authz", "explain", "--email", "alice@example.com")
+	s.Equalf(0, code, "logs:\n%s", logs)
+	s.Contains(logs, "authorization policy loaded")
+}
+
+func (s *SubcommandsSuite) TestInvalidAuthorizationRuleFailsServerGraph() {
+	s.setServerConfig()
+	for _, tc := range []struct{ key, value, want string }{
+		{"OIDC_AUTHZ_RULES_0", "email:alice@example.com=orders:worker", "worker grants nothing"},
+		{"OIDC_AUTHZ_RULES_0", "group:ops@example.com=orders:write", "group: rules are not supported yet"},
+		{"OIDC_AUTHZ_DEFAULT_PERMISSIONS", "*:admin", "is not a namespace wildcard"},
+	} {
+		s.T().Setenv(tc.key, tc.value)
+		code, logs := s.serveGraph()
+		s.Equalf(1, code, "%s=%s; logs:\n%s", tc.key, tc.value, logs)
+		s.Contains(logs, tc.want)
+		s.Require().NoError(os.Unsetenv(tc.key))
+	}
 }
 
 // TestPrefixRegistrationFailsServerGraph proves the pre-C1 prefix form fails

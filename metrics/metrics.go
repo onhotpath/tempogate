@@ -1,7 +1,7 @@
 // Package metrics owns tempogate's Prometheus registry and the collectors the
 // server exposes on the admin listener's /metrics. Feature packages never
 // import Prometheus: each declares a small observer interface of its own
-// (oidc.LoginObserver, oidc.TokenObserver, oidc.RateLimitObserver,
+// (oidc.LoginObserver, oidc.TokenObserver, oidc.RateLimitObserver, oidc.AuthzObserver,
 // google.Observer, sqlite.ErrorObserver) and *Metrics satisfies them
 // structurally, bound via fx.As in Fx. Only the full server build links this
 // package; the lean CLI never does.
@@ -50,6 +50,7 @@ type Metrics struct {
 	tokensIssued      *prometheus.CounterVec
 	tokenErrors       *prometheus.CounterVec
 	familyRevocations *prometheus.CounterVec
+	authzDenied       *prometheus.CounterVec
 	rateLimited       *prometheus.CounterVec
 	upstreamDuration  *prometheus.HistogramVec
 	upstreamErrors    *prometheus.CounterVec
@@ -84,6 +85,11 @@ func New(opts ...Option) *Metrics {
 			Name:      "refresh_family_revocations_total",
 			Help:      "Refresh-token families tempogate revoked on its own, by security event.",
 		}, []string{"event"}),
+		authzDenied: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "authz_denied_total",
+			Help:      "Admitted people refused because no authorization rule grants them any Temporal permissions, by stage.",
+		}, []string{"stage"}),
 		rateLimited: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "rate_limited_total",
@@ -122,6 +128,7 @@ func New(opts ...Option) *Metrics {
 		m.tokensIssued,
 		m.tokenErrors,
 		m.familyRevocations,
+		m.authzDenied,
 		m.rateLimited,
 		m.upstreamDuration,
 		m.upstreamErrors,
@@ -153,6 +160,11 @@ func (m *Metrics) ObserveToken(grant, errorCode string) {
 // ObserveFamilyRevoked satisfies oidc.TokenObserver.
 func (m *Metrics) ObserveFamilyRevoked(event string) {
 	m.familyRevocations.WithLabelValues(event).Inc()
+}
+
+// ObserveAuthzDenied satisfies oidc.AuthzObserver.
+func (m *Metrics) ObserveAuthzDenied(stage string) {
+	m.authzDenied.WithLabelValues(stage).Inc()
 }
 
 // ObserveRateLimited satisfies oidc.RateLimitObserver.

@@ -124,6 +124,8 @@ type Callback struct {
 	now            func() time.Time
 	newCode        func() (string, error)
 	logins         LoginObserver
+	authorizer     PermissionResolver
+	authz          AuthzObserver
 }
 
 type CallbackOption func(*Callback)
@@ -174,6 +176,28 @@ func WithLoginObserver(o LoginObserver) CallbackOption {
 	}
 }
 
+// WithCallbackPermissionResolver sets the resolver consulted once every admission
+// gate has passed: a person it grants nothing is sent back to the client
+// with access_denied and no code is minted. Without it nobody gets a code
+// (fail closed).
+func WithCallbackPermissionResolver(a PermissionResolver) CallbackOption {
+	return func(c *Callback) {
+		if a != nil {
+			c.authorizer = a
+		}
+	}
+}
+
+// WithCallbackAuthzObserver reports every sign-in refused because the
+// resolver granted nothing. Nil keeps the no-op default.
+func WithCallbackAuthzObserver(o AuthzObserver) CallbackOption {
+	return func(c *Callback) {
+		if o != nil {
+			c.authz = o
+		}
+	}
+}
+
 func NewCallback(
 	store CallbackStore,
 	upstream Upstream,
@@ -190,6 +214,8 @@ func NewCallback(
 		now:            func() time.Time { return time.Now().UTC() },
 		newCode:        randomCode,
 		logins:         nopObserver{},
+		authorizer:     denyAll{},
+		authz:          nopObserver{},
 	}
 	for _, o := range opts {
 		o(c)
@@ -276,6 +302,28 @@ func (c *Callback) complete(ctx context.Context, in *callbackInput) (*callbackOu
 		page := forbiddenPage(id.Email)
 		page.SetCookie = clearBinding
 		return page, refused, nil
+	}
+
+	// Admitted, but possibly granted nothing: refuse here, before a code
+	// exists, with the RFC 6749 §4.1.2.1 error the client can show (the CLI
+	// prints it and exits; the device page denies the device code).
+	_, ok, err := permitted(ctx, c.authorizer, id.Email)
+	if err != nil {
+		return nil, reasonInternal, fmt.Errorf("oidc: resolve permissions: %w", err)
+	}
+	if !ok {
+		c.authz.ObserveAuthzDenied(authzStageLogin)
+		c.logger.InfoContext(ctx, "google sign-in refused: no authorization rule grants this account any Temporal permissions",
+			"op", logOpGoogleCallback,
+			"cause", reasonAuthzDenied,
+			"client_id", ar.ClientID,
+			"email", id.Email,
+		)
+		out, err := c.redirect(ar, clearBinding, url.Values{
+			"error":             {"access_denied"},
+			"error_description": {msgNoAccess},
+		})
+		return out, reasonAuthzDenied, err
 	}
 
 	code, err := c.newCode()

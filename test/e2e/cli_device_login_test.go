@@ -28,7 +28,7 @@
 // signing key for the verification-page session cookie.
 //
 // Negative-path coverage is table-driven: a Deny POST surfaces
-// `cli: user denied`, and a `--device-poll-deadline=3s` no-driver scenario
+// `cli: the device authorization was denied`, and a `--device-poll-deadline=3s` no-driver scenario
 // surfaces `cli: polling deadline exceeded`.
 package e2e
 
@@ -189,13 +189,13 @@ func TestCLIDeviceLogin(t *testing.T) {
 			{
 				// User reaches the confirm page, reads the code, decides not to
 				// approve. RFC 8628 §3.5 access_denied; cli surfaces it as
-				// ErrUserDenied = "user denied the device authorization".
+				// ErrUserDenied = "the device authorization was denied".
 				name:       "user clicks Deny on the confirm page",
 				extraFlags: []string{"--device-poll-deadline", "2m"},
 				drive: func(ctx context.Context, t *testing.T, s *cliStack, userCode string) {
 					s.driveDeviceDecision(ctx, t, userCode, "deny")
 				},
-				wantStderrSubstr: "user denied",
+				wantStderrSubstr: "the device authorization was denied",
 			},
 			{
 				// CLI gives up before the user ever loads the verification URL.

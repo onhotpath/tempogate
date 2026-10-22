@@ -34,6 +34,7 @@ func (s *ObservabilitySuite) params(logger *zap.Logger, logRequests bool) serveP
 	})
 	guard := admin.NewGuard(admin.WithAllowedHosts([]string{"127.0.0.1:8081"}))
 	return serveParams{
+		Policy: testPolicy,
 		Logger: logger,
 		Servers: api.New(api.NewReadiness(),
 			api.WithAdminMiddleware(guard.Install),

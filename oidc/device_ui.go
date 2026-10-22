@@ -75,6 +75,10 @@ const (
 	// log content.
 	logOpSSOCallback = "device.sso_callback"
 
+	// logOpDeviceDecision is the "op" of the confirm and approve pages'
+	// log lines.
+	logOpDeviceDecision = "device.decision"
+
 	// User-code attempt budgets (RFC 8628 §5.1). A user_code has ~36.6 bits
 	// of entropy and lives for minutes, so a handful of attempts per minute
 	// leaves brute force hopeless while a typo or two never trips them. Only
@@ -114,6 +118,7 @@ var devicePages = map[string]string{
 	"confirm":  "device_confirm.html",
 	"approved": "device_approved.html",
 	"denied":   "device_denied.html",
+	"noaccess": "device_noaccess.html",
 	"error":    "device_error.html",
 }
 
@@ -210,6 +215,11 @@ type DeviceUI struct {
 	// Defaults to slog.New(slog.DiscardHandler) in NewDeviceUI so tests and
 	// direct constructors that don't wire one in produce no noise.
 	logger *slog.Logger
+
+	// authorizer is asked before a device code is approved; a person it
+	// grants nothing has the code denied instead. authz counts those.
+	authorizer PermissionResolver
+	authz      AuthzObserver
 }
 
 // DeviceUIOption configures a DeviceUI at construction. Every seam a test
@@ -244,6 +254,29 @@ func WithDeviceUIStateNonceGenerator(fn func() (string, error)) DeviceUIOption {
 // quiet without forcing every caller to know about the logger.
 func WithDeviceUILogger(l *slog.Logger) DeviceUIOption {
 	return func(u *DeviceUI) { u.logger = l }
+}
+
+// WithDeviceUIPermissionResolver sets the resolver the page consults before it
+// shows or honours Approve: a signed-in person it grants nothing has the
+// device code denied, so the CLI stops polling with access_denied rather
+// than receiving a token Temporal refuses. Without it nobody can approve
+// (fail closed).
+func WithDeviceUIPermissionResolver(a PermissionResolver) DeviceUIOption {
+	return func(u *DeviceUI) {
+		if a != nil {
+			u.authorizer = a
+		}
+	}
+}
+
+// WithDeviceUIAuthzObserver reports every device code denied because the
+// resolver granted nothing. Nil keeps the no-op default.
+func WithDeviceUIAuthzObserver(o AuthzObserver) DeviceUIOption {
+	return func(u *DeviceUI) {
+		if o != nil {
+			u.authz = o
+		}
+	}
 }
 
 // WithUserCodeRateLimiters swaps the per-client-IP and per-session limiters
@@ -316,6 +349,8 @@ func NewDeviceUI(
 		newStateNonce:    randomDeviceStateNonce,
 		ipAttempts:       ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerIP, userCodeAttemptWindow)),
 		sessionAttempts:  ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerSession, userCodeAttemptWindow)),
+		authorizer:       denyAll{},
+		authz:            nopObserver{},
 	}
 	for _, o := range opts {
 		o(u)
@@ -567,6 +602,11 @@ type deviceEnterPostInput struct {
 type deviceSSOCallbackInput struct {
 	Code  string `query:"code"`
 	State string `query:"state"`
+
+	// Error is the authorization error /callback/google sent back instead
+	// of a code: access_denied when the person declined at Google or no
+	// authorization rule grants them anything.
+	Error string `query:"error"`
 }
 
 type deviceConfirmInput struct {
@@ -664,6 +704,9 @@ func (u *DeviceUI) handleEnterPost(ctx context.Context, in *deviceEnterPostInput
 // recovered user_code in the query string. The Set-Cookie travels with the
 // 303 so the browser's next GET to /confirm presents the session.
 func (u *DeviceUI) handleSSOCallback(ctx context.Context, in *deviceSSOCallbackInput) (*deviceRedirectOrPage, error) {
+	if in.Error == "access_denied" && in.State != "" {
+		return u.handleSSODenied(ctx, in.State)
+	}
 	if in.Code == "" || in.State == "" {
 		// Warn rather than Error: an empty code or state usually means the
 		// upstream IdP sent a malformed callback (rare misconfiguration of
@@ -722,6 +765,64 @@ func (u *DeviceUI) handleSSOCallback(ctx context.Context, in *deviceSSOCallbackI
 	}, nil
 }
 
+// handleSSODenied ends a device authorization whose sign-in was refused:
+// the person declined at Google, or the callback found no authorization rule
+// granting them anything. The device code is denied so the CLI's next poll
+// gets access_denied instead of polling on until the code expires. The
+// state must verify, so only the browser that started this bounce (which
+// was shown the user code anyway) can end it this way.
+func (u *DeviceUI) handleSSODenied(ctx context.Context, state string) (*deviceRedirectOrPage, error) {
+	userCode, err := u.verifyBounceState(state)
+	if err != nil {
+		u.logger.WarnContext(ctx, "device-ui sso callback rejected: bounce state verification failed",
+			"op", logOpSSOCallback,
+			"cause", "verify_bounce_state",
+			"err", err,
+		)
+		return u.errorPage("That sign-in could not be completed. Restart the sign-in from your device."), nil
+	}
+	return u.denyForNoAccess(ctx, userCode)
+}
+
+// denyForNoAccess denies the pending device code and renders the
+// access-denied page. A code that is no longer pending (already decided,
+// expired, consumed) needs no denial; the page is the same.
+func (u *DeviceUI) denyForNoAccess(ctx context.Context, canonical string) (*deviceRedirectOrPage, error) {
+	err := u.devices.DenyDeviceCode(ctx, canonical, u.now())
+	if err != nil && !errors.Is(err, ErrDeviceCodeNotPending) && !errors.Is(err, ErrDeviceCodeNotFound) {
+		return nil, fmt.Errorf("oidc: device-ui deny for no access: %w", err)
+	}
+	body, err := u.render("noaccess", nil)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: device-ui noaccess render: %w", err)
+	}
+	out := u.redirectOrPage(u.htmlPage(body))
+	out.Status = http.StatusForbidden
+	return out, nil
+}
+
+// refuseIfNoAccess is the authorization check on a signed-in session: it
+// returns the access-denied page (having denied the device code) when the
+// resolver grants the session's person nothing, and nil when they may go
+// on. Sessions outlive rule changes, so this runs on every confirm and
+// approve, not only at sign-in.
+func (u *DeviceUI) refuseIfNoAccess(ctx context.Context, bs BrowserSession, canonical string) (*deviceRedirectOrPage, error) {
+	_, ok, err := permitted(ctx, u.authorizer, bs.Email)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: device-ui resolve permissions: %w", err)
+	}
+	if ok {
+		return nil, nil
+	}
+	u.authz.ObserveAuthzDenied(authzStageDeviceVerification)
+	u.logger.InfoContext(ctx, "device-ui approval refused: no authorization rule grants this account any Temporal permissions",
+		"op", logOpDeviceDecision,
+		"cause", reasonAuthzDenied,
+		"email", bs.Email,
+	)
+	return u.denyForNoAccess(ctx, canonical)
+}
+
 // handleConfirm renders the approve/deny prompt. A missing session sends the
 // browser back to the entry form to restart the bounce; a missing or
 // already-decided user_code surfaces as an error page rather than a silent
@@ -755,6 +856,10 @@ func (u *DeviceUI) handleConfirm(ctx context.Context, in *deviceConfirmInput) (*
 		return u.errorPage(msgUnusableUserCode), nil
 	}
 	u.refundUserCodeAttempt(ctx, bs.SID)
+
+	if page, err := u.refuseIfNoAccess(ctx, bs, canonical); page != nil || err != nil {
+		return page, err
+	}
 
 	body, err := u.render("confirm", map[string]any{
 		"DisplayUserCode": formatUserCode(canonical),
@@ -806,6 +911,16 @@ func (u *DeviceUI) handleDecision(ctx context.Context, in *deviceDecisionInput, 
 		out := u.errorHTMLPage(msgTooManyAttempts)
 		out.Status = http.StatusTooManyRequests
 		return out, nil
+	}
+	if approve {
+		if page, err := u.refuseIfNoAccess(ctx, bs, canonical); page != nil || err != nil {
+			if page == nil {
+				return nil, err
+			}
+			out := u.htmlPage(page.Body)
+			out.Status = page.Status
+			return out, nil
+		}
 	}
 	now := u.now()
 	if approve {

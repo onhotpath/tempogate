@@ -245,7 +245,7 @@ func (s *CallbackIntegrationSuite) serverFor(store *memCallbackStore, mg *mockGo
 	reg, err := oidc.ParseClientRegistry("ui:" + testRedirectURI)
 	s.Require().NoError(err)
 	a := oidc.New(store, reg, binding, testIssuer, testGoogleCID, mg.issuer()+"/auth")
-	c := oidc.NewCallback(store, up, binding, "example.com",
+	c := oidc.NewCallback(store, up, binding, "example.com", oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return time.Now().UTC() }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 	)

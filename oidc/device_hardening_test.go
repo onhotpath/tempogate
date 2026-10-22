@@ -297,7 +297,7 @@ func TestNewDeviceUIRejectsCallbackNotRegisteredForIssuer(t *testing.T) {
 			}
 			sessions := oidc.NewSessionManager(newMemBrowserSessionStore(), []byte("0123456789abcdef0123456789abcdef"))
 			_, err = oidc.NewDeviceUI(newStatefulDeviceCodeStore(), sessions, reg, newFakeAuthCodeRedeemer(deviceUITestIdentity),
-				[]byte("0123456789abcdef0123456789abcdef"), tc.issuer)
+				[]byte("0123456789abcdef0123456789abcdef"), tc.issuer, oidc.WithDeviceUIPermissionResolver(permitAll))
 			if tc.ok && err != nil {
 				t.Fatalf("want success, got %v", err)
 			}
@@ -338,7 +338,7 @@ func newDeviceUIHarness(t *testing.T, issuer string) *deviceUIHarness {
 		t.Fatal(err)
 	}
 	store := newStatefulDeviceCodeStore()
-	ui, err := oidc.NewDeviceUI(store, sessions, reg, newFakeAuthCodeRedeemer(deviceUITestIdentity), key, issuer,
+	ui, err := oidc.NewDeviceUI(store, sessions, reg, newFakeAuthCodeRedeemer(deviceUITestIdentity), key, issuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 	)
 	if err != nil {
@@ -377,7 +377,7 @@ func encodeSigned(payload, mac []byte) string {
 // same budget as the other lookup surfaces, and WithUserCodeRateLimiters
 // swaps the limiters, here to a one-failure session budget.
 func (s *DeviceUISuite) TestConfirmIsRateLimitedWithInjectedLimiters() {
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
+	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithUserCodeRateLimiters(
 			ratelimit.New(ratelimit.WithLimit(100, time.Minute)),

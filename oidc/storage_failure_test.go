@@ -52,10 +52,10 @@ func TestStorageFailureIsSanitized(t *testing.T) {
 
 	signKey := []byte("0123456789abcdef0123456789abcdef")
 	authorizer := oidc.New(store, reg, newTestBinding(t, testIssuer), testIssuer, testGoogleCID, "https://accounts.example.com/auth")
-	token := oidc.NewToken(store, signer, reg, oidc.WithDeviceCodeStore(store))
+	token := oidc.NewToken(store, signer, reg, oidc.WithPermissionResolver(permitAll), oidc.WithDeviceCodeStore(store))
 	device := oidc.NewDeviceAuthorization(store, reg, testIssuer)
 	var uiLogs bytes.Buffer
-	deviceUI, err := oidc.NewDeviceUI(store, oidc.NewSessionManager(store, signKey), reg, token, signKey, testIssuer,
+	deviceUI, err := oidc.NewDeviceUI(store, oidc.NewSessionManager(store, signKey), reg, token, signKey, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUILogger(slog.New(slog.NewJSONHandler(&uiLogs, nil))),
 	)
 	require.NoError(t, err)

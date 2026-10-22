@@ -187,6 +187,8 @@ type restartableTempogate struct {
 	vol     string
 	serve   testcontainers.Container
 	base    string
+	// volPrefix names the state volume; empty keeps the lifecycle test's.
+	volPrefix string
 }
 
 func (tg *restartableTempogate) start(t *testing.T, env map[string]string, migrate bool) {
@@ -196,7 +198,11 @@ func (tg *restartableTempogate) start(t *testing.T, env map[string]string, migra
 	if tg.vol == "" {
 		// Owned by owner and created before any container, so it is removed
 		// after all of them have been terminated.
-		tg.vol = stateVolume(tg.owner, "tempogate-lifecycle-e2e-state")
+		prefix := tg.volPrefix
+		if prefix == "" {
+			prefix = "tempogate-lifecycle-e2e-state"
+		}
+		tg.vol = stateVolume(tg.owner, prefix)
 	}
 	mounts := testcontainers.Mounts(testcontainers.VolumeMount(tg.vol, "/state"))
 

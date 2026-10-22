@@ -105,6 +105,22 @@ auth:
       clientSecretSecretRef: { name: tempogate-google, key: client-secret }
 ```
 
+### Authorization
+
+Who may do what in Temporal is plain configuration, not a secret:
+
+```yaml
+authz:
+  rules:
+    - "email:alice@example.com=temporal-system:admin"
+    - "domain:example.com=orders:read"
+```
+
+Deny is the default: tempogate refuses to start until `authz.rules` or `authz.defaultPermissions` is set.
+Upgrading from a release without rules, set `authz.defaultPermissions: "temporal-system:admin"` to keep every admitted user cluster admin while you write rules.
+A rule change takes effect after a rollout restart, at each user's next token refresh.
+See [docs/configuration.md](../../docs/configuration.md#authorization).
+
 ### Admin token
 
 The admin API accepts a bearer token whose SHA-256 is in `ADMIN_TOKEN_SHA256`; only the digest goes into the cluster:
@@ -171,6 +187,8 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `auth.allowInsecureRedirectUris` | `false` | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` - dev only; allow plain-http non-loopback redirect URIs. |
 | `auth.allowedDomains` | `[]` | `OIDC_ALLOWED_DOMAINS` — SSO email-domain gate. |
 | `auth.allowedHostedDomains` | `[]` | `OIDC_ALLOWED_HOSTED_DOMAINS` - Google Workspace `hd` gate ("Workspace mode"); recommended for Workspace organizations. |
+| `authz.rules` | `[]` | `OIDC_AUTHZ_RULES_<n>` - `"<selector>=<namespace>:<role>[,...]"` rules mapping `email:<address>` or `domain:<domain>` to Temporal permissions. See [docs/configuration.md](../../docs/configuration.md#authorization). |
+| `authz.defaultPermissions` | `""` | `OIDC_AUTHZ_DEFAULT_PERMISSIONS` - permissions for admitted people no rule matches. Empty denies them. With `authz.rules` also empty, tempogate refuses to start; `temporal-system:admin` keeps the pre-rules behaviour (logged as a warning). |
 | `auth.clientSecretsSecretRef` | `{name,key}` empty | Secret holding `OIDC_CLIENT_SECRETS`. |
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |
 | `auth.upstream.google.clientSecretSecretRef` | `{name,key}` empty | Secret holding the Google client secret. |

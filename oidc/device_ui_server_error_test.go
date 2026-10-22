@@ -114,7 +114,7 @@ func (s *DeviceUISuite) TestServerErrorsRenderHTMLWithRequestID() {
 }
 
 func (s *DeviceUISuite) deviceUIServerWithRequestIDs(logs *bytes.Buffer) *httptest.Server {
-	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer,
+	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(permitAll),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return deviceUITestStateNonce, nil }),
 		oidc.WithDeviceUILogger(slog.New(slog.NewJSONHandler(logs, nil))),

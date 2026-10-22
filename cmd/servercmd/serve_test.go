@@ -47,6 +47,7 @@ func (s *ServeCmdSuite) TearDownTest() {
 
 func (s *ServeCmdSuite) TestRejectsStaleSchema() {
 	cmd := newServeCmd(supply(serveParams{
+		Policy: testPolicy,
 		Logger: zap.NewNop(),
 		Store:  s.store,
 	}))
@@ -71,6 +72,7 @@ func (s *ServeCmdSuite) TestRejectsSchemaWithGap() {
 	s.Require().NoError(db.Close())
 
 	cmd := newServeCmd(supply(serveParams{
+		Policy: testPolicy,
 		Logger: zap.NewNop(),
 		Store:  s.store,
 	}))
@@ -87,6 +89,7 @@ func (s *ServeCmdSuite) TestRejectsUnreachableStore() {
 	s.Require().NoError(s.store.Close())
 
 	cmd := newServeCmd(supply(serveParams{
+		Policy: testPolicy,
 		Logger: zap.NewNop(),
 		Store:  s.store,
 	}))
@@ -117,6 +120,7 @@ func (s *ServeCmdSuite) TestAPIDocsRequireDevIssuer() {
 	} {
 		s.Run(tc.name, func() {
 			cmd := newServeCmd(supply(serveParams{
+				Policy:          testPolicy,
 				Logger:          zap.NewNop(),
 				Store:           s.store,
 				DocsEnabled:     tc.docs,
@@ -144,6 +148,7 @@ func (s *ServeCmdSuite) TestServesUntilCancelled() {
 	readiness := api.NewReadiness()
 	loopback := config.Listener{IP: net.IPv4(127, 0, 0, 1)} // port 0: any free port
 	cmd := newServeCmd(supply(serveParams{
+		Policy:        testPolicy,
 		Logger:        zap.NewNop(),
 		Store:         s.store,
 		Reaper:        sqlite.NewReaper(s.store),
@@ -192,6 +197,7 @@ func (s *ServeCmdSuite) TestReloadsKeysWhileServing() {
 	)
 	loopback := config.Listener{IP: net.IPv4(127, 0, 0, 1)}
 	cmd := newServeCmd(supply(serveParams{
+		Policy:        testPolicy,
 		Logger:        zap.NewNop(),
 		Store:         s.store,
 		Reaper:        sqlite.NewReaper(s.store),
@@ -232,6 +238,7 @@ func (s *ServeCmdSuite) TestRejectsNonPositiveReloadInterval() {
 	s.Require().NoError(s.store.Migrate(s.ctx))
 	readiness := api.NewReadiness()
 	cmd := newServeCmd(supply(serveParams{
+		Policy:    testPolicy,
 		Logger:    zap.NewNop(),
 		Store:     s.store,
 		Keys:      keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048))),

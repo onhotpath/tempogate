@@ -41,6 +41,12 @@ data:
   {{- with .Values.auth.allowedHostedDomains }}
   OIDC_ALLOWED_HOSTED_DOMAINS: {{ join "," . | quote }}
   {{- end }}
+  {{- range $i, $rule := .Values.authz.rules }}
+  OIDC_AUTHZ_RULES_{{ $i }}: {{ $rule | quote }}
+  {{- end }}
+  {{- with .Values.authz.defaultPermissions }}
+  OIDC_AUTHZ_DEFAULT_PERMISSIONS: {{ . | quote }}
+  {{- end }}
   {{- with .Values.auth.upstream.google.authEndpoint }}
   OIDC_GOOGLE_AUTH_ENDPOINT: {{ . | quote }}
   {{- end }}

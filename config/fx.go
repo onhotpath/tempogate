@@ -50,6 +50,8 @@ type Result struct {
 	OIDCAccessTokenAud    string        `name:"oidc_access_token_audience"`
 	OIDCRefreshTokenTTL   time.Duration `name:"oidc_refresh_token_ttl"`
 	OIDCRefreshMaxLife    time.Duration `name:"oidc_refresh_max_lifetime"`
+	OIDCAuthzRules        []string      `name:"oidc_authz_rules"`
+	OIDCAuthzDefault      string        `name:"oidc_authz_default_permissions"`
 	GoogleClientID        string        `name:"google_client_id"`
 	GoogleClientSecret    string        `name:"google_client_secret"`
 	GoogleAuthEndpoint    string        `name:"google_auth_endpoint"`
@@ -117,6 +119,8 @@ func project(cfg *Config) Result {
 		OIDCAccessTokenAud:    cfg.OIDC.AccessTokenAudience,
 		OIDCRefreshTokenTTL:   cfg.OIDC.RefreshTokenTTL,
 		OIDCRefreshMaxLife:    cfg.OIDC.RefreshMaxLifetime,
+		OIDCAuthzRules:        cfg.OIDC.Authz.Rules,
+		OIDCAuthzDefault:      cfg.OIDC.Authz.DefaultPermissions,
 		GoogleClientID:        cfg.OIDC.Google.ClientID,
 		GoogleClientSecret:    cfg.OIDC.Google.ClientSecret,
 		GoogleAuthEndpoint:    cfg.OIDC.Google.AuthEndpoint,

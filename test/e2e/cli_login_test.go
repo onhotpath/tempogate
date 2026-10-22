@@ -75,7 +75,8 @@ const (
 // OIDC_* keys the server's fx graph has required since the device-flow
 // verification UI's signed-cookie session work landed: the signing key,
 // the internal `tempogate-device-ui` client (registered with a confidential
-// secret), and its callback under callbackIssuer. Existing OIDC_CLIENTS /
+// secret), and its callback under callbackIssuer. It also sets the
+// authorization rule serve requires (see e2eAdminRule). Existing OIDC_CLIENTS /
 // OIDC_CLIENT_SECRETS entries are preserved — the device-ui registration
 // is appended — so harnesses that already register their own clients
 // (loopback CLI, temporal-ui SSO, noop admin tests) keep working unchanged.
@@ -101,7 +102,20 @@ func addDeviceUIServerEnv(env map[string]string, callbackIssuer string) {
 	// http, which non-loopback redirect URI registrations only accept with
 	// this dev-only opt-in.
 	env["OIDC_ALLOW_INSECURE_REDIRECT_URIS"] = "true"
+	// serve refuses to start without authorization configured. Unless the
+	// stack sets its own, an explicit rule gives every example.com identity
+	// (the only allowed domain of these stacks) temporal-system:admin: the
+	// grant they asserted before rules existed, through the real rule path
+	// rather than the OIDC_AUTHZ_DEFAULT_PERMISSIONS escape hatch, which
+	// TestAuthzLegacyDefault covers on its own.
+	if env["OIDC_AUTHZ_RULES_0"] == "" && env["OIDC_AUTHZ_DEFAULT_PERMISSIONS"] == "" {
+		env["OIDC_AUTHZ_RULES_0"] = e2eAdminRule
+	}
 }
+
+// e2eAdminRule is the rule the shared stacks run with (see
+// addDeviceUIServerEnv).
+const e2eAdminRule = "domain:example.com=temporal-system:admin"
 
 // jwtPattern matches a compact JWS (three base64url segments) so the token a
 // subcommand prints can be lifted out of multiplexed exec output regardless of
@@ -320,7 +334,7 @@ func assertTempogateJWT(t *testing.T, raw string) {
 	perms, ok := parsed.Field("permissions")
 	require.True(t, ok)
 	require.Equal(t, []any{"temporal-system:admin"}, perms,
-		"flat Hour-0 authz: System Admin (Temporal's default ClaimMapper has no namespace wildcard)")
+		"the stack's e2eAdminRule grants example.com System Admin (Temporal's default ClaimMapper has no namespace wildcard)")
 }
 
 // ---------- cli-side helpers ----------

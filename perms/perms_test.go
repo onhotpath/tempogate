@@ -157,6 +157,13 @@ func (s *PermsSuite) TestMergeIsUnionWithHighestRolePerNamespace() {
 	s.Equal([]string{"orders:read", "payments:write"}, a.ToClaim(), "inputs are not mutated")
 }
 
+func (s *PermsSuite) TestNilGrantGrantsNothing() {
+	var g *Grant
+	s.True(g.Empty())
+	s.Empty(g.Namespaces())
+	s.Equal([]string{}, g.ToClaim())
+}
+
 func (s *PermsSuite) TestMergeOfNothingIsEmpty() {
 	s.True(Merge().Empty())
 	s.True(Merge(nil, New()).Empty())

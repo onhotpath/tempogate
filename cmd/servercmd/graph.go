@@ -11,6 +11,7 @@ import (
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/api"
+	"github.com/onhotpath/tempogate/authz"
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/metrics"
@@ -87,6 +88,7 @@ func serverModules() []fx.Option {
 		metrics.Fx(),
 		sqlite.Fx(),
 		keys.Fx(),
+		authz.Fx(),
 		oidc.Fx(),
 		admin.Fx(),
 		google.Fx(),

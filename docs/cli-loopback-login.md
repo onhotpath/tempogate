@@ -100,6 +100,15 @@ form is rejected at startup.
 
 The signed-in email must also pass `OIDC_ALLOWED_DOMAINS`, the same gate the
 Web UI flow uses.
+What the token may do in Temporal comes from the server's
+[authorization rules](configuration.md#authorization), and the default is
+deny: an operator grants access with a rule such as
+`OIDC_AUTHZ_RULES_0=email:alice@example.com=orders:write`.
+An admitted user no rule matches gets no token; `tempogate login` exits
+non-zero with
+`access_denied: no Temporal access is granted to this account; ask an administrator for access`.
+A rule change reaches an existing login at its next `tempogate token` refresh,
+and removing someone's last grant makes that refresh fail with `invalid_grant`.
 
 ## Usage
 

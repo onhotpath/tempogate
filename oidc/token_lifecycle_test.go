@@ -86,6 +86,7 @@ func (s *RefreshLifecycleSuite) serve(allowedDomains string) {
 	}
 	s.logs = &bytes.Buffer{}
 	opts := []oidc.TokenOption{
+		oidc.WithPermissionResolver(permitAll),
 		oidc.WithTokenClock(s.clock),
 		oidc.WithRefreshGenerator(s.nextRefresh),
 		oidc.WithAllowedDomains(allowedDomains),
@@ -417,7 +418,7 @@ func TestRefreshWithoutAllowlistFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok := oidc.NewToken(store, keys.NewSigner(), reg, oidc.WithTokenClock(func() time.Time { return signNow }))
+	tok := oidc.NewToken(store, keys.NewSigner(), reg, oidc.WithPermissionResolver(permitAll), oidc.WithTokenClock(func() time.Time { return signNow }))
 	mux := http.NewServeMux()
 	tok.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
 	srv := httptest.NewServer(mux)

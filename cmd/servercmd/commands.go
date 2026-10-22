@@ -3,6 +3,8 @@ package servercmd
 import (
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
+
+	"github.com/onhotpath/tempogate/authz"
 )
 
 // asCommand annotates a *cobra.Command-returning constructor so its result is
@@ -14,7 +16,7 @@ func asCommand(constructor any) any {
 }
 
 // Fx contributes the server-bound subcommands (serve, migrate, keys,
-// sessions, gen-oas) into the cobra command group. Wired only by the full app
+// sessions, gen-oas, authz) into the cobra command group. Wired only by the full app
 // assembly; absent from the lean CLI build.
 //
 // The commands themselves depend only on the shared graph base; each builds
@@ -37,6 +39,9 @@ func Fx() fx.Option {
 			}),
 			asCommand(func(g graph) *cobra.Command {
 				return newGenOASCmd(lazy[genOASParams](g, serverModules()...))
+			}),
+			asCommand(func(g graph) *cobra.Command {
+				return newAuthzCmd(lazy[authzParams](g, authz.Fx()))
 			}),
 		),
 	)

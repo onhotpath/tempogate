@@ -204,6 +204,22 @@ func (s *ConfigSuite) TestNew() {
 			}(),
 		},
 		{
+			name: "authz rules and default from indexed env keys",
+			env: map[string]string{
+				"OIDC_AUTHZ_RULES_0":             "email:alice@example.com=orders:read",
+				"OIDC_AUTHZ_RULES_1":             "domain:example.com=payments:write",
+				"OIDC_AUTHZ_DEFAULT_PERMISSIONS": "temporal-system:admin",
+			},
+			want: func() *Config {
+				c := defaultConfig()
+				c.OIDC.Authz = AuthzConfig{
+					Rules:              []string{"email:alice@example.com=orders:read", "domain:example.com=payments:write"},
+					DefaultPermissions: "temporal-system:admin",
+				}
+				return c
+			}(),
+		},
+		{
 			name: "key lifetimes overridden by env",
 			env: map[string]string{
 				"ADMIN_KEYS_MAX_TTL":    "720h",

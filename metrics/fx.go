@@ -29,6 +29,7 @@ func Fx() fx.Option {
 				fx.As(new(oidc.LoginObserver)),
 				fx.As(new(oidc.TokenObserver)),
 				fx.As(new(oidc.RateLimitObserver)),
+				fx.As(new(oidc.AuthzObserver)),
 				fx.As(new(google.Observer)),
 				fx.As(new(sqlite.ErrorObserver)),
 				fx.As(fx.Self()),
