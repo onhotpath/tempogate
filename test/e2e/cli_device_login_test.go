@@ -12,10 +12,12 @@
 // v0.15.1 / headless-shell 131 but the browser refuses to navigate the
 // page (verified locally with explicit Location captures between actions:
 // the URL stays at the verification URI). Driving the same POST → 303 →
-// authorize → mock /auth → 302 chain via net/http with a hand-rolled
-// cookie passes through the identical server-side handlers — the same
-// /device_authorization, /authorize, /callback/google, /device/sso-callback,
-// /device/confirm, /device/approve|deny endpoints a real browser would hit.
+// authorize → mock /auth → 302 chain via net/http with a cookie jar that
+// addresses tempogate by its network URL passes through the identical
+// server-side handlers (the same /device_authorization, /authorize,
+// /callback/google, /device/sso-callback, /device/confirm,
+// /device/approve|deny endpoints a real browser would hit) and applies the
+// session cookie's Path and Secure attributes as a browser would.
 // chromedp is still used to confirm the verification page renders end-to-
 // end in chrome before the HTTP driver takes over.
 //
@@ -335,119 +337,17 @@ func (s *cliStack) confirmRenders(ctx context.Context, t *testing.T, verificatio
 	), "verification page must render with #user_code visible")
 }
 
-// driveDeviceDecision walks the RFC 8628 §3.3 verification UI via plain
-// HTTP: POST /device with the user_code, follow the 303→/authorize→302
-// mock /auth bounce, click through the consent anchor, follow the
-// /auth/approve→/callback/google→/device/sso-callback chain, capture the
-// session cookie that /device/sso-callback hands out, GET /device/confirm,
-// then POST /device/<decision> with the cookie + CSRF token. Every endpoint
-// touched is the same one a real browser would hit; the test stays focused
-// on the server-side flow rather than chromedp's synthetic-click pipeline.
-//
-// All requests are sent to the host-mapped tempogate / mockgoogle ports.
-// The bounce's Location headers come back with the docker-internal hosts
-// (http://tempogate:8000/..., http://mockgoogle:8080/...), so we rewrite
-// each Location to the equivalent host-mapped URL before issuing the next
-// request. The session cookie is captured by hand and re-sent on the
-// confirm + decision POSTs — net/http/cookiejar respects the Secure
-// attribute and would not send the cookie over plain HTTP otherwise; for
-// this test, the cookie's bearer-token property is what matters, not
-// transport security.
+// driveDeviceDecision walks the RFC 8628 §3.3 verification UI through a
+// cookie-jar browser client (see driveVerificationUI), so the session cookie
+// is returned only where its Path and Secure attributes allow, as in a real
+// browser.
 func (s *cliStack) driveDeviceDecision(ctx context.Context, t *testing.T, userCode, decision string) {
 	t.Helper()
-	const (
-		internalTempogate  = "http://tempogate:8000"
-		internalMockGoogle = "http://mockgoogle:8080"
-	)
-	// fixURL rewrites a Location header returned by tempogate/mockgoogle
-	// into something the host-mapped HTTP client can dial. Absolute
-	// docker-internal URLs (http://tempogate:8000/…) get their scheme+host
-	// swapped to the mapped base; relative Locations (e.g.
-	// "/device/confirm?…" coming back from /device/sso-callback's 303) get
-	// the tempogate base prepended.
-	fixURL := func(loc string) string {
-		if strings.HasPrefix(loc, "/") {
-			return s.tempogateBaseURL + loc
-		}
-		loc = strings.Replace(loc, internalTempogate, s.tempogateBaseURL, 1)
-		loc = strings.Replace(loc, internalMockGoogle, s.mockBaseURL, 1)
-		return loc
-	}
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	resp, err := client.PostForm(s.tempogateBaseURL+"/device", url.Values{"user_code": {userCode}})
-	require.NoError(t, err, "POST /device")
-	require.Equal(t, http.StatusSeeOther, resp.StatusCode,
-		"POST /device must 303 to /authorize, got %d", resp.StatusCode)
-	nextURL := fixURL(resp.Header.Get("Location"))
-	_ = resp.Body.Close()
-
-	var sessionCookie *http.Cookie
-	for hops := 0; hops < 12; hops++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, nil)
-		require.NoError(t, err, "build GET %s", nextURL)
-		if sessionCookie != nil {
-			req.AddCookie(sessionCookie)
-		}
-		resp, err := client.Do(req)
-		require.NoErrorf(t, err, "GET %s", nextURL)
-
-		for _, c := range resp.Cookies() {
-			if c.Name == oidc.DefaultSessionCookieName {
-				sessionCookie = c
-			}
-		}
-
-		if loc := resp.Header.Get("Location"); resp.StatusCode >= 300 && resp.StatusCode < 400 && loc != "" {
-			nextURL = fixURL(loc)
-			_ = resp.Body.Close()
-			continue
-		}
-
-		require.Equalf(t, http.StatusOK, resp.StatusCode,
-			"unexpected status %d at %s", resp.StatusCode, nextURL)
-		body, err := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		require.NoError(t, err, "read body of %s", nextURL)
-
-		if strings.Contains(string(body), `id="approve"`) {
-			href := mockApproveHrefPattern.FindStringSubmatch(string(body))
-			require.NotEmptyf(t, href, "no /auth/approve href in mock-google consent page:\n%s", body)
-			nextURL = s.mockBaseURL + href[1]
-			continue
-		}
-		if csrf := csrfTokenPattern.FindStringSubmatch(string(body)); len(csrf) > 1 {
-			require.NotNilf(t, sessionCookie,
-				"reached /device/confirm without picking up a %s cookie", oidc.DefaultSessionCookieName)
-			form := url.Values{"csrf_token": {csrf[1]}, "user_code": {userCode}}
-			req2, err := http.NewRequestWithContext(ctx, http.MethodPost,
-				s.tempogateBaseURL+"/device/"+decision, strings.NewReader(form.Encode()))
-			require.NoError(t, err)
-			req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			// tempogate's originAllowed CSRF defence requires Origin to
-			// match the issuer's scheme+host. The host-mapped URL we POST
-			// against has a different host, so spell the issuer-side Origin
-			// explicitly — the request is server-side equivalent either
-			// way, and this header is the one a real browser would send.
-			req2.Header.Set("Origin", internalTempogate)
-			req2.AddCookie(sessionCookie)
-			resp2, err := client.Do(req2)
-			require.NoErrorf(t, err, "POST /device/%s", decision)
-			body2, _ := io.ReadAll(resp2.Body)
-			_ = resp2.Body.Close()
-			require.Equalf(t, http.StatusOK, resp2.StatusCode,
-				"POST /device/%s must 200 with the success/denied page, got %d; body:\n%s",
-				decision, resp2.StatusCode, body2)
-			return
-		}
-		t.Fatalf("unexpected HTML at %s (no #approve, no csrf_token):\n%s", nextURL, body)
-	}
-	t.Fatal("verification-UI driver exceeded the redirect budget without reaching /device/confirm")
+	browser := newBrowserClient(t, map[string]string{
+		"tempogate:8000":  strings.TrimPrefix(s.tempogateBaseURL, "http://"),
+		"mockgoogle:8080": strings.TrimPrefix(s.mockBaseURL, "http://"),
+	})
+	driveVerificationUI(ctx, t, browser, tempogateIssuer, userCode, decision)
 }
 
 // mockApproveHrefPattern extracts the relative /auth/approve URL the mock

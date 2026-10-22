@@ -86,6 +86,8 @@ services:
       # cookie. Base64url-encoded 32-byte randomness. Demo value below; in real
       # deployments generate once with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`
       # and supply via a Secret. Must be stable across rolling restarts.
+      # With this plain-http issuer the cookie is not marked Secure; an https
+      # OIDC_ISSUER (any real deployment) makes it Secure automatically.
       OIDC_SESSION_SIGNING_KEY: "${TEMPOGATE_SESSION_SIGNING_KEY:-rR2qre32BN8f7gFU8Al1szcjZz9R8Ks2g8jtoJNizls}"
       OIDC_ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
       # Point tempogate's upstream Google client at the bundled mock.

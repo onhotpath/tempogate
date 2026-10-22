@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	testSessionSID     = "fixed-session-sid"
-	testSessionEmail   = "alice@example.com"
-	testSessionTTL     = 5 * time.Minute
-	testCookieName     = "tempogate_session"
-	testCookiePath     = "/idp/device"
+	testSessionSID   = "fixed-session-sid"
+	testSessionEmail = "alice@example.com"
+	testSessionTTL   = 5 * time.Minute
+	testCookieName   = "tempogate_session"
+	// The default path is the device-flow UI at a root issuer; the fx wiring
+	// prefixes the issuer base path (see TestSessionCookieFollowsIssuer).
+	testCookiePath     = oidc.DevicePath
 	testSigningKeyText = "0123456789abcdef0123456789abcdef"
 )
 
@@ -359,10 +361,10 @@ func (s *SessionSuite) TestClearMangledCookieDoesNotHitStore() {
 }
 
 // TestCookieAttributesAreFixed pins the security-critical attributes of the
-// issued cookie. Secure / HttpOnly / SameSite=Lax are not operator-tunable
-// — every code path must emit a cookie the browser refuses to send over
-// plain http, hides from javascript, and withholds on cross-site POSTs.
-// Path and Name are configurable; the rest is not.
+// issued cookie. HttpOnly / SameSite=Lax are never relaxed, and Secure is on
+// unless the caller opts out for a plain-http issuer (WithCookieSecure):
+// every code path must emit a cookie hidden from javascript and withheld on
+// cross-site POSTs.
 func (s *SessionSuite) TestCookieAttributesAreFixed() {
 	mgr := oidc.NewSessionManager(s.store, s.key,
 		oidc.WithSessionClock(func() time.Time { return testSessionNow }),
@@ -400,6 +402,34 @@ func (s *SessionSuite) TestCookieNameAndPathOverride() {
 	s.True(c.Secure)
 	s.True(c.HttpOnly)
 	s.Equal(http.SameSiteLaxMode, c.SameSite)
+}
+
+// TestCookieSecureOptOut covers the plain-http issuer case: a browser never
+// returns a Secure cookie over http, so the fx wiring turns Secure off for a
+// non-https issuer. Both the issued and the eviction cookie must agree, or
+// Clear could not overwrite the cookie Issue set.
+func (s *SessionSuite) TestCookieSecureOptOut() {
+	mgr := oidc.NewSessionManager(s.store, s.key,
+		oidc.WithSessionClock(func() time.Time { return testSessionNow }),
+		oidc.WithSessionSIDGenerator(func() (string, error) { return testSessionSID, nil }),
+		oidc.WithCookieSecure(false),
+	)
+	rec := httptest.NewRecorder()
+	_, err := mgr.Issue(s.ctx, rec, testSessionEmail)
+	s.Require().NoError(err)
+	issued := rec.Result().Cookies()
+	s.Require().Len(issued, 1)
+	s.False(issued[0].Secure, "Secure must be off when opted out")
+	s.True(issued[0].HttpOnly)
+	s.Equal(http.SameSiteLaxMode, issued[0].SameSite)
+
+	req := httptest.NewRequest(http.MethodGet, "http://tempogate.example.com"+testCookiePath, http.NoBody)
+	req.AddCookie(issued[0])
+	w := httptest.NewRecorder()
+	s.Require().NoError(mgr.Clear(s.ctx, w, req))
+	cleared := w.Result().Cookies()
+	s.Require().Len(cleared, 1)
+	s.False(cleared[0].Secure, "eviction cookie must match the issued cookie's Secure attribute")
 }
 
 func (s *SessionSuite) TestDefaultTTLIsFiveMinutes() {

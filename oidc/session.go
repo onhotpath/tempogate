@@ -23,8 +23,9 @@ const (
 	// DefaultSessionCookiePath scopes the cookie to the device-flow
 	// verification UI. A general-purpose tempogate login is not yet a
 	// product surface — narrowing Path keeps a leaked cookie inert outside
-	// the one route that consumes it.
-	DefaultSessionCookiePath = "/idp/device"
+	// the one route that consumes it. This is the path at a root issuer;
+	// the fx wiring prefixes the issuer's base path.
+	DefaultSessionCookiePath = DevicePath
 
 	// defaultSessionTTL is the upper bound on how long a verification-page
 	// session may sit between Google round-trip and Approve click. Short
@@ -83,8 +84,9 @@ type SessionManager struct {
 }
 
 type cookieAttrs struct {
-	name string
-	path string
+	name   string
+	path   string
+	secure bool
 }
 
 // SessionOption configures a SessionManager at construction. Every seam a
@@ -121,6 +123,14 @@ func WithCookiePath(path string) SessionOption {
 	return func(m *SessionManager) { m.cookie.path = path }
 }
 
+// WithCookieSecure controls the cookie's Secure attribute. Defaults to true.
+// The fx wiring passes false only for a plain-http issuer: a browser never
+// returns a Secure cookie over http, so the verification UI would loop back
+// to the upstream IdP forever.
+func WithCookieSecure(secure bool) SessionOption {
+	return func(m *SessionManager) { m.cookie.secure = secure }
+}
+
 // NewSessionManager builds a SessionManager. signingKey is the HMAC-SHA256
 // key the cookie's MAC is computed under; callers are expected to sieve a
 // length-32 key out of OIDC_SESSION_SIGNING_KEY at config load (failing
@@ -133,8 +143,9 @@ func NewSessionManager(store BrowserSessionStore, signingKey []byte, opts ...Ses
 		newSID:     randomSID,
 		ttl:        defaultSessionTTL,
 		cookie: cookieAttrs{
-			name: DefaultSessionCookieName,
-			path: DefaultSessionCookiePath,
+			name:   DefaultSessionCookieName,
+			path:   DefaultSessionCookiePath,
+			secure: true,
 		},
 	}
 	for _, o := range opts {
@@ -178,12 +189,12 @@ func (m *SessionManager) IssueCookie(ctx context.Context, email string) (string,
 		return "", nil, fmt.Errorf("oidc: persist browser session: %w", err)
 	}
 
-	return sid, &http.Cookie{
+	return sid, &http.Cookie{ //nolint:gosec // G124: Secure is off only for a plain-http issuer (WithCookieSecure)
 		Name:     m.cookie.name,
 		Value:    m.signCookie(sid),
 		Path:     m.cookie.path,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   m.cookie.secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(m.ttl.Seconds()),
 	}, nil
@@ -224,12 +235,12 @@ func (m *SessionManager) Clear(ctx context.Context, w http.ResponseWriter, r *ht
 			return fmt.Errorf("oidc: delete browser session: %w", err)
 		}
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure is off only for a plain-http issuer (WithCookieSecure)
 		Name:     m.cookie.name,
 		Value:    "",
 		Path:     m.cookie.path,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   m.cookie.secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

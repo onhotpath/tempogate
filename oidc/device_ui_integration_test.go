@@ -78,15 +78,10 @@ func (s *DeviceUIIntegrationSuite) SetupTest() {
 
 	s.signKey = []byte("0123456789abcdef0123456789abcdef")
 	s.issuer = testIssuer
-	// The integration server is httptest TLS without a /idp base path; the
-	// production default cookie path "/idp/device" therefore would not
-	// match any test request. Widening to "/" keeps the same Secure +
-	// HttpOnly attributes the cookie ships with in production while
-	// letting the jar return the cookie on every request the bounce
-	// touches.
+	// No cookie path override: the production default (the device UI at a
+	// root issuer, Secure) must be what the jar returns on the bounce.
 	sessions := oidc.NewSessionManager(store, s.signKey,
 		oidc.WithSessionTTL(5*time.Minute),
-		oidc.WithCookiePath("/"),
 	)
 
 	authorizer := oidc.New(store, reg, s.issuer, testGoogleCID, s.mg.issuer()+"/auth")
@@ -408,9 +403,11 @@ func insecureTLSTransport() *http.Transport {
 // / Deny POST, so it inverts the encoding without importing the production
 // signCookie helper.
 func (s *DeviceUIIntegrationSuite) sessionSID() string {
-	srvURL, err := url.Parse(s.srv.URL)
+	// The cookie is path-scoped to the device UI, so ask the jar for what it
+	// would send there rather than at the server root.
+	confirmURL, err := url.Parse(s.srv.URL + oidc.DeviceConfirmPath)
 	s.Require().NoError(err)
-	for _, c := range s.browser.Jar.Cookies(srvURL) {
+	for _, c := range s.browser.Jar.Cookies(confirmURL) {
 		if c.Name != "tempogate_session" {
 			continue
 		}
