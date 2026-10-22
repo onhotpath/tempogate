@@ -198,7 +198,7 @@ independently).
 
 The `/admin/keys` admin API deliberately mints one (namespace, role) per key
 so audit and rotation always reason over a minimal scope; a caller that needs
-multi-namespace authorization issues several keys, or — for humans — gets the
+multi-namespace authorization issues several keys or, for humans, gets the
 multi-namespace shape from the [authorization rules](#authorization) through
 the OIDC `/token` path.
 

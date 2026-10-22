@@ -1,5 +1,6 @@
 // Package servercmd holds the server-bound subcommands (serve, migrate,
-// keys, sessions, gen-oas, authz) — the ones that need the SQLite state store and the OIDC/API stack.
+// keys, sessions, gen-oas, authz): the ones that need the SQLite state
+// store and the OIDC/API stack.
 //
 // It is wired into the cobra command group only by the full app assembly
 // (app/modules_full.go). The lean CLI build never imports this package, so
