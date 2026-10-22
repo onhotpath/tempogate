@@ -5,7 +5,7 @@
 #   2. the one-shot `tempogate-migrate` service exits 0. It runs with only
 #      STATE_SQLITE_PATH (and an issuer) set, so it fails if a non-serve
 #      subcommand ever requires server config again;
-#   3. with BOOT=1, the `tempogate` service then boots against the migrated
+#   3. unless BOOT=0, the `tempogate` service then boots against the migrated
 #      volume and the bundled mock IdP: /readyz answers 200 and the discovery
 #      document advertises the example's issuer.
 # The project and its volume are always removed on exit.
@@ -16,15 +16,12 @@
 #   IMAGE       image to test (default tempogate:smoke)
 #   SKIP_BUILD  set to 1 to use an already built IMAGE
 #   PROJECT     compose project name (default tempogate-smoke)
-#   BOOT        set to 1 to also boot `tempogate serve` (step 3). Off by
-#               default: TODO(#12) the example's `tempogate-device:` client
-#               entry has no redirect URI, which `serve` rejects until #12
-#               lands. Turn it on by default (and in CI) once it has.
+#   BOOT        set to 0 to skip booting `tempogate serve` (step 3)
 set -euo pipefail
 
 IMAGE="${IMAGE:-tempogate:smoke}"
 PROJECT="${PROJECT:-tempogate-smoke}"
-BOOT="${BOOT:-0}"
+BOOT="${BOOT:-1}"
 TIMEOUT_SECONDS=120
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -93,7 +90,7 @@ compose up --no-build --no-deps --abort-on-container-exit --exit-code-from tempo
 echo "    ok"
 
 if [ "$BOOT" != "1" ]; then
-  echo "PASS: compose files render and tempogate-migrate exited 0 (BOOT=1 not set: serve not booted)"
+  echo "PASS: compose files render and tempogate-migrate exited 0 (BOOT=0: serve not booted)"
   exit 0
 fi
 
@@ -106,7 +103,7 @@ compose up --detach --no-build tempogate
 addr="$(compose port tempogate 8000)"
 base_url="http://$addr"
 deadline=$((SECONDS + TIMEOUT_SECONDS))
-until curl -fsS -o /dev/null "$base_url/readyz"; do
+until curl -fs -o /dev/null "$base_url/readyz"; do
   if [ "$(compose ps --status running --quiet tempogate)" = "" ]; then
     echo "FAIL: tempogate exited before becoming ready" >&2
     exit 1

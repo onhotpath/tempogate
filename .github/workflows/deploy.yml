@@ -7,7 +7,8 @@ name: deploy
 #   kind:    install the chart into a kind cluster with an image built from
 #            this commit (migrate initContainer, Ready, upgrade, helm test);
 #   compose: `docker compose config` on every example compose file, and the
-#            docker-compose example's migrate service.
+#            docker-compose example's migrate service, then `tempogate serve`
+#            booted to /readyz.
 # No path filter: a change anywhere in the binary can break a deployment.
 #
 # Tool versions are pinned. kind, kubeconform and yq are built by the Makefile
@@ -142,7 +143,7 @@ jobs:
         run: make test-deploy-kind SKIP_BUILD=1 DEPLOY_IMAGE="$DEPLOY_IMAGE"
 
   compose:
-    name: compose config + migrate
+    name: compose config + migrate + boot
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -160,7 +161,5 @@ jobs:
           load: true
           cache-from: type=gha,scope=deploy-tempogate
 
-      # TODO(#12): add BOOT=1 (boot `tempogate serve` to /readyz) once the
-      # example's `tempogate-device:` client entry is accepted by serve.
-      - name: compose smoke (config, migrate)
+      - name: compose smoke (config, migrate, boot)
         run: make test-deploy-compose SKIP_BUILD=1 DEPLOY_IMAGE="$DEPLOY_IMAGE"

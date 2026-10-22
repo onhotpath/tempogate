@@ -40,7 +40,7 @@ Its jobs run the same Make targets locally (they install pinned kind, kubeconfor
 make lint-chart           # helm lint --strict + kubeconform -strict, no cluster
 make test-chart           # static assertions on the rendered chart
 make test-deploy-kind     # install, upgrade and helm test in a throwaway kind cluster
-make test-deploy-compose  # docker compose config + the compose example's migrate service
+make test-deploy-compose  # docker compose config, then migrate and boot the compose example
 ```
 
 ### Bumping Go
