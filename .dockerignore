@@ -1,0 +1,21 @@
+# The Dockerfiles (tempogate, and the e2e mock-Google and cliclient images)
+# all build from the repo root and need only the Go module: sources, go:embed
+# assets (oidc/templates, state/sqlite/migrations) and test/e2e/cliclient's
+# xdg-open shim. Leaving the rest out keeps the context small and lets
+# docs- or chart-only changes reuse the cached `COPY . .` layer.
+#
+# .git is not needed: version info comes from build args, and the builder
+# image has no git, so Go never stamped VCS info into the binary anyway.
+.git
+.github
+.claude
+.bin
+dist
+coverage.*
+*.db
+.env
+Casks
+charts
+docs
+examples
+**/*.md
