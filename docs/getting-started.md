@@ -24,6 +24,11 @@ not needed here.
 
 ## 1. Run it locally
 
+> [!CAUTION]
+> **The example stack is DEV ONLY. Never expose it to a network.**
+> Its mock IdP signs in **anyone who can reach it as any identity**, with full Temporal access.
+> It publishes every port on `127.0.0.1` only and generates its secrets locally; keep it that way.
+
 One hostname-resolution line (explained in the
 [example README](../examples/docker-compose/README.md#why-the-etchosts-line)),
 then one command:
@@ -32,6 +37,7 @@ then one command:
 echo "127.0.0.1 tempogate temporal-ui mockoidc" | sudo tee -a /etc/hosts
 git clone https://github.com/onhotpath/tempogate.git
 cd tempogate/examples/docker-compose
+./gen-env.sh > .env       # fresh random secrets; compose refuses to start without them
 docker compose up --build
 ```
 
@@ -68,8 +74,8 @@ by verifying it against tempogate's JWKS, with no Temporal-side custom code.
 
 ![Authenticated Temporal UI](img/getting-started/03-authenticated.png)
 
-To see the rejection path, set `DEMO_EMAIL` to an out-of-domain address in
-`.env` (`cp .env.example .env`), `docker compose up -d`, and sign in again:
+To see the rejection path, add `DEMO_EMAIL=` with an out-of-domain address
+to `.env`, `docker compose up -d`, and sign in again:
 tempogate returns a 403 "not in an allowed domain" instead of a token.
 
 ## 3. Get a CLI token
