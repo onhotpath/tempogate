@@ -54,6 +54,13 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      # The tests' third-party images (postgres, Temporal, Temporal UI,
+      # headless Chrome; digest-pinned in test/e2e) download in the
+      # background while Go is set up and the e2e images build. Background
+      # processes outlive the step; testcontainers pulls whatever is missing.
+      - name: Pre-pull third-party e2e images (background)
+        run: nohup make test-e2e-pull > "$RUNNER_TEMP/e2e-pull.log" 2>&1 &
+
       # The e2e job's own Go cache (its e2e-tagged deps - chromedp,
       # testcontainers, the Temporal API - differ from the unit jobs').
       - id: go
@@ -141,6 +148,10 @@ jobs:
           load: true
           cache-from: type=gha,scope=e2e-cliclient
           cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=e2e-cliclient' || '' }}
+
+      - name: Pre-pull log
+        if: always()
+        run: cat "$RUNNER_TEMP/e2e-pull.log" || true
 
       # Images are pre-built (and cached) above; this only runs the tests,
       # picking them up via the E2E_*_IMAGE defaults the Makefile passes.

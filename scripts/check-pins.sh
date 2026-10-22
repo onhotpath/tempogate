@@ -5,7 +5,10 @@
 #     40-char commit SHA followed by a `# vX.Y.Z` comment (what Renovate's
 #     pinGitHubActionDigests writes);
 #   - every Dockerfile base image (FROM, including one taken from an ARG
-#     default) and `# syntax=` frontend must carry an `@sha256:` digest.
+#     default) and `# syntax=` frontend must carry an `@sha256:` digest;
+#   - so must every third-party image the e2e tests run (the imageOr defaults
+#     listed by scripts/e2e-images.sh) and every image a workflow passes to an
+#     action input (`image:` / `*-image:`).
 # Renovate keeps both the versions and the digests current; see renovate.json.
 set -euo pipefail
 
@@ -48,6 +51,21 @@ bad_from=$(awk '
 if [ -n "$bad_from" ]; then
   echo "check-pins: pin these base images by digest (image:tag@sha256:...):"
   echo "$bad_from"
+  status=1
+fi
+
+bad_e2e=$(./scripts/e2e-images.sh | grep -vE '^[^@[:space:]]+:[^@[:space:]]+@sha256:[0-9a-f]{64}$' || true)
+if [ -n "$bad_e2e" ]; then
+  echo "check-pins: pin these e2e test images (imageOr defaults in test/e2e) by digest (image:tag@sha256:...):"
+  echo "$bad_e2e"
+  status=1
+fi
+
+bad_input_images=$(grep -nE '^[[:space:]]*([a-z-]+-)?image:' "${workflows[@]}" \
+  | grep -vE 'image:[[:space:]]*["'\'']?[^@[:space:]]+:[^@[:space:]]+@sha256:[0-9a-f]{64}["'\'']?[[:space:]]*(#.*)?$' || true)
+if [ -n "$bad_input_images" ]; then
+  echo "check-pins: pin these workflow images by digest (image:tag@sha256:...):"
+  echo "$bad_input_images"
   status=1
 fi
 

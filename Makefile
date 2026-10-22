@@ -20,7 +20,7 @@ LDFLAGS := -s -w \
 	-X '$(BUILDINFO).gitCommit=$(GIT_COMMIT)' \
 	-X '$(BUILDINFO).buildDate=$(BUILD_DATE)'
 
-.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
+.PHONY: start build build-cli fmt vet lint imports imports-check check tidy test test-run test-e2e test-e2e-images test-e2e-go test-e2e-pull test-deploy test-deploy-kind test-deploy-compose ci vuln go-version-check check-supply-chain gen-oas clean help tools \
         gci golangci-lint govulncheck actionlint
 
 start: ## Run the binary directly with build-info ldflags injected
@@ -139,6 +139,12 @@ test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 	E2E_TEMPOGATE_IMAGE=$(E2E_TEMPOGATE_IMAGE) E2E_MOCKGOOGLE_IMAGE=$(E2E_MOCKGOOGLE_IMAGE) \
 	E2E_CLICLIENT_IMAGE=$(E2E_CLICLIENT_IMAGE) \
 		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 ./test/e2e/...
+
+# CI pulls the third-party e2e images (the tests' digest-pinned imageOr
+# defaults, see scripts/e2e-images.sh) in the background while it builds the
+# e2e images; anything not yet pulled is pulled by testcontainers itself.
+test-e2e-pull: ## pre-pull the third-party images the e2e tests run
+	./scripts/e2e-images.sh | xargs -P 4 -n 1 docker pull -q
 
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
 
