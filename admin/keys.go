@@ -9,8 +9,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/perms"
 )
 
 const (
@@ -34,6 +36,8 @@ type Keys struct {
 	registry     KeyRegistry
 	signer       *keys.Signer
 	hydrator     DenylistHydrator
+	logger       *zap.Logger
+	systemGrants bool
 	now          func() time.Time
 	newID        func() (string, error)
 	defaultLimit int
@@ -77,6 +81,24 @@ func WithDenylistHydrator(h DenylistHydrator) KeysOption {
 	return func(k *Keys) { k.hydrator = h }
 }
 
+// WithLogger sets the logger the audit trail is written to.
+//
+// Panics on nil for the same reason as WithClock.
+func WithLogger(l *zap.Logger) KeysOption {
+	if l == nil {
+		panic("admin: WithLogger requires a non-nil logger")
+	}
+	return func(k *Keys) { k.logger = l }
+}
+
+// WithSystemGrants permits minting keys for perms.SystemNamespace. Temporal
+// ORs a system role into every namespace decision, so such a key is a
+// cluster-wide credential; refusing it by default bounds what a leaked admin
+// token can mint.
+func WithSystemGrants(allow bool) KeysOption {
+	return func(k *Keys) { k.systemGrants = allow }
+}
+
 // NewKeys wires the registry and signer the handler will call on every
 // request. Both are required: a nil registry would NPE inside Save/ByID/etc.
 // on the first call; a nil signer would NPE inside Mint. Panicking here turns
@@ -92,6 +114,7 @@ func NewKeys(registry KeyRegistry, signer *keys.Signer, opts ...KeysOption) *Key
 	k := &Keys{
 		registry:     registry,
 		signer:       signer,
+		logger:       zap.NewNop(),
 		now:          func() time.Time { return time.Now().UTC() },
 		newID:        defaultNewID,
 		defaultLimit: defaultListLimit,
@@ -191,9 +214,14 @@ type deleteOutput struct {
 	Status int
 }
 
+// adminSecurity is the requirement every keys operation declares, so the
+// generated admin OpenAPI documents that they need the bearer token.
+var adminSecurity = []map[string][]string{{SecurityScheme: {}}}
+
 func (h *Keys) Register(api huma.API) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "admin-create-key",
+		Security:      adminSecurity,
 		Method:        http.MethodPost,
 		Path:          KeysPath,
 		Summary:       "Mint a new integration key + JWT",
@@ -203,6 +231,7 @@ func (h *Keys) Register(api huma.API) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-get-key",
+		Security:    adminSecurity,
 		Method:      http.MethodGet,
 		Path:        KeysIDPath,
 		Summary:     "Fetch integration-key metadata (never the JWT)",
@@ -211,6 +240,7 @@ func (h *Keys) Register(api huma.API) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-list-keys",
+		Security:    adminSecurity,
 		Method:      http.MethodGet,
 		Path:        KeysPath,
 		Summary:     "List integration keys (cursor-paginated, id-DESC)",
@@ -219,6 +249,7 @@ func (h *Keys) Register(api huma.API) {
 
 	huma.Register(api, huma.Operation{
 		OperationID:   "admin-delete-key",
+		Security:      adminSecurity,
 		Method:        http.MethodDelete,
 		Path:          KeysIDPath,
 		Summary:       "Revoke an integration key (soft delete, idempotent)",
@@ -234,8 +265,18 @@ func (h *Keys) create(ctx context.Context, in *createInput) (*createOutput, erro
 		WithOwner(in.Body.Owner),
 		WithExpiresAt(in.Body.ExpiresAt),
 	)
+	out, err := h.mint(ctx, k)
+	h.audit(ctx, "create", auditOutcome(err), *k)
+	return out, err
+}
+
+func (h *Keys) mint(ctx context.Context, k *IntegrationKey) (*createOutput, error) {
 	if err := k.Validate(); err != nil {
 		return nil, huma.Error400BadRequest(err.Error())
+	}
+	if k.Namespace == perms.SystemNamespace && !h.systemGrants {
+		return nil, huma.Error403Forbidden(perms.SystemNamespace +
+			" grants are cluster-wide and disabled; set ADMIN_ALLOW_SYSTEM_GRANTS=true to allow them")
 	}
 
 	id, err := h.newID()
@@ -334,15 +375,33 @@ func (h *Keys) list(ctx context.Context, in *listInput) (*listOutput, error) {
 }
 
 func (h *Keys) delete(ctx context.Context, in *deleteInput) (*deleteOutput, error) {
+	jti, err := h.revoke(ctx, in.ID)
+	row := IntegrationKey{ID: in.ID, JTI: jti}
+	if err == nil {
+		// Read back only so the audit line can say what was revoked; a
+		// failure here must not turn a completed revoke into an error.
+		if got, gerr := h.registry.ByID(ctx, in.ID); gerr == nil {
+			row = got
+		}
+	}
+	h.audit(ctx, "revoke", auditOutcome(err), row)
+	switch {
+	case err == nil:
+		return &deleteOutput{Status: http.StatusNoContent}, nil
+	case errors.Is(err, ErrIntegrationKeyNotFound):
+		return nil, huma.Error404NotFound("integration key not found")
+	default:
+		return nil, fmt.Errorf("admin: revoke integration key: %w", err)
+	}
+}
+
+func (h *Keys) revoke(ctx context.Context, id string) (string, error) {
 	// MarkRevoked returns the jti regardless of whether this is the first
 	// or a repeat revoke, so the denylist hydrate below runs on every call
 	// without worrying about idempotency.
-	jti, err := h.registry.MarkRevoked(ctx, in.ID)
+	jti, err := h.registry.MarkRevoked(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrIntegrationKeyNotFound) {
-			return nil, huma.Error404NotFound("integration key not found")
-		}
-		return nil, fmt.Errorf("admin: revoke integration key: %w", err)
+		return "", err
 	}
 	if h.hydrator != nil {
 		// Storage is already authoritative — MarkRevoked wrote the
@@ -351,5 +410,38 @@ func (h *Keys) delete(ctx context.Context, in *deleteInput) (*deleteOutput, erro
 		// could still hold a stale "active" entry for this jti.
 		h.hydrator.Hydrate(jti)
 	}
-	return &deleteOutput{Status: http.StatusNoContent}, nil
+	return jti, nil
+}
+
+// audit writes one line per mint or revoke attempt that passed the guard.
+// It carries ids and the caller's token fingerprint, never a token or JWT.
+func (h *Keys) audit(ctx context.Context, action, outcome string, k IntegrationKey) {
+	c := callerFrom(ctx)
+	h.logger.Info("admin audit",
+		zap.String("action", action),
+		zap.String("outcome", outcome),
+		zap.String("id", k.ID),
+		zap.String("jti", k.JTI),
+		zap.String("namespace", k.Namespace),
+		zap.String("role", string(k.Role)),
+		zap.String("owner", k.Owner),
+		zap.String("caller", c.fingerprint),
+		zap.String("remote_addr", c.remoteAddr),
+	)
+}
+
+func auditOutcome(err error) string {
+	var se huma.StatusError
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, ErrIntegrationKeyNotFound):
+		return "not_found"
+	case errors.As(err, &se) && se.GetStatus() == http.StatusForbidden:
+		return "denied"
+	case errors.As(err, &se) && se.GetStatus() == http.StatusBadRequest:
+		return "invalid"
+	default:
+		return "error"
+	}
 }

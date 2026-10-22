@@ -11,6 +11,15 @@ data:
   {{- with .Values.trustedProxies }}
   HTTP_TRUSTED_PROXIES: {{ join "," . | quote }}
   {{- end }}
+  {{- if .Values.service.admin.enabled }}
+  ADMIN_LISTENER: {{ printf "%s:%v" .Values.listenAddress .Values.service.admin.port | quote }}
+  {{- end }}
+  {{- with (include "tempogate.adminAllowedHosts" . | trim) }}
+  ADMIN_ALLOWED_HOSTS: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.admin.allowSystemGrants }}
+  ADMIN_ALLOW_SYSTEM_GRANTS: "true"
+  {{- end }}
   {{- with .Values.oidc.issuer }}
   OIDC_ISSUER: {{ . | quote }}
   {{- end }}

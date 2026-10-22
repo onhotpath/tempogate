@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/keys"
@@ -33,15 +36,61 @@ func TestFxSuite(t *testing.T) {
 	suite.Run(t, new(FxSuite))
 }
 
+// adminConfig supplies the named admin.* projections config.Fx provides.
+func adminConfig(tokenSHA256 string) fx.Option {
+	return fx.Options(
+		fx.Supply(
+			fx.Annotate(tokenSHA256, fx.ResultTags(`name:"admin_token_sha256"`)),
+			fx.Annotate([]string{"localhost:8081"}, fx.ResultTags(`name:"admin_allowed_hosts"`)),
+			fx.Annotate(false, fx.ResultTags(`name:"admin_allow_system_grants"`)),
+		),
+		fx.Supply(zap.NewNop()),
+	)
+}
+
+func (s *FxSuite) TestFxWarnsWhenAdminAPIIsLocked() {
+	core, logs := observer.New(zapcore.WarnLevel)
+	var installers struct {
+		fx.In
+		Middlewares []func(huma.API) `group:"admin_middlewares"`
+	}
+	fxtest.New(s.T(),
+		fx.Supply(
+			fx.Annotate("", fx.ResultTags(`name:"admin_token_sha256"`)),
+			fx.Annotate([]string{"localhost:8081"}, fx.ResultTags(`name:"admin_allowed_hosts"`)),
+		),
+		fx.Supply(zap.New(core)),
+		// Only the guard is populated, so fx never builds the keys
+		// registrar and its store/signer deps can stay out of this graph.
+		admin.Fx(),
+		fx.Populate(&installers),
+	).RequireStart().RequireStop()
+	s.Require().Len(installers.Middlewares, 1)
+	s.Len(logs.FilterMessageSnippet("admin API is locked").All(), 1)
+}
+
+func (s *FxSuite) TestFxRejectsMalformedTokenDigest() {
+	app := fx.New(
+		fx.NopLogger,
+		adminConfig("not-a-digest"),
+		admin.Fx(),
+		fx.Invoke(fx.Annotate(func([]func(huma.API)) {}, fx.ParamTags(`group:"admin_middlewares"`))),
+	)
+	s.Require().Error(app.Err())
+	s.Contains(app.Err().Error(), "ADMIN_TOKEN_SHA256")
+}
+
 func (s *FxSuite) TestFxProducesAdminRegistrar() {
 	var collected struct {
 		fx.In
-		AdminRegistrars []func(huma.API) `group:"admin_registrars"`
+		AdminRegistrars  []func(huma.API) `group:"admin_registrars"`
+		AdminMiddlewares []func(huma.API) `group:"admin_middlewares"`
 	}
 
 	dbPath := filepath.Join(s.T().TempDir(), "fx.db")
 
 	app := fxtest.New(s.T(),
+		adminConfig(digestHex(guardToken)),
 		fx.Provide(func() (*sqlite.Store, error) {
 			return sqlite.New(sqlite.WithPath(dbPath), sqlite.WithBusyTimeout(time.Second))
 		}),
@@ -70,6 +119,8 @@ func (s *FxSuite) TestFxProducesAdminRegistrar() {
 
 	s.Require().Len(collected.AdminRegistrars, 1,
 		"admin.Fx() must contribute exactly one registrar to admin_registrars")
+	s.Require().Len(collected.AdminMiddlewares, 1,
+		"admin.Fx() must contribute the guard to admin_middlewares")
 
 	// Bind the produced registrar to a real Huma adapter so a future
 	// rename of admin.KeysPath surfaces here at the assertion step.

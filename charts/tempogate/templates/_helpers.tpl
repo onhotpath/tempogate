@@ -115,6 +115,18 @@ Job.
       key: {{ required "auth.clientSecretsSecretRef.key is required when .name is set" .key }}
 {{- end }}
 {{- end }}
+{{- if and .Values.service.admin.enabled (not .Values.admin.tokenSha256SecretRef.name) }}
+{{- fail "service.admin.enabled requires admin.tokenSha256SecretRef: an exposed admin API without a token is locked and useless" }}
+{{- end }}
+{{- with .Values.admin.tokenSha256SecretRef }}
+{{- if .name }}
+- name: ADMIN_TOKEN_SHA256
+  valueFrom:
+    secretKeyRef:
+      name: {{ .name }}
+      key: {{ required "admin.tokenSha256SecretRef.key is required when .name is set" .key }}
+{{- end }}
+{{- end }}
 {{- with .Values.oidc.sessionSigningKeySecretRef }}
 {{- if .name }}
 - name: OIDC_SESSION_SIGNING_KEY
@@ -132,6 +144,24 @@ Job.
       name: {{ .name }}
       key: {{ required "keys.encryptionKeySecretRef.key is required when .name is set" .key }}
 {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+ADMIN_ALLOWED_HOSTS. Explicit admin.allowedHosts wins. With the admin Service
+enabled, default to its DNS names on the Service port plus portless loopback
+names (kubectl port-forward picks the local port), which a DNS-rebinding page
+cannot present. Otherwise empty, leaving the binary's loopback default.
+*/}}
+{{- define "tempogate.adminAllowedHosts" -}}
+{{- if .Values.admin.allowedHosts }}
+{{- join "," .Values.admin.allowedHosts }}
+{{- else if .Values.service.admin.enabled }}
+{{- $svc := printf "%s-admin" (include "tempogate.fullname" .) }}
+{{- $port := .Values.service.admin.port }}
+{{- $ns := .Release.Namespace }}
+{{- $hosts := list (printf "%s:%v" $svc $port) (printf "%s.%s:%v" $svc $ns $port) (printf "%s.%s.svc:%v" $svc $ns $port) (printf "%s.%s.svc.cluster.local:%v" $svc $ns $port) "127.0.0.1" "localhost" "[::1]" }}
+{{- join "," $hosts }}
 {{- end }}
 {{- end }}
 

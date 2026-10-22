@@ -156,6 +156,21 @@ func (s *ConfigSuite) TestNew() {
 			},
 		},
 		{
+			name: "admin auth overridden by env",
+			env: map[string]string{
+				"ADMIN_TOKEN_SHA256":        "aa,bb",
+				"ADMIN_ALLOWED_HOSTS":       "admin.internal:8081",
+				"ADMIN_ALLOW_SYSTEM_GRANTS": "true",
+			},
+			want: func() *Config {
+				c := defaultConfig()
+				c.Admin.TokenSHA256 = "aa,bb"
+				c.Admin.AllowedHosts = "admin.internal:8081"
+				c.Admin.AllowSystemGrants = true
+				return c
+			}(),
+		},
+		{
 			name: "admin listener overridden by env",
 			env: map[string]string{
 				"ADMIN_LISTENER": "127.0.0.1:9091",

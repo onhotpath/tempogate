@@ -7,12 +7,32 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    # Single listener: public OIDC/OAuth2 surface + /healthz + /readyz.
-    # A dedicated admin port is planned upstream; a second entry lands
-    # here when the binary grows one.
+    # Public listener: OIDC/OAuth2 surface + /healthz + /readyz. The admin
+    # port is never added here, so Ingress/HTTPRoute cannot reach it.
     - port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
       name: http
   selector:
     {{- include "tempogate.selectorLabels" . | nindent 4 }}
+{{- if .Values.service.admin.enabled }}
+---
+# Admin API (/admin/keys). Bearer-token authenticated and Host-checked by the
+# binary; keep it cluster-internal and restrict it further with a
+# NetworkPolicy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tempogate.fullname" . }}-admin
+  labels:
+    {{- include "tempogate.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.admin.type }}
+  ports:
+    - port: {{ .Values.service.admin.port }}
+      targetPort: admin
+      protocol: TCP
+      name: admin
+  selector:
+    {{- include "tempogate.selectorLabels" . | nindent 4 }}
+{{- end }}

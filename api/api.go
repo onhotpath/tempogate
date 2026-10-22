@@ -37,8 +37,13 @@ type apiConfig struct {
 	// middlewares wrap every operation on the public OIDC API; feature
 	// packages use them for cross-cutting request policy (rate limits).
 	middlewares []func(huma.Context, func(huma.Context))
-	basePath    string
-	docs        bool
+	// adminMiddlewares install Huma middleware on the admin API (the admin
+	// package's auth guard). They run after /admin/healthz is registered
+	// and before any admin registrar, so they wrap every admin route except
+	// the liveness probe.
+	adminMiddlewares []func(huma.API)
+	basePath         string
+	docs             bool
 }
 
 type Option func(*apiConfig)
@@ -69,6 +74,13 @@ func WithAdminRegistrar(fn func(huma.API)) Option {
 // before any registrar runs, whatever order the options arrive in.
 func WithMiddleware(fn func(huma.Context, func(huma.Context))) Option {
 	return func(c *apiConfig) { c.middlewares = append(c.middlewares, fn) }
+}
+
+// WithAdminMiddleware contributes an installer that adds middleware to the
+// admin Huma API. Whatever order options are given in, installers run before
+// the admin registrars, so a registrar cannot opt its routes out.
+func WithAdminMiddleware(fn func(huma.API)) Option {
+	return func(c *apiConfig) { c.adminMiddlewares = append(c.adminMiddlewares, fn) }
 }
 
 // WithBasePath mounts the OIDC surface under a URL path prefix — the path
@@ -144,7 +156,14 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 func newAdmin(cfg *apiConfig) *Surface {
 	mux := http.NewServeMux()
 	a := humago.NewWithPrefix(mux, "", cfg.humaConfig("tempogate-admin"))
+	// Huma binds the middleware chain when an operation is registered, so
+	// this order is what keeps the liveness probe open (probes cannot carry
+	// the admin token or a predictable Host) and every other admin route
+	// behind the guard.
 	registerAdminHealth(a)
+	for _, fn := range cfg.adminMiddlewares {
+		fn(a)
+	}
 	for _, fn := range cfg.adminRegistrars {
 		fn(a)
 	}

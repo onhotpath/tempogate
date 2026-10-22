@@ -74,7 +74,25 @@ Wired and exercised end to end:
 Authorization is currently flat: every admitted identity receives
 cluster-level access (`temporal-system:admin`), the value Temporal's default
 ClaimMapper needs for cluster APIs. Group- or role-derived per-namespace
-scoping and an admin API for long-lived integration keys are planned.
+scoping is planned; long-lived integration keys come from the admin API below.
+
+### Integration keys (admin API)
+
+`POST /admin/keys` mints a long-lived JWT for one (namespace, role) on a separate admin listener (`ADMIN_LISTENER`, default `127.0.0.1:8081`).
+Every `/admin/*` route except `/admin/healthz` needs a bearer admin token whose SHA-256 is listed in `ADMIN_TOKEN_SHA256`; with none configured the admin API is locked (401).
+Requests whose `Host` is not in `ADMIN_ALLOWED_HOSTS` get 421, and `temporal-system` (cluster-wide) grants get 403 unless `ADMIN_ALLOW_SYSTEM_GRANTS=true`.
+Every mint and revoke is written to an `admin audit` log line.
+
+```bash
+token=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+export ADMIN_TOKEN_SHA256=$(printf %s "$token" | sha256sum | cut -d' ' -f1)
+# after starting tempogate serve:
+curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+  -d '{"namespace":"payments","role":"worker","owner":"svc-payments"}' \
+  http://127.0.0.1:8081/admin/keys
+```
+
+See [docs/configuration.md](docs/configuration.md#admin-api) for all four settings.
 
 ### Revoking integration keys
 
@@ -312,6 +330,10 @@ separator.
 | `OIDC_GOOGLE_CLIENT_SECRET` | For any login | _(empty)_ | Upstream Google OAuth client secret |
 | `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
 | `HTTP_LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
+| `ADMIN_LISTENER` | No | `127.0.0.1:8081` | `host:port` for the separate admin listener (`/admin/*`) |
+| `ADMIN_TOKEN_SHA256` | To use the admin API | _(empty)_ | Comma-separated hex SHA-256 digests of accepted admin bearer tokens. Empty locks the admin API (401) |
+| `ADMIN_ALLOWED_HOSTS` | For a non-loopback admin bind | loopback names on the `ADMIN_LISTENER` port | Comma-separated `host[:port]` accepted in `Host`; others get 421 (DNS-rebinding defence) |
+| `ADMIN_ALLOW_SYSTEM_GRANTS` | No | `false` | Allow minting cluster-wide `temporal-system` keys (403 otherwise) |
 | `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
 | `KEYS_ENCRYPTION_KEY` / `KEYS_ENCRYPTION_KEY_FILE` | No | _(empty)_ | Base64 32-byte key (or a file holding it) that encrypts the stored signing key. See [Signing-key encryption](docs/configuration.md#signing-key-encryption) |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |

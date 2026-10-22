@@ -24,6 +24,9 @@ type Result struct {
 	RateLimitDeviceVerify int           `name:"http_rate_limit_device_verification"`
 	RateLimitToken        int           `name:"http_rate_limit_token"`
 	StateReaperInterval   time.Duration `name:"state_reaper_interval"`
+	AdminTokenSHA256      string        `name:"admin_token_sha256"`
+	AdminAllowedHosts     []string      `name:"admin_allowed_hosts"`
+	AdminAllowSystemGrant bool          `name:"admin_allow_system_grants"`
 	SqlitePath            string        `name:"sqlite_path"`
 	SqliteMaxConns        int           `name:"sqlite_max_conns"`
 	SqliteBusyTimeout     time.Duration `name:"sqlite_busy_timeout"`
@@ -77,6 +80,9 @@ func project(cfg *Config) Result {
 		RateLimitDeviceVerify: cfg.HTTP.RateLimit.DeviceVerification,
 		RateLimitToken:        cfg.HTTP.RateLimit.Token,
 		StateReaperInterval:   cfg.State.ReaperInterval,
+		AdminTokenSHA256:      cfg.Admin.TokenSHA256,
+		AdminAllowedHosts:     adminAllowedHosts(cfg.Admin),
+		AdminAllowSystemGrant: cfg.Admin.AllowSystemGrants,
 		SqlitePath:            cfg.State.Sqlite.Path,
 		SqliteMaxConns:        cfg.State.Sqlite.MaxConns,
 		SqliteBusyTimeout:     cfg.State.Sqlite.BusyTimeout,

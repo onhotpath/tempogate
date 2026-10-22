@@ -66,6 +66,38 @@ Never list a range that clients can connect from directly, or they can choose th
 | --- | --- | --- |
 | `API_DOCS_ENABLED` | `false` | Serves the OpenAPI document (`/openapi.json`, `/openapi.yaml`), the docs page (`/docs`) and the JSON schemas (`/schemas/*`) on both listeners, under the OIDC base path on the public one. Off, they return `404` and response bodies carry no `$schema` link. `tempogate gen-oas` emits the specs either way. |
 
+### Admin API
+
+The admin API (`/admin/keys` for integration keys, plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
+Every `/admin/*` route except `/admin/healthz` requires `Authorization: Bearer <admin token>`.
+Only the token's SHA-256 digest is configured, so the token itself never sits in env, yaml, or a ConfigMap.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ADMIN_LISTENER` | `127.0.0.1:8081` | `host:port` for the admin listener. Keep it on loopback unless you must manage keys from another host; a non-loopback bind also needs `ADMIN_ALLOWED_HOSTS`. |
+| `ADMIN_TOKEN_SHA256` | _(empty)_ | Comma-separated lowercase-hex SHA-256 digests of the accepted admin tokens. List two during a rotation, then drop the old one. **Empty locks the admin API:** every route but `/admin/healthz` answers 401 and tempogate logs a startup warning. A malformed entry makes `serve` refuse to boot. |
+| `ADMIN_ALLOWED_HOSTS` | `127.0.0.1:<port>,localhost:<port>,[::1]:<port>` | Comma-separated `host[:port]` values accepted in the `Host` header; an entry without a port matches any port. Other hosts get **421 Misdirected Request** before the token is checked, which defeats DNS rebinding from a browser. The default takes `<port>` from `ADMIN_LISTENER` and names only loopback, even for a `0.0.0.0` bind: **set it to the names your callers use** (e.g. `tempogate-admin.tempogate.svc:8081`). |
+| `ADMIN_ALLOW_SYSTEM_GRANTS` | `false` | Allow minting keys for the `temporal-system` namespace. Temporal treats a `temporal-system` role as cluster-wide, so these grants answer 403 unless this is `true`. Enable it only while you mint the keys that need it. |
+
+Generate a token and its digest:
+
+```bash
+token=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+printf %s "$token" | sha256sum | cut -d' ' -f1   # -> ADMIN_TOKEN_SHA256
+```
+
+Keep `$token` in your secret manager, then call the API with it:
+
+```bash
+curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+  -d '{"namespace":"payments","role":"worker","owner":"svc-payments"}' \
+  http://127.0.0.1:8081/admin/keys
+```
+
+Every mint and revoke is logged as one `admin audit` line (`action`, `outcome`, `id`, `jti`, `namespace`, `role`, `owner`, `caller`, `remote_addr`).
+Rejected requests are logged as `admin request rejected` at warn level with a `reason`.
+`caller` is the first 8 hex characters of the matched digest, so you can tell rotated tokens apart without logging them.
+
 ### State store (SQLite)
 
 | Variable | Default | Notes |

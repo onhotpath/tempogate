@@ -122,9 +122,14 @@ client fails fast. See
 
 **Flat authorization, today.** Every admitted identity receives cluster-level
 access (`temporal-system:admin`) — the value Temporal's default ClaimMapper
-needs for cluster APIs. Group- or role-derived per-namespace scoping, and a
-revocable long-lived integration-key admin API, are planned; the JWT shape and
-the `permissions` claim are already in place for them.
+needs for cluster APIs. Group- or role-derived per-namespace scoping is
+planned; the JWT shape and the `permissions` claim are already in place for it.
+
+**Authenticated admin API.** Integration keys are minted and revoked on a
+separate admin listener whose routes require a bearer admin token (configured
+only as its SHA-256), reject unexpected `Host` headers to defeat DNS rebinding,
+refuse cluster-wide `temporal-system` grants unless explicitly allowed, and log
+every mint and revoke. See [docs/configuration.md](configuration.md#admin-api).
 
 **Co-hostable.** `OIDC_ISSUER` may carry a path, so the whole OIDC surface
 can serve under a prefix on a shared hostname while health probes stay at the

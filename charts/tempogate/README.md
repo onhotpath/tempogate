@@ -42,10 +42,12 @@ curl -fsS http://127.0.0.1:8000/healthz
   MUST stay `1` and `autoscaling` MUST stay disabled until a shared state
   backend lands upstream. The Deployment uses the `Recreate` strategy so an
   update never runs two pods against the same volume.
-- **Single HTTP port.** tempogate currently exposes one listener that
-  serves the public OIDC/OAuth2 surface together with `/healthz` and
-  `/readyz`. A dedicated admin listener is planned upstream; when it lands
-  the chart gains a `service.admin` block — `service.port` does not change.
+- **Separate admin listener.** `service.port` serves the public OIDC/OAuth2
+  surface together with `/healthz` and `/readyz`. The admin API
+  (`/admin/keys`) has its own listener, on the pod's loopback by default
+  (reach it with `kubectl port-forward`). `service.admin.enabled=true` binds
+  it on all pod interfaces behind a separate `<fullname>-admin` Service that
+  no Ingress/HTTPRoute targets, and requires `admin.tokenSha256SecretRef`.
 - **Schema migrations** run in a dedicated `tempogate migrate` Job
   applied alongside the release (not a Helm hook — Helm v4's sequential
   hook execution deadlocks a hook Job against a chart-managed
@@ -81,6 +83,24 @@ auth:
       clientSecretSecretRef: { name: tempogate-google, key: client-secret }
 ```
 
+### Admin token
+
+The admin API accepts a bearer token whose SHA-256 is in `ADMIN_TOKEN_SHA256`; only the digest goes into the cluster:
+
+```bash
+token=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')   # keep in your secret manager
+kubectl create secret generic tempogate-admin \
+  --from-literal=token-sha256="$(printf %s "$token" | sha256sum | cut -d' ' -f1)"
+```
+
+```yaml
+admin:
+  tokenSha256SecretRef: { name: tempogate-admin, key: token-sha256 }
+```
+
+Without it the admin API is locked (401 on every route but `/admin/healthz`).
+See [docs/configuration.md](../../docs/configuration.md#admin-api).
+
 ## Values
 
 | Key | Default | Description |
@@ -97,7 +117,9 @@ auth:
 | `podSecurityContext` | `runAsNonRoot`, uid/gid/fsGroup `65532` | Pod security context (matches the distroless `nonroot` user). |
 | `securityContext` | drop ALL, no privilege escalation, read-only rootfs | Container security context. |
 | `service.type` | `ClusterIP` | Service type. |
-| `service.port` | `8000` | The single HTTP port (public + health). |
+| `service.port` | `8000` | The public HTTP port (OIDC + health). |
+| `service.admin.enabled` | `false` | Bind the admin listener on all pod interfaces and add a `<fullname>-admin` Service. Requires `admin.tokenSha256SecretRef`. |
+| `service.admin.type` / `port` | `ClusterIP` / `8081` | Admin Service type and port (also the container port and `ADMIN_LISTENER` port). |
 | `listenAddress` | `0.0.0.0` | `HTTP_LISTENER` bind host (must not be loopback in-cluster). |
 | `trustedProxies` | `[]` | `HTTP_TRUSTED_PROXIES`: CIDRs of the proxies (e.g. the ingress controller) whose `X-Forwarded-For` is believed for per-client rate limits. Empty: every client behind the ingress shares one budget. See [docs/configuration.md](../../docs/configuration.md#abuse-controls). |
 | `ingress.enabled` | `false` | Enable Ingress. |
@@ -128,6 +150,9 @@ auth:
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |
 | `auth.upstream.google.clientSecretSecretRef` | `{name,key}` empty | Secret holding the Google client secret. |
 | `auth.upstream.google.authEndpoint` / `tokenEndpoint` / `issuerUrl` | `""` | Upstream endpoint overrides (testing). |
+| `admin.tokenSha256SecretRef` | `{name,key}` empty | Secret holding `ADMIN_TOKEN_SHA256` (hex SHA-256 digests of admin tokens). Unset locks the admin API. |
+| `admin.allowedHosts` | `[]` | `ADMIN_ALLOWED_HOSTS`. Empty with `service.admin.enabled` allows the admin Service DNS names on its port plus loopback names on any port. |
+| `admin.allowSystemGrants` | `false` | `ADMIN_ALLOW_SYSTEM_GRANTS`: allow cluster-wide `temporal-system` keys. |
 | `extraEnv` | `[]` | Extra env vars (Deployment and migrate Job). |
 | `volumes` / `volumeMounts` | `[]` | Extra volumes/mounts. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |

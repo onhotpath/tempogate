@@ -7,4 +7,9 @@ Port-forward and check liveness:
 {{ if not .Values.oidc.issuer -}}
 NOTE: oidc.issuer is unset — set it to this server's externally reachable URL before wiring Temporal.
 {{ end -}}
+{{ if .Values.service.admin.enabled -}}
+Admin API (bearer token required): {{ include "tempogate.fullname" . }}-admin.{{ .Release.Namespace }}.svc:{{ .Values.service.admin.port }}/admin/keys
+{{ else if not .Values.admin.tokenSha256SecretRef.name -}}
+NOTE: admin.tokenSha256SecretRef is unset, so the admin API is locked (401).
+{{ end -}}
 Next steps (wire Temporal Web UI SSO + a tctl token) are in docs/getting-started.md.

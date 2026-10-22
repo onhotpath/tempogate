@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/onhotpath/tempogate/admin"
@@ -67,9 +65,42 @@ func (s *KeysIntegrationSuite) SetupTest() {
 	registry := newAdminKeyRegistryViaPublicSurface(store)
 
 	h := admin.NewKeys(registry, s.signer)
-	mux := http.NewServeMux()
-	h.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
-	s.srv = httptest.NewServer(mux)
+	s.srv = httptest.NewServer(s.guarded(h))
+}
+
+// guarded serves h behind a guard that accepts guardToken, mirroring the admin
+// listener, so every request below must authenticate the way an operator does.
+func (s *KeysIntegrationSuite) guarded(h *admin.Keys) http.Handler {
+	g := admin.NewGuard(
+		admin.WithTokenDigests(mustDigests(s.T(), digestHex(guardToken))),
+		admin.WithAllowedHosts([]string{"127.0.0.1"}),
+	)
+	mux, _ := newGuardedAPI(g, h.Register)
+	return mux
+}
+
+// authedClient attaches the admin bearer token to every request.
+var authedClient = &http.Client{Transport: bearerTransport{token: guardToken}}
+
+type bearerTransport struct{ token string }
+
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func (s *KeysIntegrationSuite) TestUnauthenticatedRequestsAreRejectedBeforeTheStore() {
+	for _, c := range []*http.Client{http.DefaultClient, {Transport: bearerTransport{token: "wrong"}}} {
+		resp, err := c.Post(s.srv.URL+"/admin/keys", "application/json",
+			strings.NewReader(`{"namespace":"payments","role":"admin","owner":"x"}`))
+		s.Require().NoError(err)
+		s.Require().NoError(resp.Body.Close())
+		s.Equal(http.StatusUnauthorized, resp.StatusCode)
+	}
+	rows, err := s.store.ListIntegrationKeys(s.ctx, admin.ListFilter{Limit: 10})
+	s.Require().NoError(err)
+	s.Empty(rows, "a rejected request must not reach the store")
 }
 
 func (s *KeysIntegrationSuite) TearDownTest() {
@@ -107,7 +138,7 @@ func (s *KeysIntegrationSuite) TestPostedJWTVerifiesAgainstSameJWKS() {
 	body := postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon"}
 	raw, err := json.Marshal(body)
 	s.Require().NoError(err)
-	resp, err := http.Post(s.srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
+	resp, err := authedClient.Post(s.srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
 	s.Require().NoError(err)
 	defer func() { _ = resp.Body.Close() }()
 	s.Require().Equal(http.StatusCreated, resp.StatusCode)
@@ -153,9 +184,7 @@ func (s *KeysIntegrationSuite) TestRevokeMakesVerifierRejectWithinCacheTTL() {
 	registry := newAdminKeyRegistryViaPublicSurface(s.store)
 	h := admin.NewKeys(registry, s.signer, admin.WithDenylistHydrator(cache))
 
-	mux := http.NewServeMux()
-	h.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(s.guarded(h))
 	defer srv.Close()
 
 	guardedVerifier := keys.NewVerifier(
@@ -168,7 +197,7 @@ func (s *KeysIntegrationSuite) TestRevokeMakesVerifierRejectWithinCacheTTL() {
 	body := postBody{Namespace: "payments", Role: "worker", Owner: "svc-recon"}
 	raw, err := json.Marshal(body)
 	s.Require().NoError(err)
-	resp, err := http.Post(srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
+	resp, err := authedClient.Post(srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
 	s.Require().NoError(err)
 	defer func() { _ = resp.Body.Close() }()
 	s.Require().Equal(http.StatusCreated, resp.StatusCode)
@@ -184,7 +213,7 @@ func (s *KeysIntegrationSuite) TestRevokeMakesVerifierRejectWithinCacheTTL() {
 	// Revoke
 	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/admin/keys/"+got.ID, http.NoBody)
 	s.Require().NoError(err)
-	delResp, err := http.DefaultClient.Do(req)
+	delResp, err := authedClient.Do(req)
 	s.Require().NoError(err)
 	defer func() { _ = delResp.Body.Close() }()
 	s.Require().Equal(http.StatusNoContent, delResp.StatusCode)
@@ -217,7 +246,7 @@ func (s *KeysIntegrationSuite) TestPostedJWTCarriesExpClaimWhenExpiresAtSet() {
 	}
 	raw, err := json.Marshal(body)
 	s.Require().NoError(err)
-	resp, err := http.Post(s.srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
+	resp, err := authedClient.Post(s.srv.URL+"/admin/keys", "application/json", strings.NewReader(string(raw)))
 	s.Require().NoError(err)
 	defer func() { _ = resp.Body.Close() }()
 	s.Require().Equal(http.StatusCreated, resp.StatusCode)

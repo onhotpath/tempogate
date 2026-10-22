@@ -65,6 +65,25 @@ type RateLimitConfig struct {
 // the pod's service IP unless explicitly opted into a cluster-internal bind).
 type AdminConfig struct {
 	Listener Listener `ferry:"listener"`
+
+	// TokenSHA256 is a comma-separated list of hex SHA-256 digests of the
+	// bearer tokens the admin API accepts. Only digests are configured so the
+	// tokens never sit in env or yaml; a list lets operators rotate without
+	// downtime. Empty locks every /admin/* route except /admin/healthz.
+	// Parsed and validated by the admin package when the server graph is
+	// built, so commands that never serve the admin API ignore it.
+	TokenSHA256 string `ferry:"token_sha256"`
+
+	// AllowedHosts is a comma-separated list of host[:port] values the admin
+	// API accepts in the Host header; an entry without a port matches any
+	// port. Empty derives loopback names from Listener's port. It defeats DNS
+	// rebinding, so a non-loopback bind must name its hosts here.
+	AllowedHosts string `ferry:"allowed_hosts"`
+
+	// AllowSystemGrants permits minting keys for the temporal-system
+	// namespace, which Temporal treats as cluster-wide. Off by default so a
+	// leaked admin token cannot mint a cluster-admin key.
+	AllowSystemGrants bool `ferry:"allow_system_grants"`
 }
 
 // APIConfig controls what the Huma APIs expose beyond their operations.

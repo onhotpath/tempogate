@@ -50,6 +50,11 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.service.admin.enabled }}
+            - name: admin
+              containerPort: {{ .Values.service.admin.port }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "tempogate.configMapName" . }}
