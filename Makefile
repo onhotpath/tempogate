@@ -129,10 +129,16 @@ test-e2e-images: ## build the three e2e images with a BuildKit-capable docker bu
 	DOCKER_BUILDKIT=1 docker build -t $(E2E_MOCKGOOGLE_IMAGE) -f test/e2e/mockgoogle/Dockerfile .
 	DOCKER_BUILDKIT=1 docker build -t $(E2E_CLICLIENT_IMAGE) -f test/e2e/cliclient/Dockerfile .
 
+# The top-level e2e tests are independent (each starts its own network,
+# volumes and containers) and call t.Parallel; E2E_PARALLEL caps how many run
+# at once, since several start a postgres + Temporal stack and a 4-vCPU CI
+# runner has to host them side by side. -v prints each test's duration.
+E2E_PARALLEL ?= 3
+
 test-e2e-go: ## run the e2e tests against pre-built E2E_* images
 	E2E_TEMPOGATE_IMAGE=$(E2E_TEMPOGATE_IMAGE) E2E_MOCKGOOGLE_IMAGE=$(E2E_MOCKGOOGLE_IMAGE) \
 	E2E_CLICLIENT_IMAGE=$(E2E_CLICLIENT_IMAGE) \
-		go test -tags e2e -timeout 40m -count=1 ./test/e2e/...
+		go test -tags e2e -v -parallel $(E2E_PARALLEL) -timeout 40m -count=1 ./test/e2e/...
 
 test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI loopback e2e tests
 

@@ -25,6 +25,7 @@ func TestSubcommandsRunWithoutServerConfig(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	img, from := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", repoRoot(t))
 	stateVol := fmt.Sprintf("tempogate-cli-only-e2e-state-%d", time.Now().UnixNano())
