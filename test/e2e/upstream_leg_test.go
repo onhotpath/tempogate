@@ -62,8 +62,8 @@ func TestUpstreamLegHardening(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	tg := startTempogateAllowingFailure(ctx, t, root, netName, "tempogate-upstream",

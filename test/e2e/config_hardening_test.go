@@ -59,9 +59,7 @@ func startServing(ctx context.Context, t *testing.T, name string, req testcontai
 	req.ExposedPorts = []string{"8000/tcp"}
 	req.WaitingFor = wait.ForHTTP("/readyz").WithPort("8000/tcp").WithStartupTimeout(2 * time.Minute)
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
-	if c != nil {
-		track(ctx, t, name, c)
-	}
+	track(ctx, t, name, c)
 	require.NoError(t, err, name)
 	return mappedHTTP(ctx, t, c, "8000"), c
 }

@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/onhotpath/tempogate/state/postgres"
 )
 
 // E2E_STATE_DRIVER picks the state store the tempogate stacks run on. Unset
@@ -34,8 +36,8 @@ func skipOnPostgres(t *testing.T) {
 	}
 }
 
-// stateDBs records the networks that already have a state database, so a
-// stack restarted on the same network keeps its state.
+// stateDBs maps a network to its state database container, so a stack
+// restarted on the same network keeps its state and a test can read it.
 var stateDBs sync.Map
 
 // withStateBackend points env at the state store E2E_STATE_DRIVER selects.
@@ -47,11 +49,12 @@ func withStateBackend(ctx context.Context, owner *testing.T, netName string, env
 	if !onPostgres() {
 		return
 	}
-	if _, started := stateDBs.LoadOrStore(netName, true); !started {
+	if _, started := stateDBs.Load(netName); !started {
 		db, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
 				Image:          statePostgresImage,
 				Env:            map[string]string{"POSTGRES_USER": "tempogate", "POSTGRES_PASSWORD": "tempogate", "POSTGRES_DB": "tempogate"},
+				ExposedPorts:   []string{"5432/tcp"},
 				Networks:       []string{netName},
 				NetworkAliases: map[string][]string{netName: {"tempogate-db"}},
 				WaitingFor: wait.ForLog("database system is ready to accept connections").
@@ -59,11 +62,48 @@ func withStateBackend(ctx context.Context, owner *testing.T, netName string, env
 			},
 			Started: true,
 		})
-		require.NoError(owner, err, "state postgres")
 		track(ctx, owner, "tempogate-db", db)
+		require.NoError(owner, err, "state postgres")
+		stateDBs.Store(netName, db)
 		owner.Cleanup(func() { stateDBs.Delete(netName) })
 	}
 	env["STATE_DRIVER"] = "postgres"
 	env["STATE_POSTGRES_DSN"] = "postgres://tempogate:tempogate@tempogate-db:5432/tempogate?sslmode=disable"
 	env["STATE_POSTGRES_ALLOW_INSECURE_SSLMODE"] = "true"
+}
+
+// runMigrate runs `tempogate migrate` from req to completion and fails t,
+// with the migrate logs, unless it exits 0, so a broken migrate fails here
+// rather than later as a serve that cannot start. It joins netName, where a
+// postgres state database answers as tempogate-db; owner keeps the container
+// (and so its logs) until the stack is torn down.
+func runMigrate(ctx context.Context, t, owner *testing.T, name, netName string, req testcontainers.ContainerRequest) {
+	t.Helper()
+	req.Cmd = []string{"migrate"}
+	req.Networks = []string{netName}
+	req.WaitingFor = wait.ForExit().WithExitTimeout(2 * time.Minute)
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
+	track(ctx, owner, name, c)
+	require.NoError(t, err, name)
+	st, err := c.State(ctx)
+	require.NoError(t, err, name)
+	require.Equalf(t, 0, st.ExitCode, "%s exited %d:\n%s", name, st.ExitCode, containerLogs(ctx, t, c))
+}
+
+// postgresStateStore opens the state database withStateBackend started on
+// netName from the host, through its mapped port, with the store tempogate
+// itself uses.
+func postgresStateStore(ctx context.Context, t *testing.T, netName string) *postgres.Store {
+	t.Helper()
+	v, ok := stateDBs.Load(netName)
+	require.Truef(t, ok, "no state database on network %s", netName)
+	host, err := v.(testcontainers.Container).PortEndpoint(ctx, "5432/tcp", "")
+	require.NoError(t, err, "state postgres endpoint")
+	store, err := postgres.New(
+		postgres.WithDSN("postgres://tempogate:tempogate@"+host+"/tempogate?sslmode=disable"),
+		postgres.WithAllowInsecureSSLMode(true),
+	)
+	require.NoError(t, err, "open state postgres")
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }

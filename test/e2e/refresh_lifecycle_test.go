@@ -64,8 +64,8 @@ func TestRefreshLifecycle(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	tg := &restartableTempogate{ctx: ctx, owner: t, root: root, netName: netName}
@@ -208,15 +208,9 @@ func (tg *restartableTempogate) start(t *testing.T, env map[string]string, migra
 	withStateBackend(ctx, tg.owner, tg.netName, env)
 
 	if migrate {
-		m, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-			ContainerRequest: testcontainers.ContainerRequest{
-				Image: img, FromDockerfile: from, Cmd: []string{"migrate"}, Env: env, User: "0:0",
-				Mounts: mounts, WaitingFor: wait.ForExit().WithExitTimeout(2 * time.Minute),
-			},
-			Started: true,
+		runMigrate(ctx, t, tg.owner, "tempogate-lifecycle-migrate", tg.netName, testcontainers.ContainerRequest{
+			Image: img, FromDockerfile: from, Env: env, User: "0:0", Mounts: mounts,
 		})
-		require.NoError(t, err, "tempogate migrate")
-		track(ctx, tg.owner, "tempogate-lifecycle-migrate", m)
 	}
 
 	if tg.serve != nil {
@@ -233,8 +227,8 @@ func (tg *restartableTempogate) start(t *testing.T, env map[string]string, migra
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, tg.owner, "tempogate-lifecycle", serve)
+	require.NoError(t, err, "tempogate serve")
 	tg.serve = serve
 	tg.base = mappedHTTP(ctx, t, serve, "8000")
 }

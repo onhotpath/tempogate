@@ -85,8 +85,8 @@ func TestServerErrorsAreSanitized(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, "tempogate-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -101,8 +101,8 @@ func TestServerErrorsAreSanitized(t *testing.T) {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 	base := mappedHTTP(ctx, t, tempogate, "8000")
 
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(stateDir, "state.db")+"?_pragma=busy_timeout(5000)")

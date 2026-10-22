@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -243,8 +244,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 	mockBase := mappedHTTP(ctx, t, mock, "8080")
 
 	// --- tempogate: migrate (one-shot) then serve, sharing a volume ---
@@ -283,8 +284,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, "tempogate-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -302,8 +303,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 
 	// --- postgres for Temporal ---
 	pg, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -319,8 +320,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "postgres")
 	track(ctx, t, "postgres", pg)
+	require.NoError(t, err, "postgres")
 
 	// --- temporal-frontend (auto-setup) with JWKS-backed default authorizer ---
 	temporal, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -363,8 +364,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "temporal")
 	track(ctx, t, "temporal", temporal)
+	require.NoError(t, err, "temporal")
 
 	// --- temporal-ui, configured only via TEMPORAL_AUTH_* ---
 	ui, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -390,8 +391,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "temporal-ui")
 	track(ctx, t, "temporal-ui", ui)
+	require.NoError(t, err, "temporal-ui")
 
 	// --- headless Chrome on the network so it resolves the aliases ---
 	chrome, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -409,8 +410,8 @@ func setupStack(ctx context.Context, t *testing.T) *stack {
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "chrome")
 	track(ctx, t, "chrome", chrome)
+	require.NoError(t, err, "chrome")
 
 	return &stack{
 		mockBaseURL:  mockBase,
@@ -653,8 +654,14 @@ func devtoolsWS(ctx context.Context, t *testing.T, c testcontainers.Container) s
 // log-dump (registered last) runs before Terminate (registered first) and
 // the logs are still available. This is what makes a CI failure
 // self-diagnosing instead of an opaque "container exited with code 1".
+// Call it before checking GenericContainer's error: a container that was
+// created but failed to start or wait still holds its volumes, and only its
+// Terminate here releases them. A nil container (never created) is a no-op.
 func track(ctx context.Context, t *testing.T, name string, c testcontainers.Container) {
 	t.Helper()
+	if c == nil || reflect.ValueOf(c).IsNil() {
+		return
+	}
 	t.Cleanup(func() { _ = c.Terminate(ctx) })
 	t.Cleanup(func() {
 		if !t.Failed() {

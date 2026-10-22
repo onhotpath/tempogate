@@ -177,8 +177,8 @@ func (s *observabilityStack) emptyStateVolume(ctx context.Context, t *testing.T)
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "state wiper")
 	track(ctx, t, "state-wiper", c)
+	require.NoError(t, err, "state wiper")
 	state, err := c.State(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 0, state.ExitCode, "state wiper failed")
@@ -240,8 +240,8 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "mockgoogle")
 	track(ctx, t, "mockgoogle", mock)
+	require.NoError(t, err, "mockgoogle")
 
 	env := map[string]string{
 		"HTTP_LISTENER": "0.0.0.0:8000",
@@ -276,8 +276,8 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate migrate")
 	track(ctx, t, "tempogate-migrate", migrate)
+	require.NoError(t, err, "tempogate migrate")
 
 	tempogate, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -294,8 +294,8 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "tempogate serve")
 	track(ctx, t, "tempogate", tempogate)
+	require.NoError(t, err, "tempogate serve")
 
 	cliImg, cliFrom := builtImageSource("E2E_CLICLIENT_IMAGE", "test/e2e/cliclient/Dockerfile", root)
 	clientC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -309,8 +309,8 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		},
 		Started: true,
 	})
-	require.NoError(t, err, "cliclient")
 	track(ctx, t, "cliclient", clientC)
+	require.NoError(t, err, "cliclient")
 
 	return &observabilityStack{
 		cliStack: &cliStack{
