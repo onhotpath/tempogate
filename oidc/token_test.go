@@ -75,6 +75,10 @@ func (m *memKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error) {
 	return out, nil
 }
 
+func (m *memKeyStore) RetireKeypair(context.Context, string, time.Time) (keys.Keypair, error) {
+	return keys.Keypair{}, keys.ErrKeypairNotFound
+}
+
 // memTokenStore satisfies oidc.TokenStore structurally. ConsumeAuthCode and
 // ConsumeRefresh both tombstone, so single use, rotation and reuse detection
 // are exercised by the suite, not just asserted in prose; ConsumeRefresh

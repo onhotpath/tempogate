@@ -43,6 +43,7 @@ func adminConfig(tokenSHA256 string) fx.Option {
 			fx.Annotate(tokenSHA256, fx.ResultTags(`name:"admin_token_sha256"`)),
 			fx.Annotate([]string{"localhost:8081"}, fx.ResultTags(`name:"admin_allowed_hosts"`)),
 			fx.Annotate(false, fx.ResultTags(`name:"admin_allow_system_grants"`)),
+			fx.Annotate(admin.DefaultMaxTTL, fx.ResultTags(`name:"admin_keys_max_ttl"`)),
 		),
 		fx.Supply(zap.NewNop()),
 	)
@@ -117,15 +118,41 @@ func (s *FxSuite) TestFxProducesAdminRegistrar() {
 	)
 	app.RequireStart().RequireStop()
 
-	s.Require().Len(collected.AdminRegistrars, 1,
-		"admin.Fx() must contribute exactly one registrar to admin_registrars")
+	s.Require().Len(collected.AdminRegistrars, 2,
+		"admin.Fx() must contribute the integration-key and signing-key registrars to admin_registrars")
 	s.Require().Len(collected.AdminMiddlewares, 1,
 		"admin.Fx() must contribute the guard to admin_middlewares")
 
 	// Bind the produced registrar to a real Huma adapter so a future
 	// rename of admin.KeysPath surfaces here at the assertion step.
 	mux := http.NewServeMux()
-	collected.AdminRegistrars[0](humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
+	api := humago.New(mux, huma.DefaultConfig("test", "0.0.0"))
+	for _, register := range collected.AdminRegistrars {
+		register(api)
+	}
+	s.NotNil(api.OpenAPI().Paths[admin.KeysPath])
+	s.NotNil(api.OpenAPI().Paths[admin.SigningKeysPath])
+	s.NotNil(api.OpenAPI().Paths[admin.SigningKeyRetirePath])
+}
+
+func (s *FxSuite) TestFxRejectsNonPositiveMaxTTL() {
+	app := fx.New(
+		fx.NopLogger,
+		fx.Supply(
+			fx.Annotate([]string{"localhost:8081"}, fx.ResultTags(`name:"admin_allowed_hosts"`)),
+			fx.Annotate(false, fx.ResultTags(`name:"admin_allow_system_grants"`)),
+			fx.Annotate(time.Duration(0), fx.ResultTags(`name:"admin_keys_max_ttl"`)),
+		),
+		fx.Supply(zap.NewNop()),
+		fx.Provide(func() admin.KeyRegistry { return newMemRegistry(time.Now) }),
+		fx.Provide(func() *keys.Keys { return keys.New(keys.WithStore(&fxFakeKeyStore{})) }),
+		fx.Provide(func(k *keys.Keys) *keys.Signer { return keys.NewSigner(keys.WithKeys(k)) }),
+		fx.Provide(func() *keys.DenylistCache { return keys.NewDenylistCache() }),
+		admin.Fx(),
+		fx.Invoke(fx.Annotate(func([]func(huma.API)) {}, fx.ParamTags(`group:"admin_registrars"`))),
+	)
+	s.Require().Error(app.Err())
+	s.Contains(app.Err().Error(), "ADMIN_KEYS_MAX_TTL")
 }
 
 // fxFakeKeyStore is the minimal keys.KeyStore needed to bootstrap *keys.Keys
@@ -143,6 +170,10 @@ func (f *fxFakeKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error)
 	out := make([]keys.Keypair, len(f.kps))
 	copy(out, f.kps)
 	return out, nil
+}
+
+func (f *fxFakeKeyStore) RetireKeypair(context.Context, string, time.Time) (keys.Keypair, error) {
+	return keys.Keypair{}, keys.ErrKeypairNotFound
 }
 
 // sqliteAdminAdapter mirrors what state/sqlite's production adapter does —

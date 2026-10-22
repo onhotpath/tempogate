@@ -41,6 +41,10 @@ func (m *memKeyStore) LoadKeypairs(_ context.Context) ([]keys.Keypair, error) {
 	return out, nil
 }
 
+func (m *memKeyStore) RetireKeypair(context.Context, string, time.Time) (keys.Keypair, error) {
+	return keys.Keypair{}, keys.ErrKeypairNotFound
+}
+
 type WellKnownSuite struct {
 	suite.Suite
 
@@ -204,4 +208,72 @@ func (s *WellKnownSuite) mintJWT(now time.Time) string {
 	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256(), privKey))
 	s.Require().NoError(err)
 	return string(signed)
+}
+
+// TestJWKSDropsRetiredKeysAfterGrace serves JWKS over a keyring holding one
+// active and one retired key, and steps a fake clock across the grace edge.
+func TestJWKSDropsRetiredKeysAfterGrace(t *testing.T) {
+	ctx := context.Background()
+	retiredAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	retired, err := keys.GenerateKeypair(keys.WithRSABits(2048))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired.CreatedAt = retiredAt.Add(-48 * time.Hour)
+	retired.RetiredAt = &retiredAt
+	active, err := keys.GenerateKeypair(keys.WithRSABits(2048))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.CreatedAt = retiredAt.Add(-time.Hour)
+
+	var mu sync.Mutex
+	now := retiredAt.Add(59 * time.Minute)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	k := keys.New(
+		keys.WithStore(&memKeyStore{kps: []keys.Keypair{retired, active}}),
+		keys.WithClock(clock),
+		keys.WithRetirementGrace(time.Hour),
+	)
+	if err := k.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(api.New(api.NewReadiness(), api.WithWellKnown(k, "http://issuer.test")).Public.Handler)
+	defer srv.Close()
+
+	kids := func() []string {
+		resp, err := http.Get(srv.URL + "/.well-known/jwks.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var doc struct {
+			Keys []struct {
+				Kid string `json:"kid"`
+			} `json:"keys"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(doc.Keys))
+		for _, j := range doc.Keys {
+			out = append(out, j.Kid)
+		}
+		return out
+	}
+
+	if got := kids(); len(got) != 2 || got[0] != retired.Kid || got[1] != active.Kid {
+		t.Fatalf("within grace JWKS = %v, want [%s %s]", got, retired.Kid, active.Kid)
+	}
+
+	mu.Lock()
+	now = retiredAt.Add(time.Hour)
+	mu.Unlock()
+	if got := kids(); len(got) != 1 || got[0] != active.Kid {
+		t.Fatalf("after grace JWKS = %v, want only the active kid %s", got, active.Kid)
+	}
 }

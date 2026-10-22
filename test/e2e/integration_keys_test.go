@@ -9,7 +9,9 @@
 // cache synchronously; the 30s cache TTL is the cold-start worst case) and
 // *no* effect on the Temporal frontend for the remainder of the token's life
 // (Temporal's default ClaimMapper has no denylist concept, so until exp fires
-// the token keeps authorizing cluster APIs).
+// the token keeps authorizing cluster APIs). Every key carries an exp capped
+// by ADMIN_KEYS_MAX_TTL; retiring the signing key is the hard kill switch
+// (TestSigningKeyRotationAndRetirement).
 //
 // Listener isolation is verified structurally: the same POST that succeeds on
 // the admin port returns 404 on the public port — a property of *binding* (two
@@ -44,14 +46,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/lestrrat-go/jwx/v4/jws"
 	"github.com/lestrrat-go/jwx/v4/jwt"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.temporal.io/api/workflowservice/v1"
@@ -294,6 +300,11 @@ func adminRequest(t *testing.T, method, url, host, token, body string) (int, []b
 // a clear test failure here rather than as an opaque non-201.
 func mintIntegrationKey(t *testing.T, adminURL string, body adminCreateBody) adminCreateResp {
 	t.Helper()
+	if body.ExpiresAt == nil {
+		// Every key must carry an expiry; tests not about expiry get an hour.
+		exp := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+		body.ExpiresAt = &exp
+	}
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
 	status, b := adminRequest(t, http.MethodPost, adminURL+"/admin/keys", "", e2eAdminToken, string(raw))
@@ -379,6 +390,220 @@ func copyFromContainerTo(ctx context.Context, c testcontainers.Container, remote
 	// 0o600: same posture as ~/.tempogate/token.json — the state file holds
 	// signing-key material and integration-key rows.
 	return os.WriteFile(local, b, 0o600)
+}
+
+// e2eRetirementGrace is KEYS_RETIREMENT_GRACE for the integration-keys stack.
+const e2eRetirementGrace = 20 * time.Second
+
+// e2ePublishDelay is KEYS_PUBLISH_DELAY for the integration-keys stack. It
+// must exceed temporal-frontend's JWKS refresh (TEMPORAL_JWT_KEY_REFRESH=10s)
+// plus KEYS_RELOAD_INTERVAL (1s), exactly as in production.
+const e2ePublishDelay = 20 * time.Second
+
+type signingKeyView struct {
+	Kid         string     `json:"kid"`
+	CreatedAt   time.Time  `json:"created_at"`
+	RetiredAt   *time.Time `json:"retired_at,omitempty"`
+	Active      bool       `json:"active"`
+	ActivatesAt *time.Time `json:"activates_at,omitempty"`
+}
+
+// TestSigningKeyRotationAndRetirement is the acceptance proof for signing-key
+// retirement: integration keys must carry a capped expiry, and an operator
+// can rotate and retire the signing key of a running tempogate without
+// restarting it. A rotated key is published at once but signs only after
+// KEYS_PUBLISH_DELAY, so temporal-frontend already holds it when its first
+// token arrives. After KEYS_RETIREMENT_GRACE the retired kid leaves
+// /.well-known/jwks.json, and once temporal-frontend refreshes its JWKS
+// (TEMPORAL_JWT_KEY_REFRESH=10s here) every token signed by that kid stops
+// authorizing gRPC calls, exp notwithstanding. That is the hard kill switch the
+// jti denylist cannot provide at Temporal.
+func TestSigningKeyRotationAndRetirement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: skipped in -short")
+	}
+	ctx := context.Background()
+	st := setupIntegrationKeysStack(ctx, t)
+	startedAt := containerStartedAt(ctx, t, st.tempogate)
+
+	// --- expires_at is required and capped by ADMIN_KEYS_MAX_TTL (90d) ---
+	status, body := adminRequest(t, http.MethodPost, st.adminURL+"/admin/keys", "", e2eAdminToken,
+		`{"namespace":"temporal-system","role":"admin","owner":"e2e-forever"}`)
+	require.Equalf(t, http.StatusBadRequest, status, "a key without expires_at must be refused: %s", body)
+	require.Contains(t, string(body), "expires_at")
+	require.NotContains(t, string(body), `"jwt"`)
+
+	tooLong := time.Now().UTC().Add(91 * 24 * time.Hour).Format(time.RFC3339)
+	status, body = adminRequest(t, http.MethodPost, st.adminURL+"/admin/keys", "", e2eAdminToken,
+		`{"namespace":"temporal-system","role":"admin","owner":"e2e-too-long","expires_at":"`+tooLong+`"}`)
+	require.Equalf(t, http.StatusBadRequest, status, "expires_at beyond the max TTL must be refused: %s", body)
+
+	// --- a valid key authenticates a real gRPC call and carries exp ---
+	keyA := mintIntegrationKey(t, st.adminURL, adminCreateBody{
+		Namespace: "temporal-system", Role: "admin", Owner: "e2e-old-signer",
+	})
+	parsed, err := jwt.ParseInsecure([]byte(keyA.JWT))
+	require.NoError(t, err)
+	_, hasExp := parsed.Expiration()
+	require.True(t, hasExp, "every integration key must carry exp")
+	kidA := tokenKid(t, keyA.JWT)
+
+	client, conn := dialFrontend(t, st.frontendAddr)
+	defer func() { _ = conn.Close() }()
+	listNamespaces := func(token string) error {
+		authed := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		_, err := client.ListNamespaces(authed, &workflowservice.ListNamespacesRequest{PageSize: 10})
+		return err
+	}
+	require.NoError(t, listNamespaces(keyA.JWT), "key A must pass Temporal's JWKS-backed authorizer")
+
+	before := listSigningKeys(t, st.adminURL)
+	require.Len(t, before, 1)
+	require.Equal(t, kidA, before[0].Kid)
+	require.True(t, before[0].Active)
+
+	// --- refusing to retire the only active key ---
+	status, body = retireSigningKey(t, st.adminURL, kidA)
+	require.Equalf(t, http.StatusConflict, status, "the only active key cannot be retired: %s", body)
+
+	// --- rotate from another process (the CLI) while serving ---
+	out := execTempogate(ctx, t, st.tempogate, "keys", "generate", "--force")
+	kidB := regexp.MustCompile(`kid=(\S+)`).FindStringSubmatch(out)
+	require.Lenf(t, kidB, 2, "keys generate output: %s", out)
+	require.Contains(t, out, "signs from", "the CLI says when the new key starts signing")
+
+	// The serving process publishes the new key on its next reload, but
+	// keeps signing with the old one for KEYS_PUBLISH_DELAY: temporal-frontend
+	// only knows the kids it fetched on its last JWKS refresh and never
+	// refetches on an unknown kid.
+	require.Eventually(t, func() bool { return slices.Contains(jwksKids(t, st.publicURL), kidB[1]) },
+		15*time.Second, 200*time.Millisecond, "serve must publish the rotated key without a restart")
+	pending := mintIntegrationKey(t, st.adminURL, adminCreateBody{
+		Namespace: "temporal-system", Role: "admin", Owner: "e2e-pending-signer",
+	})
+	require.Equal(t, kidA, tokenKid(t, pending.JWT), "the old key signs while the new one is inside KEYS_PUBLISH_DELAY")
+	require.NoError(t, listNamespaces(pending.JWT), "a token minted right after the rotation must work at Temporal")
+
+	during := listSigningKeys(t, st.adminURL)
+	require.Len(t, during, 2)
+	require.True(t, during[0].Active)
+	require.False(t, during[1].Active)
+	require.NotNil(t, during[1].ActivatesAt, "the pending key shows when it starts signing")
+
+	status, body = retireSigningKey(t, st.adminURL, kidA)
+	require.Equalf(t, http.StatusConflict, status,
+		"retiring the signer before its replacement is published must be refused: %s", body)
+	require.Contains(t, string(body), kidB[1])
+
+	// After the delay the new key signs, and Temporal already has it.
+	var keyB adminCreateResp
+	require.Eventually(t, func() bool {
+		keyB = mintIntegrationKey(t, st.adminURL, adminCreateBody{
+			Namespace: "temporal-system", Role: "admin", Owner: "e2e-new-signer",
+		})
+		return tokenKid(t, keyB.JWT) == kidB[1]
+	}, e2ePublishDelay+15*time.Second, 500*time.Millisecond, "the new key must sign once KEYS_PUBLISH_DELAY has passed")
+	require.NoError(t, listNamespaces(keyB.JWT),
+		"the first token from the new key must authenticate at Temporal at once, with no retry")
+
+	// --- retire the old key from another process (the CLI) ---
+	out = execTempogate(ctx, t, st.tempogate, "keys", "retire", "--", kidA)
+	require.Contains(t, out, "retired keypair: kid="+kidA)
+
+	// During grace the retired kid is still published, so in-flight tokens
+	// keep working while relying parties catch up.
+	require.Contains(t, jwksKids(t, st.publicURL), kidA, "a retired kid stays in JWKS during its grace")
+	require.NoError(t, listNamespaces(keyA.JWT), "tokens from a retired kid still work during grace")
+
+	after := listSigningKeys(t, st.adminURL)
+	require.Len(t, after, 2)
+	require.NotNil(t, after[0].RetiredAt)
+	require.False(t, after[0].Active)
+	require.True(t, after[1].Active)
+
+	status, body = retireSigningKey(t, st.adminURL, kidB[1])
+	require.Equalf(t, http.StatusConflict, status, "the new key is now the only active one: %s", body)
+
+	// --- after grace: the kid leaves JWKS, then Temporal rejects its tokens ---
+	require.Eventually(t, func() bool {
+		return !slices.Contains(jwksKids(t, st.publicURL), kidA)
+	}, e2eRetirementGrace+15*time.Second, time.Second, "the retired kid must leave JWKS after grace")
+	require.Equal(t, []string{kidB[1]}, jwksKids(t, st.publicURL))
+
+	require.Eventually(t, func() bool { return listNamespaces(keyA.JWT) != nil },
+		45*time.Second, time.Second,
+		"once Temporal refreshes its JWKS, a token signed by the retired kid must be rejected even though it has not expired")
+	require.NoError(t, listNamespaces(keyB.JWT), "tokens from the active key keep working")
+
+	require.Equal(t, http.StatusUnauthorized, userinfoStatus(t, st.publicURL, keyA.JWT),
+		"tempogate's own verifier must stop accepting a kid past grace")
+	require.Equal(t, http.StatusOK, userinfoStatus(t, st.publicURL, keyB.JWT))
+
+	require.Equal(t, startedAt, containerStartedAt(ctx, t, st.tempogate), "tempogate must not have restarted")
+}
+
+func tokenKid(t *testing.T, raw string) string {
+	t.Helper()
+	msg, err := jws.Parse([]byte(raw))
+	require.NoError(t, err)
+	kid, ok := msg.Signatures()[0].ProtectedHeaders().KeyID()
+	require.True(t, ok, "tempogate tokens carry a kid header")
+	return kid
+}
+
+// execTempogate runs a tempogate subcommand inside the serving container, so
+// it shares the state volume and env exactly as an operator's `kubectl exec`
+// would, and returns its combined output.
+func execTempogate(ctx context.Context, t *testing.T, c testcontainers.Container, args ...string) string {
+	t.Helper()
+	code, r, err := c.Exec(ctx, append([]string{"/tempogate"}, args...), tcexec.Multiplexed())
+	require.NoError(t, err)
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equalf(t, 0, code, "tempogate %s: %s", strings.Join(args, " "), out)
+	return string(out)
+}
+
+func listSigningKeys(t *testing.T, adminURL string) []signingKeyView {
+	t.Helper()
+	status, b := adminRequest(t, http.MethodGet, adminURL+"/admin/signing-keys", "", e2eAdminToken, "")
+	require.Equalf(t, http.StatusOK, status, "GET /admin/signing-keys: %s", b)
+	var out struct {
+		Items []signingKeyView `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(b, &out))
+	return out.Items
+}
+
+func retireSigningKey(t *testing.T, adminURL, kid string) (int, []byte) {
+	t.Helper()
+	return adminRequest(t, http.MethodPost, adminURL+"/admin/signing-keys/"+kid+"/retire", "", e2eAdminToken, "")
+}
+
+func jwksKids(t *testing.T, publicURL string) []string {
+	t.Helper()
+	resp, err := http.Get(publicURL + "/.well-known/jwks.json")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var doc struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+		} `json:"keys"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&doc))
+	out := make([]string, 0, len(doc.Keys))
+	for _, k := range doc.Keys {
+		out = append(out, k.Kid)
+	}
+	return out
+}
+
+func containerStartedAt(ctx context.Context, t *testing.T, c testcontainers.Container) string {
+	t.Helper()
+	state, err := c.State(ctx)
+	require.NoError(t, err)
+	return state.StartedAt
 }
 
 // ---------- stack bring-up ----------
@@ -470,6 +695,11 @@ func startIntegrationKeysTempogate(ctx context.Context, t *testing.T, netName st
 		"OIDC_GOOGLE_AUTH_ENDPOINT":  "http://unused.invalid/auth",
 		"OIDC_GOOGLE_TOKEN_ENDPOINT": "http://unused.invalid/token",
 		"OIDC_GOOGLE_ISSUER_URL":     "http://unused.invalid",
+		// Short enough for TestSigningKeyRotationAndRetirement to watch a
+		// retired kid leave JWKS, long enough to observe it during grace.
+		"KEYS_RETIREMENT_GRACE": e2eRetirementGrace.String(),
+		"KEYS_RELOAD_INTERVAL":  "1s",
+		"KEYS_PUBLISH_DELAY":    e2ePublishDelay.String(),
 	}
 	addDeviceUIServerEnv(tgEnv, tempogateIssuer)
 	addAdminAuthEnv(ctx, t, tgEnv, allowSystemGrants)

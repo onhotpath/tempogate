@@ -24,12 +24,14 @@ type JWK struct {
 	E   string
 }
 
-// PublicJWKS projects every loaded keypair's public half to a JWK, in the
-// same order as All() (CreatedAt ASC). Relying parties select by Kid, so the
-// order is informational; exposing every keypair keeps verification working
-// across a --force rotation while old tokens are still in flight.
+// PublicJWKS projects every published keypair's public half to a JWK, in
+// CreatedAt ASC order. Relying parties select by Kid, so the order is
+// informational. Publishing non-retired keys keeps verification working
+// across a --force rotation; dropping retired keys after their grace is what
+// makes retirement a kill switch at relying parties such as Temporal, which
+// trust JWKS alone.
 func (k *Keys) PublicJWKS() ([]JWK, error) {
-	kps := k.All()
+	kps := k.Published()
 	out := make([]JWK, 0, len(kps))
 	for _, kp := range kps {
 		j, err := publicJWK(kp)

@@ -14,19 +14,6 @@ type Config struct {
 	Keys  KeysConfig  `ferry:"keys"`
 }
 
-// KeysConfig configures how signing keys are stored.
-type KeysConfig struct {
-	// EncryptionKey (KEYS_ENCRYPTION_KEY) is a base64-encoded 32-byte
-	// key-encryption key. When set, private signing keys are stored
-	// AES-256-GCM encrypted under it; when unset they are stored as plain
-	// PEM. Once a key is encrypted, tempogate cannot start without it.
-	EncryptionKey string `ferry:"encryption_key"`
-
-	// EncryptionKeyFile (KEYS_ENCRYPTION_KEY_FILE) reads EncryptionKey from
-	// a file instead, e.g. a mounted Kubernetes Secret. Set at most one.
-	EncryptionKeyFile string `ferry:"encryption_key_file"`
-}
-
 type LogConfig struct {
 	Level string `ferry:"level"`
 }
@@ -84,6 +71,47 @@ type AdminConfig struct {
 	// namespace, which Temporal treats as cluster-wide. Off by default so a
 	// leaked admin token cannot mint a cluster-admin key.
 	AllowSystemGrants bool `ferry:"allow_system_grants"`
+
+	Keys AdminKeysConfig `ferry:"keys"`
+}
+
+// AdminKeysConfig bounds the integration keys the admin API mints.
+type AdminKeysConfig struct {
+	// MaxTTL caps how far in the future a key's expires_at may lie.
+	// Temporal honours only exp and JWKS, never tempogate's revocation list,
+	// so this cap is the longest a leaked key can authorize at Temporal
+	// unless its signing key is retired first.
+	MaxTTL time.Duration `ferry:"max_ttl"`
+}
+
+// KeysConfig governs how signing keys are stored and their lifecycle.
+type KeysConfig struct {
+	// EncryptionKey (KEYS_ENCRYPTION_KEY) is a base64-encoded 32-byte
+	// key-encryption key. When set, private signing keys are stored
+	// AES-256-GCM encrypted under it; when unset they are stored as plain
+	// PEM. Once a key is encrypted, tempogate cannot start without it.
+	EncryptionKey string `ferry:"encryption_key"`
+
+	// EncryptionKeyFile (KEYS_ENCRYPTION_KEY_FILE) reads EncryptionKey from
+	// a file instead, e.g. a mounted Kubernetes Secret. Set at most one.
+	EncryptionKeyFile string `ferry:"encryption_key_file"`
+
+	// RetirementGrace is how long a retired signing key stays in JWKS and
+	// keeps verifying, so tokens already in flight survive the relying
+	// parties' JWKS refresh. After it, every token signed by that key stops
+	// verifying, integration keys included.
+	RetirementGrace time.Duration `ferry:"retirement_grace"`
+
+	// ReloadInterval is how often serve re-reads keypairs from the state
+	// store, so `tempogate keys generate|retire` run elsewhere take effect
+	// without a restart.
+	ReloadInterval time.Duration `ferry:"reload_interval"`
+
+	// PublishDelay is how long a new signing key sits in JWKS before it
+	// signs. Temporal looks a kid up only in the JWKS it last fetched and
+	// never refetches on an unknown kid, so this must exceed Temporal's
+	// jwtKeyProvider.refreshInterval plus ReloadInterval.
+	PublishDelay time.Duration `ferry:"publish_delay"`
 }
 
 // APIConfig controls what the Huma APIs expose beyond their operations.

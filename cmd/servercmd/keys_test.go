@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"regexp"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/suite"
@@ -21,6 +23,10 @@ type KeysCmdSuite struct {
 	ctx   context.Context
 	store *sqlite.Store
 	path  string
+
+	// delay is KEYS_PUBLISH_DELAY for keysCmd; zero unless a test is
+	// about the delay.
+	delay time.Duration
 }
 
 func TestKeysCmdSuite(t *testing.T) {
@@ -30,6 +36,8 @@ func TestKeysCmdSuite(t *testing.T) {
 func (s *KeysCmdSuite) SetupTest() {
 	s.ctx = context.Background()
 	s.path = filepath.Join(s.T().TempDir(), "state.db")
+
+	s.delay = 0
 
 	store, err := sqlite.New(sqlite.WithPath(s.path))
 	s.Require().NoError(err)
@@ -59,6 +67,118 @@ func (s *KeysCmdSuite) generateCmd(out *bytes.Buffer) *cobra.Command {
 	}
 	root.SetErr(new(testWriter))
 	return root
+}
+
+// keysCmd runs `keys <args...>` against the suite's store and returns its
+// output.
+func (s *KeysCmdSuite) keysCmd(args ...string) (string, error) {
+	var out bytes.Buffer
+	root := newKeysCmd(supply(keysParams{
+		Store: s.store,
+		Keys: keys.New(
+			keys.WithStore(s.store),
+			keys.WithPublishDelay(s.delay),
+			keys.WithGenerateOptions(keys.WithRSABits(2048)),
+		),
+	}))
+	root.SetArgs(args)
+	root.SetOut(&out)
+	root.SetErr(new(testWriter))
+	err := root.ExecuteContext(s.ctx)
+	return out.String(), err
+}
+
+// twoKeypairs migrates the store and persists an older and a newer keypair.
+func (s *KeysCmdSuite) twoKeypairs() (keys.Keypair, keys.Keypair) {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	k := keys.New(keys.WithStore(s.store), keys.WithGenerateOptions(keys.WithRSABits(2048)))
+	older, err := k.Generate(s.ctx, false)
+	s.Require().NoError(err)
+	newer, err := k.Generate(s.ctx, true)
+	s.Require().NoError(err)
+	return older, newer
+}
+
+func (s *KeysCmdSuite) TestRetireMarksTheKeypairRetired() {
+	older, newer := s.twoKeypairs()
+
+	out, err := s.keysCmd("retire", "--", older.Kid)
+	s.Require().NoError(err)
+	s.Contains(out, "retired keypair: kid="+older.Kid)
+	s.Contains(out, "KEYS_RETIREMENT_GRACE")
+
+	kps, err := s.store.LoadKeypairs(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Len(kps, 2)
+	s.NotNil(kps[0].RetiredAt)
+	s.Nil(kps[1].RetiredAt)
+
+	_, err = s.keysCmd("retire", "--", newer.Kid)
+	s.Require().ErrorIs(err, keys.ErrLastActiveKeypair)
+	s.Contains(err.Error(), "keys generate --force")
+}
+
+func (s *KeysCmdSuite) TestRetireRequiresExactlyOneKid() {
+	s.Require().NoError(s.store.Migrate(s.ctx))
+	_, err := s.keysCmd("retire")
+	s.Require().Error(err)
+}
+
+func (s *KeysCmdSuite) TestRetireRejectsStaleSchema() {
+	_, err := s.keysCmd("retire", "kid")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "tempogate migrate")
+}
+
+func (s *KeysCmdSuite) TestListShowsStatus() {
+	older, newer := s.twoKeypairs()
+	_, err := s.keysCmd("retire", "--", older.Kid)
+	s.Require().NoError(err)
+
+	out, err := s.keysCmd("list")
+	s.Require().NoError(err)
+	s.Contains(out, older.Kid)
+	s.Contains(out, newer.Kid)
+	s.Regexp(older.Kid+`\s.*retired`, out)
+	s.Regexp(newer.Kid+`\s.*signing`, out)
+}
+
+func (s *KeysCmdSuite) TestListShowsWhenAPendingKeyStartsSigning() {
+	s.delay = time.Hour
+	older, newer := s.twoKeypairs()
+
+	out, err := s.keysCmd("list")
+	s.Require().NoError(err)
+	s.Regexp(older.Kid+`\s.*signing`, out)
+	activates := newer.CreatedAt.Add(s.delay).UTC().Format(time.RFC3339)
+	s.Regexp(newer.Kid+`\s.*pending, signs from `+regexp.QuoteMeta(activates), out)
+}
+
+func (s *KeysCmdSuite) TestGenerateForceSaysWhenTheNewKeySigns() {
+	s.delay = time.Hour
+	s.Require().NoError(s.store.Migrate(s.ctx))
+
+	out, err := s.keysCmd("generate")
+	s.Require().NoError(err)
+	s.NotContains(out, "signs from", "the first key signs at once")
+
+	out, err = s.keysCmd("generate", "--force")
+	s.Require().NoError(err)
+	s.Contains(out, "published in JWKS now; signs from ")
+}
+
+func (s *KeysCmdSuite) TestRetireRefusesSignerWhileReplacementIsPending() {
+	s.delay = time.Hour
+	older, newer := s.twoKeypairs()
+
+	_, err := s.keysCmd("retire", "--", older.Kid)
+	s.Require().ErrorIs(err, keys.ErrReplacementPending)
+	s.Contains(err.Error(), newer.Kid)
+	s.Contains(err.Error(), "--force")
+
+	out, err := s.keysCmd("retire", "--force", "--", older.Kid)
+	s.Require().NoError(err, "--force retires the signer during the publish delay")
+	s.Contains(out, "retired keypair: kid="+older.Kid)
 }
 
 func (s *KeysCmdSuite) TestRejectsUnreachableStore() {

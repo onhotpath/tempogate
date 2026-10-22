@@ -93,8 +93,10 @@ func (s *KeysSuite) TestInitOnEmptyStoreGenerates() {
 }
 
 func (s *KeysSuite) TestInitOnNonEmptyStoreLoadsLatest() {
-	older := Keypair{Kid: "older", Alg: AlgRS256, CreatedAt: s.now}
-	newer := Keypair{Kid: "newer", Alg: AlgRS256, CreatedAt: s.now.Add(time.Hour)}
+	// Both predate the clock by more than the publish delay, so the newer
+	// one is past it and signs.
+	older := Keypair{Kid: "older", Alg: AlgRS256, CreatedAt: s.now.Add(-2 * time.Hour)}
+	newer := Keypair{Kid: "newer", Alg: AlgRS256, CreatedAt: s.now.Add(-time.Hour)}
 	// Insert in reverse-chronological order to prove Init re-sorts.
 	s.Require().NoError(s.store.SaveKeypair(s.ctx, newer))
 	s.Require().NoError(s.store.SaveKeypair(s.ctx, older))
@@ -128,7 +130,9 @@ func (s *KeysSuite) TestGenerateRefusesDuplicateWithoutForce() {
 }
 
 func (s *KeysSuite) TestGenerateForceRotatesAndRetainsOld() {
-	s.keys = New(WithStore(s.store), WithClock(s.clock()), withFastRSA())
+	// No publish delay: this test is about rotation, PublishSuite covers the
+	// delay.
+	s.keys = New(WithStore(s.store), WithClock(s.clock()), WithPublishDelay(0), withFastRSA())
 	s.Require().NoError(s.keys.Init(s.ctx))
 	oldKid := s.mustLatest().Kid
 

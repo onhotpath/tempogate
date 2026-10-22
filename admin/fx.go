@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -20,7 +23,8 @@ type keysParams struct {
 	// admin.DenylistHydrator interface structurally.
 	DenylistCache     *keys.DenylistCache
 	Logger            *zap.Logger
-	AllowSystemGrants bool `name:"admin_allow_system_grants"`
+	AllowSystemGrants bool          `name:"admin_allow_system_grants"`
+	MaxTTL            time.Duration `name:"admin_keys_max_ttl"`
 }
 
 // newKeysRegistrar builds the /admin/keys handler over the KeyRegistry
@@ -29,13 +33,33 @@ type keysParams struct {
 // the api package's "admin_registrars" group, which the api builder mounts on
 // the admin Surface only — a separate mux + Huma API the serve command binds
 // to its own private listener.
-func newKeysRegistrar(p keysParams) func(huma.API) {
+//
+// A non-positive max TTL fails graph construction rather than refusing every
+// mint at request time.
+func newKeysRegistrar(p keysParams) (func(huma.API), error) {
+	if p.MaxTTL <= 0 {
+		return nil, fmt.Errorf("admin: ADMIN_KEYS_MAX_TTL must be positive, got %s", p.MaxTTL)
+	}
 	h := NewKeys(p.Registry, p.Signer,
 		WithDenylistHydrator(p.DenylistCache),
 		WithLogger(p.Logger.Named("admin")),
 		WithSystemGrants(p.AllowSystemGrants),
+		WithMaxTTL(p.MaxTTL),
 	)
-	return h.Register
+	return h.Register, nil
+}
+
+type signingKeysParams struct {
+	fx.In
+
+	Keys   *keys.Keys
+	Logger *zap.Logger
+}
+
+// newSigningKeysRegistrar mounts the signing-key routes over the same *Keys
+// the Signer and JWKS read, so a retire takes effect in this process at once.
+func newSigningKeysRegistrar(p signingKeysParams) func(huma.API) {
+	return NewSigningKeys(p.Keys, WithSigningKeysLogger(p.Logger.Named("admin"))).Register
 }
 
 type guardParams struct {
@@ -66,9 +90,10 @@ func newGuardInstaller(p guardParams) (func(huma.API), error) {
 	return g.Install, nil
 }
 
-// Fx contributes the /admin/keys registrar into api's "admin_registrars"
-// group and the Guard into "admin_middlewares": the routes live on the admin
-// Surface, never on the public one, and always behind the guard.
+// Fx contributes the /admin/keys and /admin/signing-keys registrars into
+// api's "admin_registrars" group and the Guard into "admin_middlewares": the
+// routes live on the admin Surface, never on the public one, and always
+// behind the guard.
 // KeyRegistry is satisfied by state/sqlite's adapter constructor (see
 // state/sqlite/admin_adapter.go); the Signer is provided by keys.Fx.
 func Fx() fx.Option {
@@ -76,6 +101,10 @@ func Fx() fx.Option {
 		fx.Provide(
 			fx.Annotate(
 				newKeysRegistrar,
+				fx.ResultTags(`group:"admin_registrars"`),
+			),
+			fx.Annotate(
+				newSigningKeysRegistrar,
 				fx.ResultTags(`group:"admin_registrars"`),
 			),
 			fx.Annotate(

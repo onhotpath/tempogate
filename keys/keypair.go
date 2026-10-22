@@ -27,6 +27,7 @@ type Keypair struct {
 	PrivatePEM []byte
 	PublicPEM  []byte
 	CreatedAt  time.Time
+	RetiredAt  *time.Time
 }
 
 type generateConfig struct {

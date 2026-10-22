@@ -27,6 +27,9 @@ const (
 	// positive int and never has to second-guess input.
 	defaultListLimit = 50
 	maxListLimit     = 200
+
+	// DefaultMaxTTL caps expires_at when ADMIN_KEYS_MAX_TTL is not set.
+	DefaultMaxTTL = 90 * 24 * time.Hour
 )
 
 // Keys serves the four admin operations: mint, get-by-id, list, revoke. The
@@ -38,6 +41,7 @@ type Keys struct {
 	hydrator     DenylistHydrator
 	logger       *zap.Logger
 	systemGrants bool
+	maxTTL       time.Duration
 	now          func() time.Time
 	newID        func() (string, error)
 	defaultLimit int
@@ -99,6 +103,18 @@ func WithSystemGrants(allow bool) KeysOption {
 	return func(k *Keys) { k.systemGrants = allow }
 }
 
+// WithMaxTTL caps how far in the future a key's expires_at may lie. Temporal
+// honours only exp and JWKS, never the revocation list, so the cap bounds how
+// long a leaked key authorizes at Temporal unless its signing key is retired.
+//
+// Panics on a non-positive cap: that would refuse every key.
+func WithMaxTTL(d time.Duration) KeysOption {
+	if d <= 0 {
+		panic("admin: WithMaxTTL requires a positive duration")
+	}
+	return func(k *Keys) { k.maxTTL = d }
+}
+
 // NewKeys wires the registry and signer the handler will call on every
 // request. Both are required: a nil registry would NPE inside Save/ByID/etc.
 // on the first call; a nil signer would NPE inside Mint. Panicking here turns
@@ -115,6 +131,7 @@ func NewKeys(registry KeyRegistry, signer *keys.Signer, opts ...KeysOption) *Key
 		registry:     registry,
 		signer:       signer,
 		logger:       zap.NewNop(),
+		maxTTL:       DefaultMaxTTL,
 		now:          func() time.Time { return time.Now().UTC() },
 		newID:        defaultNewID,
 		defaultLimit: defaultListLimit,
@@ -146,7 +163,7 @@ type createBody struct {
 	Namespace string     `json:"namespace" doc:"Temporal namespace this key authorizes"`
 	Role      string     `json:"role" doc:"one of read, write, worker, admin"`
 	Owner     string     `json:"owner" doc:"human email or service-account name"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty" doc:"absolute expiry; omit for a long-lived key governed by revocation"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty" doc:"required absolute expiry, in the future and at most ADMIN_KEYS_MAX_TTL (default 90 days) from now; Temporal honours only exp, so revocation alone does not stop a key there"`
 }
 
 type createOutput struct {
@@ -285,12 +302,18 @@ func (h *Keys) mint(ctx context.Context, k *IntegrationKey) (*createOutput, erro
 	}
 	now := h.now()
 
-	var ttl time.Duration
-	if k.ExpiresAt != nil {
-		ttl = k.ExpiresAt.Sub(now)
-		if ttl <= 0 {
-			return nil, huma.Error400BadRequest("expires_at must be in the future")
-		}
+	// Checked here rather than in Validate: the rule needs the handler's
+	// clock and cap, and stored keys minted before expiry was required
+	// legitimately have none.
+	if k.ExpiresAt == nil {
+		return nil, huma.Error400BadRequest("expires_at is required")
+	}
+	ttl := k.ExpiresAt.Sub(now)
+	if ttl <= 0 {
+		return nil, huma.Error400BadRequest("expires_at must be in the future")
+	}
+	if ttl > h.maxTTL {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("expires_at must be at most %s from now (ADMIN_KEYS_MAX_TTL)", h.maxTTL))
 	}
 
 	signed, jti, err := h.signer.Mint(ctx, keys.MintRequest{

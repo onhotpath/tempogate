@@ -1,6 +1,9 @@
 package keys
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // KeyStore is the consumer-side state interface for this package.
 //
@@ -12,4 +15,5 @@ import "context"
 type KeyStore interface {
 	SaveKeypair(ctx context.Context, kp Keypair) error
 	LoadKeypairs(ctx context.Context) ([]Keypair, error)
+	RetireKeypair(ctx context.Context, kid string, at time.Time) (Keypair, error)
 }

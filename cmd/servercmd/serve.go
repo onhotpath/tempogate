@@ -38,6 +38,7 @@ type serveParams struct {
 	Readiness     *api.Readiness
 	Listener      config.Listener `name:"http"`
 	AdminListener config.Listener `name:"admin"`
+	KeysReload    time.Duration   `name:"keys_reload_interval"`
 }
 
 func newServeCmd(load deps[serveParams]) *cobra.Command {
@@ -63,6 +64,9 @@ func serve(ctx context.Context, p serveParams) error {
 		return fmt.Errorf("keys init: %w", err)
 	}
 	warnUnencryptedKeys(p.Logger, p.Keys)
+	if p.KeysReload <= 0 {
+		return fmt.Errorf("KEYS_RELOAD_INTERVAL must be positive, got %s", p.KeysReload)
+	}
 
 	// Two http.Server instances, two muxes - the public listener
 	// literally has no /admin/* handler, so admin reachability is a
@@ -78,12 +82,22 @@ func serve(ctx context.Context, p serveParams) error {
 	adminMux := http.NewServeMux()
 	adminMux.Handle("/", p.Servers.Admin.Handler)
 
+	// Re-reading keypairs lets `tempogate keys generate|retire`, run from
+	// another process against the same store, take effect without a
+	// restart. The admin retire route reloads at once on its own.
+	keyReloader := xrun.ComponentFunc(func(ctx context.Context) error {
+		return p.Keys.Watch(ctx, p.KeysReload, func(err error) {
+			logger.Warn("signing keys reload failed; keeping the loaded set", zap.Error(err))
+		})
+	})
+
 	return xrun.All(
 		xrun.NoTimeout,
 		// Started only once the schema is known current, and
 		// stopped with the listeners: a sweep in flight is
 		// cancelled through ctx.
 		xrun.ComponentFunc(p.Reaper.Run),
+		keyReloader,
 		httpServer(httpServerOptions{
 			server: &http.Server{
 				Addr:              publicAddr,

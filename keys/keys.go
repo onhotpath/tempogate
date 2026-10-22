@@ -37,14 +37,18 @@ func WithGenerateOptions(opts ...GenerateOption) Option {
 }
 
 // Keys is the signing-keypair aggregate. It fronts a KeyStore with an
-// in-memory cache of loaded keypairs and exposes Init / Generate as the two
-// state-transition entry points (boot-flow vs. explicit CLI generation).
+// in-memory cache of loaded keypairs and exposes Init / Generate / Retire as
+// the state-transition entry points (boot flow vs. explicit CLI or admin
+// action); Reload and Watch keep the cache in step with other processes.
 type Keys struct {
 	store   KeyStore
 	alg     string
 	now     func() time.Time
+	grace   time.Duration
 	genOpts []GenerateOption
 	kek     []byte
+
+	publishDelay time.Duration
 
 	mu          sync.RWMutex
 	keypairs    []Keypair
@@ -53,8 +57,11 @@ type Keys struct {
 
 func New(opts ...Option) *Keys {
 	k := &Keys{
-		alg: AlgRS256,
-		now: func() time.Time { return time.Now().UTC() },
+		alg:   AlgRS256,
+		now:   func() time.Time { return time.Now().UTC() },
+		grace: DefaultRetirementGrace,
+
+		publishDelay: DefaultPublishDelay,
 	}
 	for _, o := range opts {
 		o(k)
@@ -73,15 +80,17 @@ func (k *Keys) generateOptions() []GenerateOption {
 	return append(opts, k.genOpts...)
 }
 
-// Latest returns the most-recently-created keypair from the in-memory cache.
-// Init or Generate must be called first; otherwise ErrNoKeypair is returned.
+// Latest returns the keypair that signs new tokens now (see Signing) from the
+// in-memory cache. Init or Generate must be called first; otherwise, or when
+// every keypair is retired, ErrNoKeypair is returned.
 func (k *Keys) Latest() (Keypair, error) {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
-	if len(k.keypairs) == 0 {
+	kp, ok := k.Signing(k.keypairs)
+	if !ok {
 		return Keypair{}, ErrNoKeypair
 	}
-	return k.keypairs[len(k.keypairs)-1], nil
+	return kp, nil
 }
 
 // All returns a copy of the in-memory cache, sorted by CreatedAt ASC.
@@ -96,8 +105,9 @@ func (k *Keys) All() []Keypair {
 // Generate creates a new keypair and persists it through the store.
 // If a keypair already exists and force is false, Generate returns
 // ErrKeypairExists (wrapped with the latest kid).
-// With force=true, a brand-new keypair is appended; old keypairs are
-// retained (rotation pattern; explicit retirement will come later).
+// With force=true, a brand-new keypair is appended: it is published at once
+// and signs once the publish delay has passed (see WithPublishDelay); old
+// keypairs keep verifying until they are retired (see Retire).
 func (k *Keys) Generate(ctx context.Context, force bool) (Keypair, error) {
 	stored, err := k.store.LoadKeypairs(ctx)
 	if err != nil {
@@ -125,16 +135,7 @@ func (k *Keys) Generate(ctx context.Context, force bool) (Keypair, error) {
 		return Keypair{}, err
 	}
 
-	cache := make([]Keypair, 0, len(existing)+1)
-	cache = append(cache, existing...)
-	cache = append(cache, kp)
-	sortByCreatedAt(cache)
-
-	k.mu.Lock()
-	k.keypairs = cache
-	k.unencrypted = unencrypted
-	k.mu.Unlock()
-
+	k.swap(append(existing, kp), unencrypted)
 	return kp, nil
 }
 

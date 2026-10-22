@@ -13,8 +13,9 @@ import (
 // test pattern: the interface is satisfied structurally inside the test file
 // of the package that defines it.
 type fakeKeyStore struct {
-	mu  sync.Mutex
-	kps []Keypair
+	mu      sync.Mutex
+	kps     []Keypair
+	loadErr error
 }
 
 func (s *fakeKeyStore) SaveKeypair(_ context.Context, kp Keypair) error {
@@ -27,9 +28,38 @@ func (s *fakeKeyStore) SaveKeypair(_ context.Context, kp Keypair) error {
 func (s *fakeKeyStore) LoadKeypairs(_ context.Context) ([]Keypair, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
 	out := make([]Keypair, len(s.kps))
 	copy(out, s.kps)
 	return out, nil
+}
+
+// RetireKeypair mirrors the sqlite store's contract: unknown kid and "last
+// active key" are refused, and a repeat retire keeps the first stamp.
+func (s *fakeKeyStore) RetireKeypair(_ context.Context, kid string, at time.Time) (Keypair, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, active := -1, 0
+	for i, kp := range s.kps {
+		if kp.Kid == kid {
+			idx = i
+		}
+		if kp.RetiredAt == nil {
+			active++
+		}
+	}
+	switch {
+	case idx < 0:
+		return Keypair{}, ErrKeypairNotFound
+	case s.kps[idx].RetiredAt != nil:
+		return s.kps[idx], nil
+	case active <= 1:
+		return Keypair{}, ErrLastActiveKeypair
+	}
+	s.kps[idx].RetiredAt = &at
+	return s.kps[idx], nil
 }
 
 var _ KeyStore = (*fakeKeyStore)(nil)

@@ -25,6 +25,14 @@ func defaultConfig() *Config {
 				IP:   net.IPv4(127, 0, 0, 1),
 				Port: 8081,
 			},
+			Keys: AdminKeysConfig{MaxTTL: 90 * 24 * time.Hour},
+		},
+		Keys: KeysConfig{
+			// Matches the human access-token TTL.
+			RetirementGrace: 4 * time.Hour,
+			ReloadInterval:  30 * time.Second,
+			// Covers Temporal's default 1m JWKS refresh with margin.
+			PublishDelay: 5 * time.Minute,
 		},
 		State: StateConfig{
 			Sqlite: SqliteConfig{

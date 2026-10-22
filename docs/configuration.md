@@ -68,7 +68,7 @@ Never list a range that clients can connect from directly, or they can choose th
 
 ### Admin API
 
-The admin API (`/admin/keys` for integration keys, plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
+The admin API (`/admin/keys` for integration keys, `/admin/signing-keys` for [signing-key retirement](#revocation-and-signing-key-retirement), plus the `/admin/healthz` liveness probe) is served on its own listener, never on the public one.
 Every `/admin/*` route except `/admin/healthz` requires `Authorization: Bearer <admin token>`.
 Only the token's SHA-256 digest is configured, so the token itself never sits in env, yaml, or a ConfigMap.
 
@@ -78,6 +78,7 @@ Only the token's SHA-256 digest is configured, so the token itself never sits in
 | `ADMIN_TOKEN_SHA256` | _(empty)_ | Comma-separated lowercase-hex SHA-256 digests of the accepted admin tokens. List two during a rotation, then drop the old one. **Empty locks the admin API:** every route but `/admin/healthz` answers 401 and tempogate logs a startup warning. A malformed entry makes `serve` refuse to boot. |
 | `ADMIN_ALLOWED_HOSTS` | `127.0.0.1:<port>,localhost:<port>,[::1]:<port>` | Comma-separated `host[:port]` values accepted in the `Host` header; an entry without a port matches any port. Other hosts get **421 Misdirected Request** before the token is checked, which defeats DNS rebinding from a browser. The default takes `<port>` from `ADMIN_LISTENER` and names only loopback, even for a `0.0.0.0` bind: **set it to the names your callers use** (e.g. `tempogate-admin.tempogate.svc:8081`). |
 | `ADMIN_ALLOW_SYSTEM_GRANTS` | `false` | Allow minting keys for the `temporal-system` namespace. Temporal treats a `temporal-system` role as cluster-wide, so these grants answer 403 unless this is `true`. Enable it only while you mint the keys that need it. |
+| `ADMIN_KEYS_MAX_TTL` | `2160h` (90 days) | Go duration; the furthest in the future an integration key's `expires_at` may lie. `expires_at` is required, and a value in the past or beyond this cap answers 400. Temporal ignores revocation, so this cap bounds how long a leaked key keeps working there unless you [retire its signing key](#revocation-and-signing-key-retirement). Must be positive. |
 
 Generate a token and its digest:
 
@@ -90,13 +91,22 @@ Keep `$token` in your secret manager, then call the API with it:
 
 ```bash
 curl -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-  -d '{"namespace":"payments","role":"worker","owner":"svc-payments"}' \
+  -d '{"namespace":"payments","role":"worker","owner":"svc-payments","expires_at":"2026-12-31T00:00:00Z"}' \
   http://127.0.0.1:8081/admin/keys
 ```
 
 Every mint and revoke is logged as one `admin audit` line (`action`, `outcome`, `id`, `jti`, `namespace`, `role`, `owner`, `caller`, `remote_addr`).
+Every signing-key retirement is logged the same way with `action=retire_signing_key`, the `kid` and `force`.
 Rejected requests are logged as `admin request rejected` at warn level with a `reason`.
 `caller` is the first 8 hex characters of the matched digest, so you can tell rotated tokens apart without logging them.
+
+### Signing keys
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `KEYS_RETIREMENT_GRACE` | `4h` | Go duration; how long a retired signing key stays in `/.well-known/jwks.json` and keeps verifying. After it, every token signed by that key stops verifying, at tempogate and (once it refreshes its JWKS) at Temporal, whatever its `exp`. The default matches the 4 h access-token TTL, so tokens minted just before a retirement live out their natural life. `0` unpublishes a key the moment it is retired. Must not be negative. |
+| `KEYS_RELOAD_INTERVAL` | `30s` | Go duration; how often `serve` re-reads signing keys from the state store, so `tempogate keys generate --force` and `tempogate keys retire` run from another process take effect without a restart. A retire through the admin API applies immediately. Must be positive. |
+| `KEYS_PUBLISH_DELAY` | `5m` | Go duration; how long a new signing key is published in `/.well-known/jwks.json` before it signs. Until then the previous non-retired key keeps signing; when there is no other non-retired key (fresh install, or every key retired) the new key signs at once. **Must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`** (see [below](#why-new-keys-wait-before-signing)). `0` signs with a new key as soon as `serve` loads it. Must not be negative. |
 
 ### State store (SQLite)
 
@@ -133,6 +143,7 @@ With a KEK, the database alone is not enough: keep the KEK somewhere a database 
 - New keys (the first boot, `tempogate keys generate`) are written encrypted.
 - Keys stored before the KEK was set keep working, and `tempogate serve` warns about them. Encrypt them once with `tempogate keys encrypt` (safe to repeat; run it in the serving pod in Kubernetes, e.g. `kubectl exec deploy/tempogate -- /tempogate keys encrypt`).
 - Once a key is encrypted, `tempogate serve` refuses to start without the KEK, or with a different one, and says so.
+  `tempogate keys generate`, `keys list` and `keys retire` read the stored keys too, so they need the same KEK, and a running server keeps its loaded keys if a reload cannot open them.
 - Encrypted rows are bound to their key id, so they cannot be swapped between rows.
 - There is no KEK rotation yet. Losing the KEK loses the signing keys: remove the `keypairs` rows and restart to mint a new key, after which every token issued before stops validating.
 - Rolling back to a release without KEK support fails at startup once a key is encrypted.
@@ -253,6 +264,62 @@ Every authorization response, success or error, carries `iss` ([RFC 9207](https:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `TEMPOGATE_ISSUER` | _(empty)_ | Read by `tempogate login` / `tempogate token` to find the server. Equivalent to the `--issuer` flag. Must be `https`, or plain `http` on a loopback host, unless `--insecure` is passed. Never read by `tempogate serve`. |
+
+## Revocation and signing-key retirement
+
+Temporal's frontend verifies a tempogate JWT against `/.well-known/jwks.json` and its `exp`, and nothing else.
+That sets what each lever can do:
+
+| Lever | Effect at tempogate (`/userinfo`, refresh) | Effect at Temporal gRPC |
+| --- | --- | --- |
+| `DELETE /admin/keys/{id}` (jti denylist) | Rejected within 30 s (immediately on the instance that served the DELETE). | **None.** The token works until its `exp`. |
+| `exp` (`expires_at`, capped by `ADMIN_KEYS_MAX_TTL`) | Rejected after `exp`. | Rejected after `exp`. |
+| Retiring the signing key | Rejected once `KEYS_RETIREMENT_GRACE` has passed. | Rejected once the kid has left JWKS and Temporal has refreshed its JWKS cache. |
+
+Retiring a signing key is the hard kill switch: it invalidates **every** token that key signed (human tokens, CLI tokens, integration keys), not one key.
+Use it when a key leaked and its `exp` is too far away, or for routine rotation.
+The `kid` of a token is in its JWT header.
+
+### Why new keys wait before signing
+
+Temporal's JWT key provider looks a token's `kid` up only in the JWKS it fetched on its last refresh, and it does not refetch on an unknown `kid` ([`common/authorization/default_token_key_provider.go`](https://github.com/temporalio/temporal/blob/v1.25.2/common/authorization/default_token_key_provider.go): `RsaKey` returns "RSA key not found" from the cached map; only the `refreshInterval` ticker calls `updateKeys`).
+If tempogate signed with a new key the moment it saw it, every token minted before Temporal's next refresh would be rejected by temporal-frontend: login appears to succeed, Temporal calls fail.
+
+So a new key is published in JWKS at once but signs only from `created_at + KEYS_PUBLISH_DELAY`.
+Set `KEYS_PUBLISH_DELAY` above the longest time Temporal can take to see a new key:
+
+- Temporal's `global.authorization.jwtKeyProvider.refreshInterval` (`TEMPORAL_JWT_KEY_REFRESH` in Temporal's Docker config template, default `1m`; `server.config.authorization.jwtKeyProvider.refreshInterval` in the Temporal Helm chart, see [`examples/kind/temporal-values.yaml`](../examples/kind/temporal-values.yaml)).
+  With `refreshInterval` unset or `0`, Temporal never refreshes and every rotation needs a temporal-frontend restart.
+- plus `KEYS_RELOAD_INTERVAL`, since `serve` publishes a key generated by `tempogate keys generate` only on its next reload,
+- plus up to 300 s if an HTTP cache that honours tempogate's `Cache-Control: max-age=300` sits between Temporal and `/.well-known/jwks.json` (raise the delay to `10m` in that case).
+
+The default `5m` covers Temporal's default `1m` refresh and the default `30s` reload with margin.
+
+### Rotation runbook
+
+1. **Generate** a new key: `tempogate keys generate --force` (against the same `STATE_SQLITE_PATH`, e.g. `kubectl exec deploy/tempogate -- /tempogate keys generate --force`).
+   The output says when it starts signing.
+   `serve` publishes it in `/.well-known/jwks.json` within `KEYS_RELOAD_INTERVAL`; the old key keeps signing.
+2. **Wait `KEYS_PUBLISH_DELAY`.** Relying parties fetch the new key; then it signs every new token.
+   `tempogate keys list` and `GET /admin/signing-keys` show every key with its `created_at` and `retired_at`, which one is signing (`signing` / `"active": true`), and when a pending key starts signing (`pending, signs from ...` / `activates_at`).
+3. **Retire** the old key once the new one signs: `tempogate keys retire -- <old-kid>` (the `--` matters, a `kid` may start with `-`), or `POST /admin/signing-keys/<old-kid>/retire` with the admin token.
+   The only active key cannot be retired (409 / an error naming `keys generate --force`).
+   Retiring the signing key while its replacement is still inside `KEYS_PUBLISH_DELAY` is refused (409 / an error naming the replacement and when it signs).
+4. **Grace.** The retired key keeps verifying for `KEYS_RETIREMENT_GRACE`, then leaves JWKS.
+   Tokens it signed stop working at tempogate at that moment and at Temporal after its next JWKS refresh.
+   Users re-authenticate and get tokens from the new key; integration keys must be re-minted.
+
+In an emergency (a leaked key) retire right after step 1 with `tempogate keys retire --force -- <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
+The new key then signs at once, so Temporal rejects new tokens until its next JWKS refresh (at most `refreshInterval`); that is the price of stopping the leaked key immediately.
+The grace still applies, so if 4 h is too long, lower `KEYS_RETIREMENT_GRACE` (it is read at `serve` start) before retiring.
+
+### Upgrading to required key expiry
+
+`POST /admin/keys` now refuses a body without `expires_at` (400), and `expires_at` may be at most `ADMIN_KEYS_MAX_TTL` (default 90 days) away.
+Callers that relied on long-lived keys must send an expiry and re-mint before it.
+Keys minted earlier without `expires_at` are not touched: their JWT has no `exp`, so they stay valid at Temporal until their signing key is retired.
+To end them, run the rotation runbook above; `GET /admin/keys` lists them with no `expires_at`.
+`tempogate migrate` adds the `retired_at` column (migration 0013) and leaves existing keys active.
 
 ## Sub-path hosting
 

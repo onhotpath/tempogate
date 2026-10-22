@@ -82,7 +82,7 @@ func (s *AuditSuite) audit() []observer.LoggedEntry {
 
 func (s *AuditSuite) TestCreateAndRevokeAreAudited() {
 	s.setup()
-	resp, b := s.request(http.MethodPost, admin.KeysPath, `{"namespace":"payments","role":"worker","owner":"svc-recon"}`)
+	resp, b := s.request(http.MethodPost, admin.KeysPath, withExpiry(`{"namespace":"payments","role":"worker","owner":"svc-recon"}`))
 	s.Require().Equal(http.StatusCreated, resp.StatusCode, string(b))
 	var created postResp
 	s.Require().NoError(json.Unmarshal(b, &created))
@@ -128,7 +128,7 @@ func (s *AuditSuite) TestCreateAndRevokeAreAudited() {
 
 func (s *AuditSuite) TestRejectedCreateIsAudited() {
 	s.setup()
-	resp, _ := s.request(http.MethodPost, admin.KeysPath, `{"namespace":"payments","role":"root","owner":"x"}`)
+	resp, _ := s.request(http.MethodPost, admin.KeysPath, withExpiry(`{"namespace":"payments","role":"root","owner":"x"}`))
 	s.Require().Equal(http.StatusBadRequest, resp.StatusCode)
 	entries := s.audit()
 	s.Require().Len(entries, 1)
@@ -148,7 +148,7 @@ func (s *AuditSuite) TestRevokeUnknownIsAudited() {
 
 func (s *AuditSuite) TestSystemGrantRefusedByDefault() {
 	s.setup()
-	resp, b := s.request(http.MethodPost, admin.KeysPath, `{"namespace":"temporal-system","role":"admin","owner":"x"}`)
+	resp, b := s.request(http.MethodPost, admin.KeysPath, withExpiry(`{"namespace":"temporal-system","role":"admin","owner":"x"}`))
 	s.Require().Equal(http.StatusForbidden, resp.StatusCode, string(b))
 	s.Contains(string(b), "ADMIN_ALLOW_SYSTEM_GRANTS")
 	s.NotContains(string(b), `"jwt"`)
@@ -167,7 +167,7 @@ func (s *AuditSuite) TestSystemGrantRefusedByDefault() {
 
 func (s *AuditSuite) TestSystemGrantAllowedWhenEnabled() {
 	s.setup(admin.WithSystemGrants(true))
-	resp, b := s.request(http.MethodPost, admin.KeysPath, `{"namespace":"temporal-system","role":"admin","owner":"x"}`)
+	resp, b := s.request(http.MethodPost, admin.KeysPath, withExpiry(`{"namespace":"temporal-system","role":"admin","owner":"x"}`))
 	s.Require().Equal(http.StatusCreated, resp.StatusCode, string(b))
 }
 
@@ -190,4 +190,11 @@ func (s *AuditSuite) TestOperationsDeclareBearerSecurity() {
 
 func (s *AuditSuite) TestNilLoggerPanics() {
 	s.Panics(func() { admin.WithLogger(nil) })
+}
+
+// withExpiry adds a near-future expires_at to a create body; the handler runs
+// on the wall clock here, and every key must carry one.
+func withExpiry(body string) string {
+	exp := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	return strings.TrimSuffix(body, "}") + `,"expires_at":"` + exp + `"}`
 }
