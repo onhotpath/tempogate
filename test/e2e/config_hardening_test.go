@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -35,15 +34,6 @@ func serverEnv(issuer string) map[string]string {
 	}
 	addDeviceUIServerEnv(env, issuer)
 	return env
-}
-
-// stateVolume names a fresh state volume and removes it when the test ends
-// (after every container using it, since cleanups run last-in first-out).
-func stateVolume(t *testing.T, prefix string) string {
-	t.Helper()
-	name := fmt.Sprintf("tempogate-%s-e2e-state-%d", prefix, time.Now().UnixNano())
-	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "-f", name).Run() })
-	return name
 }
 
 // runToExit runs req to completion and returns its exit code and output.
