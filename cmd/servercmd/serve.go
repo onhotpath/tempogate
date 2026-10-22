@@ -59,6 +59,7 @@ func newServeCmd(p serveParams) *cobra.Command {
 			if err := p.Keys.Init(ctx); err != nil {
 				return fmt.Errorf("keys init: %w", err)
 			}
+			warnUnencryptedKeys(p.Logger, p.Keys)
 
 			// Two http.Server instances, two muxes — the public listener
 			// literally has no /admin/* handler, so admin reachability is a
@@ -105,5 +106,14 @@ func newServeCmd(p serveParams) *cobra.Command {
 				}),
 			).Run(ctx)
 		},
+	}
+}
+
+// warnUnencryptedKeys flags keys left in clear after a KEK was configured:
+// they still work, but are exposed until `tempogate keys encrypt` runs.
+func warnUnencryptedKeys(logger *zap.Logger, k *keys.Keys) {
+	if kids := k.UnencryptedKids(); len(kids) > 0 {
+		logger.Warn("signing keys are stored unencrypted although KEYS_ENCRYPTION_KEY is set; run `tempogate keys encrypt`",
+			zap.Strings("kids", kids))
 	}
 }

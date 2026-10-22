@@ -14,11 +14,17 @@ import (
 )
 
 // ErrDuplicateRefreshToken is returned by SaveRefresh when a token with the
-// same value already exists. With 256 bits of entropy a collision is not
-// expected; callers may still distinguish it.
+// same value (hash) already exists. With 256 bits of entropy a collision is
+// not expected; callers may still distinguish it.
 var ErrDuplicateRefreshToken = errors.New("sqlite: refresh token with this value already exists")
 
-const refreshColumns = `token, jti, client_id, email, family_id, auth_time, created_at, expires_at`
+// refreshColumns is the insert list. Reads return refreshFields, without the
+// hash: the token itself is never stored (migration 0012), so the caller
+// passes it in and gets it back on the returned Refresh.
+const (
+	refreshFields  = `jti, client_id, email, family_id, auth_time, created_at, expires_at`
+	refreshColumns = `token_hash, ` + refreshFields
+)
 
 // SaveRefresh inserts r unless its family has been revoked. The check and the
 // insert are one statement, so a rotation that consumed its parent before a
@@ -30,13 +36,13 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 		 WHERE NOT EXISTS (
 		     SELECT 1 FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NOT NULL
 		 )`,
-		r.Token, r.JTI, r.ClientID, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
+		secretHash(r.Token), r.JTI, r.ClientID, r.Email, r.FamilyID, r.AuthTime, r.CreatedAt, r.ExpiresAt,
 		r.FamilyID,
 	)
 	if err != nil {
 		var sqliteErr *sqlite3.Error
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
-			return fmt.Errorf("%w: %s", ErrDuplicateRefreshToken, r.Token)
+			return ErrDuplicateRefreshToken
 		}
 		return fmt.Errorf("sqlite: save refresh token: %w", err)
 	}
@@ -58,11 +64,12 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 // §4.14.2). The client_id predicate means a token presented by another
 // client, live or consumed, is reported missing and left intact.
 func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at time.Time) (oidc.Refresh, error) {
-	r, err := scanRefresh(s.db.QueryRowContext(ctx,
+	hash := secretHash(token)
+	r, err := scanRefresh(token, s.db.QueryRowContext(ctx,
 		`UPDATE refresh_tokens SET consumed_at = ?
-		 WHERE token = ? AND client_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
-		 RETURNING `+refreshColumns,
-		at, token, clientID,
+		 WHERE token_hash = ? AND client_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
+		 RETURNING `+refreshFields,
+		at, hash, clientID,
 	))
 	if err == nil {
 		return r, nil
@@ -71,10 +78,10 @@ func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at t
 		return oidc.Refresh{}, fmt.Errorf("sqlite: consume refresh token: %w", err)
 	}
 
-	r, err = scanRefresh(s.db.QueryRowContext(ctx,
-		`SELECT `+refreshColumns+` FROM refresh_tokens
-		 WHERE token = ? AND client_id = ? AND consumed_at IS NOT NULL`,
-		token, clientID,
+	r, err = scanRefresh(token, s.db.QueryRowContext(ctx,
+		`SELECT `+refreshFields+` FROM refresh_tokens
+		 WHERE token_hash = ? AND client_id = ? AND consumed_at IS NOT NULL`,
+		hash, clientID,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return oidc.Refresh{}, oidc.ErrRefreshNotFound
@@ -173,8 +180,8 @@ func (s *Store) ListRefreshSessions(ctx context.Context, email string, now time.
 	return out, nil
 }
 
-func scanRefresh(row *sql.Row) (oidc.Refresh, error) {
-	var r oidc.Refresh
-	err := row.Scan(&r.Token, &r.JTI, &r.ClientID, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
+func scanRefresh(token string, row *sql.Row) (oidc.Refresh, error) {
+	r := oidc.Refresh{Token: token}
+	err := row.Scan(&r.JTI, &r.ClientID, &r.Email, &r.FamilyID, &r.AuthTime, &r.CreatedAt, &r.ExpiresAt)
 	return r, err
 }

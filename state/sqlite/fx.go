@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.uber.org/fx"
+	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/oidc"
@@ -14,6 +15,7 @@ type Params struct {
 	fx.In
 
 	Lifecycle fx.Lifecycle
+	Logger    *zap.Logger `optional:"true"`
 
 	Path        string        `name:"sqlite_path"`
 	MaxConns    int           `name:"sqlite_max_conns"`
@@ -21,11 +23,15 @@ type Params struct {
 }
 
 func newFx(p Params) (*Store, error) {
-	s, err := New(
+	opts := []Option{
 		WithPath(p.Path),
 		WithMaxConns(p.MaxConns),
 		WithBusyTimeout(p.BusyTimeout),
-	)
+	}
+	if p.Logger != nil {
+		opts = append(opts, WithLogger(p.Logger.Named("sqlite")))
+	}
+	s, err := New(opts...)
 	if err != nil {
 		return nil, err
 	}

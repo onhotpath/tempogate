@@ -19,30 +19,32 @@ var ErrDuplicateBrowserSession = errors.New("sqlite: browser session with this s
 
 func (s *Store) SaveBrowserSession(ctx context.Context, bs oidc.BrowserSession) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO browser_sessions (sid, email, created_at, expires_at)
+		`INSERT INTO browser_sessions (sid_hash, email, created_at, expires_at)
 		 VALUES (?, ?, ?, ?)`,
-		bs.SID, bs.Email, bs.CreatedAt, bs.ExpiresAt,
+		secretHash(bs.SID), bs.Email, bs.CreatedAt, bs.ExpiresAt,
 	)
 	if err != nil {
 		var sqliteErr *sqlite3.Error
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
-			return fmt.Errorf("%w: %s", ErrDuplicateBrowserSession, bs.SID)
+			return ErrDuplicateBrowserSession
 		}
 		return fmt.Errorf("sqlite: save browser session: %w", err)
 	}
 	return nil
 }
 
+// LookupBrowserSession finds the session by the hash of sid (the sid itself
+// is never stored) and echoes sid back on the result.
 func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.BrowserSession, error) {
-	var bs oidc.BrowserSession
+	bs := oidc.BrowserSession{SID: sid}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT sid, email, created_at, expires_at
+		`SELECT email, created_at, expires_at
 		 FROM browser_sessions
-		 WHERE sid = ?`,
-		sid,
-	).Scan(&bs.SID, &bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
+		 WHERE sid_hash = ?`,
+		secretHash(sid),
+	).Scan(&bs.Email, &bs.CreatedAt, &bs.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return oidc.BrowserSession{}, fmt.Errorf("%w: %s", oidc.ErrBrowserSessionNotFound, sid)
+		return oidc.BrowserSession{}, oidc.ErrBrowserSessionNotFound
 	}
 	if err != nil {
 		return oidc.BrowserSession{}, fmt.Errorf("sqlite: lookup browser session: %w", err)
@@ -55,7 +57,7 @@ func (s *Store) LookupBrowserSession(ctx context.Context, sid string) (oidc.Brow
 // without re-checking existence.
 func (s *Store) DeleteBrowserSession(ctx context.Context, sid string) error {
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM browser_sessions WHERE sid = ?`, sid,
+		`DELETE FROM browser_sessions WHERE sid_hash = ?`, secretHash(sid),
 	); err != nil {
 		return fmt.Errorf("sqlite: delete browser session: %w", err)
 	}

@@ -37,6 +37,8 @@ type Result struct {
 	GoogleAuthEndpoint    string        `name:"google_auth_endpoint"`
 	GoogleTokenEndpoint   string        `name:"google_token_endpoint"`
 	GoogleIssuerURL       string        `name:"google_issuer_url"`
+	KeysEncryptionKey     string        `name:"keys_encryption_key"`
+	KeysEncryptionKeyFile string        `name:"keys_encryption_key_file"`
 }
 
 func Fx() fx.Option {
@@ -67,6 +69,8 @@ func Fx() fx.Option {
 				GoogleAuthEndpoint:    cfg.OIDC.Google.AuthEndpoint,
 				GoogleTokenEndpoint:   cfg.OIDC.Google.TokenEndpoint,
 				GoogleIssuerURL:       cfg.OIDC.Google.IssuerURL,
+				KeysEncryptionKey:     cfg.Keys.EncryptionKey,
+				KeysEncryptionKeyFile: cfg.Keys.EncryptionKeyFile,
 			}
 		}),
 	)

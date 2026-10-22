@@ -11,6 +11,20 @@ type Config struct {
 	API   APIConfig   `ferry:"api"`
 	State StateConfig `ferry:"state"`
 	OIDC  OIDCConfig  `ferry:"oidc"`
+	Keys  KeysConfig  `ferry:"keys"`
+}
+
+// KeysConfig configures how signing keys are stored.
+type KeysConfig struct {
+	// EncryptionKey (KEYS_ENCRYPTION_KEY) is a base64-encoded 32-byte
+	// key-encryption key. When set, private signing keys are stored
+	// AES-256-GCM encrypted under it; when unset they are stored as plain
+	// PEM. Once a key is encrypted, tempogate cannot start without it.
+	EncryptionKey string `ferry:"encryption_key"`
+
+	// EncryptionKeyFile (KEYS_ENCRYPTION_KEY_FILE) reads EncryptionKey from
+	// a file instead, e.g. a mounted Kubernetes Secret. Set at most one.
+	EncryptionKeyFile string `ferry:"encryption_key_file"`
 }
 
 type LogConfig struct {

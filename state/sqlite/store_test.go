@@ -302,15 +302,15 @@ func (s *StoreSuite) TestSaveAuthCodeRoundTrip() {
 
 	var got oidc.AuthCode
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT code, client_id, redirect_uri, email, scope,
+		`SELECT code_hash, client_id, redirect_uri, email, scope,
 		        code_challenge, code_challenge_method, nonce, created_at, expires_at
-		 FROM auth_codes WHERE code = ?`, ac.Code)
+		 FROM auth_codes WHERE code_hash = ?`, sha256Hex(ac.Code))
 	s.Require().NoError(row.Scan(
 		&got.Code, &got.ClientID, &got.RedirectURI, &got.Email, &got.Scope,
 		&got.CodeChallenge, &got.CodeChallengeMethod, &got.Nonce, &got.CreatedAt, &got.ExpiresAt,
 	))
 
-	s.Equal(ac.Code, got.Code)
+	s.Equal(sha256Hex(ac.Code), got.Code, "only the code's hash is stored")
 	s.Equal(ac.ClientID, got.ClientID)
 	s.Equal(ac.RedirectURI, got.RedirectURI)
 	s.Equal(ac.Email, got.Email)
@@ -356,7 +356,7 @@ func (s *StoreSuite) TestConsumeAuthCodeRoundTripAndSingleUse() {
 
 	var remaining int
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT count(*) FROM auth_codes WHERE code = ?`, ac.Code)
+		`SELECT count(*) FROM auth_codes WHERE code_hash = ?`, sha256Hex(ac.Code))
 	s.Require().NoError(row.Scan(&remaining))
 	s.Zero(remaining)
 }
@@ -388,15 +388,15 @@ func (s *StoreSuite) TestSaveRefreshRoundTrip() {
 
 	var got oidc.Refresh
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT token, jti, client_id, email, family_id, auth_time, created_at, expires_at
-		 FROM refresh_tokens WHERE token = ?`, r.Token)
+		`SELECT token_hash, jti, client_id, email, family_id, auth_time, created_at, expires_at
+		 FROM refresh_tokens WHERE token_hash = ?`, sha256Hex(r.Token))
 	s.Require().NoError(row.Scan(
 		&got.Token, &got.JTI, &got.ClientID, &got.Email, &got.FamilyID, &got.AuthTime, &got.CreatedAt, &got.ExpiresAt,
 	))
 	s.Equal(r.FamilyID, got.FamilyID)
 	s.True(r.AuthTime.Equal(got.AuthTime), "authTime: want %v got %v", r.AuthTime, got.AuthTime)
 
-	s.Equal(r.Token, got.Token)
+	s.Equal(sha256Hex(r.Token), got.Token, "only the token's hash is stored")
 	s.Equal(r.JTI, got.JTI)
 	s.Equal(r.ClientID, got.ClientID)
 	s.Equal(r.Email, got.Email)
@@ -440,7 +440,7 @@ func (s *StoreSuite) TestConsumeRefreshRoundTripAndRotation() {
 
 	var consumed int
 	row := s.store.db.QueryRowContext(s.ctx,
-		`SELECT count(*) FROM refresh_tokens WHERE token = ? AND consumed_at IS NOT NULL`, r.Token)
+		`SELECT count(*) FROM refresh_tokens WHERE token_hash = ? AND consumed_at IS NOT NULL`, sha256Hex(r.Token))
 	s.Require().NoError(row.Scan(&consumed))
 	s.Equal(1, consumed)
 }

@@ -353,14 +353,21 @@ func (s *cliStack) confirmRenders(ctx context.Context, t *testing.T, verificatio
 // driveDeviceDecision walks the RFC 8628 §3.3 verification UI through a
 // cookie-jar browser client (see driveVerificationUI), so the session cookie
 // is returned only where its Path and Secure attributes allow, as in a real
-// browser.
-func (s *cliStack) driveDeviceDecision(ctx context.Context, t *testing.T, userCode, decision string) {
+// browser. It returns the verification-page session cookie the jar holds.
+func (s *cliStack) driveDeviceDecision(ctx context.Context, t *testing.T, userCode, decision string) *http.Cookie {
 	t.Helper()
 	browser := newBrowserClient(t, map[string]string{
 		"tempogate:8000":  strings.TrimPrefix(s.tempogateBaseURL, "http://"),
 		"mockgoogle:8080": strings.TrimPrefix(s.mockBaseURL, "http://"),
 	})
 	driveVerificationUI(ctx, t, browser, tempogateIssuer, userCode, decision)
+	for _, c := range browser.Jar.Cookies(mustParseURL(t, tempogateIssuer+oidc.DeviceConfirmPath)) {
+		if c.Name == oidc.DefaultSessionCookieName {
+			return c
+		}
+	}
+	t.Fatalf("the browser holds no %s cookie after the verification UI", oidc.DefaultSessionCookieName)
+	return nil
 }
 
 // mockApproveHrefPattern extracts the relative /auth/approve URL the mock

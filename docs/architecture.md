@@ -70,6 +70,15 @@ no external database to run a small deployment. SQLite tolerates one writer,
 so the deployment is single-replica until a shared backend lands; the chart
 enforces this (`replicaCount: 1`, autoscaling off, `Recreate` strategy).
 
+**Nothing in the state store is a usable credential on its own.** A copy of
+the database is the realistic leak (a backup, a volume snapshot, another
+local user), so the files are owner-only and the bearer secrets in them
+(refresh tokens, authorization and device codes, verification-page session
+ids) are stored as their SHA-256 and looked up by it. The signing key is the
+one secret that must be recoverable; an optional key-encryption key
+(`KEYS_ENCRYPTION_KEY`, kept outside the database) stores it AES-256-GCM
+encrypted, so the database alone cannot mint tokens.
+
 **Refresh tokens are a revocable session, not a bearer forever.** Each
 sign-in starts a refresh-token family: single-use tokens that rotate on every
 exchange and carry the original sign-in time (`auth_time`) and a family id.

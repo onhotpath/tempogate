@@ -35,7 +35,10 @@ RUN mkdir -p /out/state
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=builder /out/tempogate /tempogate
-COPY --chown=nonroot:nonroot --from=builder /out/state /var/lib/tempogate
+# Owner-only: it holds the signing keys and session state, and a Docker
+# volume mounted here is seeded with this mode. (--chmod, because COPY
+# creates the destination directory itself rather than copying its mode.)
+COPY --chown=nonroot:nonroot --chmod=0700 --from=builder /out/state /var/lib/tempogate
 
 USER nonroot:nonroot
 ENTRYPOINT ["/tempogate"]

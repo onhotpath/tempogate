@@ -307,6 +307,7 @@ separator.
 | `OIDC_CLIENT_SECRETS` | No | _(empty)_ | Comma-separated `id:secret`; promotes a registered client to confidential (PKCE carve-out) |
 | `HTTP_LISTENER` | No | `127.0.0.1:8000` | `host:port` for the public listener |
 | `STATE_SQLITE_PATH` | No | `/var/lib/tempogate/state.db` | SQLite state-store path (back this with a PVC) |
+| `KEYS_ENCRYPTION_KEY` / `KEYS_ENCRYPTION_KEY_FILE` | No | _(empty)_ | Base64 32-byte key (or a file holding it) that encrypts the stored signing key. See [Signing-key encryption](docs/configuration.md#signing-key-encryption) |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
 | `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
 
@@ -391,6 +392,11 @@ Go 1.27+ is required. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [charts/tempogate/README.md](charts/tempogate/README.md) — Helm deployment
 
 ## Security
+
+The state database is created owner-only (`0600`, in a `0700` directory when tempogate creates it).
+Bearer secrets in it (refresh tokens, authorization and device codes, session ids) are stored only as SHA-256 hashes.
+The signing key is stored as plain PEM unless you set `KEYS_ENCRYPTION_KEY`; set it in production so a leaked backup or volume snapshot cannot mint tokens.
+See [docs/configuration.md](docs/configuration.md#state-store-sqlite).
 
 Report vulnerabilities via
 [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new)

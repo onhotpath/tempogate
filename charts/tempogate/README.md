@@ -116,6 +116,7 @@ auth:
 | `state.mountPath` | `/var/lib/tempogate` | Where the PVC is mounted. |
 | `state.sqlitePath` | `/var/lib/tempogate/state.db` | `STATE_SQLITE_PATH` (must be under `mountPath`). |
 | `log.level` | `info` | `LOG_LEVEL` (`debug`/`info`/`warn`/`error`). |
+| `keys.encryptionKeySecretRef` | `{name,key}` empty | Secret holding `KEYS_ENCRYPTION_KEY` (base64 32-byte key that encrypts the stored signing key). Recommended in production; once set, tempogate needs it to boot. See [docs/configuration.md](../../docs/configuration.md#signing-key-encryption). |
 | `oidc.issuer` | `""` | `OIDC_ISSUER` — externally reachable base URL. |
 | `oidc.sessionSigningKeySecretRef` | `{name,key}` empty | Secret holding `OIDC_SESSION_SIGNING_KEY` (base64url 32-byte HMAC key for the device-flow verification-page cookie). tempogate refuses to boot when unset. |
 | `oidc.sessionTtl` | `""` | `OIDC_SESSION_TTL` — verification-page cookie TTL (Go duration). `""` leaves the binary default (5m). |

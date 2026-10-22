@@ -44,9 +44,11 @@ type Keys struct {
 	alg     string
 	now     func() time.Time
 	genOpts []GenerateOption
+	kek     []byte
 
-	mu       sync.RWMutex
-	keypairs []Keypair
+	mu          sync.RWMutex
+	keypairs    []Keypair
+	unencrypted []string
 }
 
 func New(opts ...Option) *Keys {
@@ -97,14 +99,21 @@ func (k *Keys) All() []Keypair {
 // With force=true, a brand-new keypair is appended; old keypairs are
 // retained (rotation pattern; explicit retirement will come later).
 func (k *Keys) Generate(ctx context.Context, force bool) (Keypair, error) {
-	existing, err := k.store.LoadKeypairs(ctx)
+	stored, err := k.store.LoadKeypairs(ctx)
 	if err != nil {
 		return Keypair{}, fmt.Errorf("keys: load keypairs: %w", err)
 	}
 
-	if len(existing) > 0 && !force {
-		latest := pickLatest(existing)
+	if len(stored) > 0 && !force {
+		latest := pickLatest(stored)
 		return Keypair{}, fmt.Errorf("%w (kid=%s)", ErrKeypairExists, latest.Kid)
+	}
+
+	// Opening the existing keys first means a rotation without the KEK
+	// fails instead of adding a plaintext key beside encrypted ones.
+	existing, unencrypted, err := k.openStored(stored)
+	if err != nil {
+		return Keypair{}, err
 	}
 
 	kp, err := GenerateKeypair(k.generateOptions()...)
@@ -112,8 +121,8 @@ func (k *Keys) Generate(ctx context.Context, force bool) (Keypair, error) {
 		return Keypair{}, err
 	}
 
-	if err := k.store.SaveKeypair(ctx, kp); err != nil {
-		return Keypair{}, fmt.Errorf("keys: save keypair: %w", err)
+	if err := k.save(ctx, kp); err != nil {
+		return Keypair{}, err
 	}
 
 	cache := make([]Keypair, 0, len(existing)+1)
@@ -123,9 +132,22 @@ func (k *Keys) Generate(ctx context.Context, force bool) (Keypair, error) {
 
 	k.mu.Lock()
 	k.keypairs = cache
+	k.unencrypted = unencrypted
 	k.mu.Unlock()
 
 	return kp, nil
+}
+
+// save persists kp, encrypted when a KEK is configured.
+func (k *Keys) save(ctx context.Context, kp Keypair) error {
+	toStore, err := k.sealForStore(kp)
+	if err != nil {
+		return err
+	}
+	if err := k.store.SaveKeypair(ctx, toStore); err != nil {
+		return fmt.Errorf("keys: save keypair: %w", err)
+	}
+	return nil
 }
 
 func sortByCreatedAt(kps []Keypair) {

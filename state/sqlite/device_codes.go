@@ -39,11 +39,11 @@ var ErrDeviceCodeNotPending = fmt.Errorf("%w: sqlite", oidc.ErrDeviceCodeNotPend
 func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO device_codes
-		   (device_code, user_code, client_id, scope, email,
+		   (device_code_hash, user_code, client_id, scope, email,
 		    approved_at, denied_at, last_polled_at, interval_seconds,
 		    created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		dc.Code, dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Email),
+		secretHash(dc.Code), dc.UserCode, dc.ClientID, dc.Scope, nullString(dc.Email),
 		nullTime(dc.ApprovedAt), nullTime(dc.DeniedAt), nullTime(dc.LastPolledAt),
 		dc.IntervalSeconds, dc.CreatedAt, dc.ExpiresAt,
 	)
@@ -52,7 +52,7 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 		if errors.As(err, &sqliteErr) {
 			switch sqliteErr.Code() {
 			case sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3lib.SQLITE_CONSTRAINT_UNIQUE:
-				return fmt.Errorf("%w: %s", ErrDuplicateDeviceCode, dc.Code)
+				return ErrDuplicateDeviceCode
 			}
 		}
 		return fmt.Errorf("sqlite: save device code: %w", err)
@@ -61,13 +61,19 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 }
 
 func (s *Store) LookupDeviceCodeByDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
-	return s.lookupDeviceCode(ctx, "device_code", deviceCode)
+	dc, err := s.lookupDeviceCode(ctx, "device_code_hash", secretHash(deviceCode))
+	if err != nil {
+		return oidc.DeviceCode{}, err
+	}
+	dc.Code = deviceCode
+	return dc, nil
 }
 
 // LookupDeviceCodeByUserCode resolves the verification-page path's row.
 // Caller is responsible for normalising the user_code (uppercase, strip
 // dashes) before calling; the column is stored already normalised so the
-// lookup is a plain UNIQUE-index probe.
+// lookup is a plain UNIQUE-index probe. The result's Code is empty: only
+// the device code's hash is stored, and this path never needs it.
 func (s *Store) LookupDeviceCodeByUserCode(ctx context.Context, userCode string) (oidc.DeviceCode, error) {
 	return s.lookupDeviceCode(ctx, "user_code", userCode)
 }
@@ -81,19 +87,19 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 		lastPolledAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT device_code, user_code, client_id, scope, email,
+		`SELECT user_code, client_id, scope, email,
 		        approved_at, denied_at, last_polled_at, interval_seconds,
 		        created_at, expires_at
 		 FROM device_codes
 		 WHERE `+column+` = ?`,
 		value,
 	).Scan(
-		&dc.Code, &dc.UserCode, &dc.ClientID, &dc.Scope, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return oidc.DeviceCode{}, fmt.Errorf("%w: %s", ErrDeviceCodeNotFound, value)
+		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
 		return oidc.DeviceCode{}, fmt.Errorf("sqlite: lookup device code by %s: %w", column, err)
@@ -116,6 +122,7 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 // are slow_down. The interval is judged in Go because timestamps are stored
 // as Go time strings that SQLite's date functions cannot read.
 func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (bool, error) {
+	hash := secretHash(deviceCode)
 	var (
 		lastPolled    sql.NullTime
 		lastPolledRaw sql.NullString
@@ -123,8 +130,8 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 	)
 	err := s.db.QueryRowContext(ctx,
 		`SELECT last_polled_at, CAST(last_polled_at AS TEXT), interval_seconds
-		 FROM device_codes WHERE device_code = ?`,
-		deviceCode,
+		 FROM device_codes WHERE device_code_hash = ?`,
+		hash,
 	).Scan(&lastPolled, &lastPolledRaw, &interval)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrDeviceCodeNotFound
@@ -140,8 +147,8 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		}
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE device_codes SET last_polled_at = ?
-			 WHERE device_code = ? AND last_polled_at IS ?`,
-			now, deviceCode, prev,
+			 WHERE device_code_hash = ? AND last_polled_at IS ?`,
+			now, hash, prev,
 		)
 		if err != nil {
 			return false, fmt.Errorf("sqlite: poll device code: %w", err)
@@ -156,8 +163,8 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE device_codes
 		 SET last_polled_at = ?, interval_seconds = interval_seconds + 5
-		 WHERE device_code = ?`,
-		now, deviceCode,
+		 WHERE device_code_hash = ?`,
+		now, hash,
 	); err != nil {
 		return false, fmt.Errorf("sqlite: poll device code slow_down: %w", err)
 	}
@@ -237,25 +244,25 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 // the final token-mint path, after an Approve has stamped the row.
 func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
 	var (
-		dc           oidc.DeviceCode
+		dc           = oidc.DeviceCode{Code: deviceCode}
 		email        sql.NullString
 		approvedAt   sql.NullTime
 		deniedAt     sql.NullTime
 		lastPolledAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx,
-		`DELETE FROM device_codes WHERE device_code = ?
-		 RETURNING device_code, user_code, client_id, scope, email,
+		`DELETE FROM device_codes WHERE device_code_hash = ?
+		 RETURNING user_code, client_id, scope, email,
 		           approved_at, denied_at, last_polled_at, interval_seconds,
 		           created_at, expires_at`,
-		deviceCode,
+		secretHash(deviceCode),
 	).Scan(
-		&dc.Code, &dc.UserCode, &dc.ClientID, &dc.Scope, &email,
+		&dc.UserCode, &dc.ClientID, &dc.Scope, &email,
 		&approvedAt, &deniedAt, &lastPolledAt, &dc.IntervalSeconds,
 		&dc.CreatedAt, &dc.ExpiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return oidc.DeviceCode{}, fmt.Errorf("%w: %s", ErrDeviceCodeNotFound, deviceCode)
+		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
 		return oidc.DeviceCode{}, fmt.Errorf("sqlite: consume device code: %w", err)
