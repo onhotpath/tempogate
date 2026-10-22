@@ -113,13 +113,14 @@ func (s *FxSuite) TestFxProducesAdminRegistrar() {
 		// admin depends on admin.KeyRegistry; provide the sqlite adapter
 		// the same way state/sqlite/fx.go does.
 		fx.Provide(sqliteAdminAdapter),
+		fx.Provide(func(s *sqlite.Store) admin.SessionStore { return &storeSessions{s: s} }),
 		admin.Fx(),
 		fx.Populate(&collected),
 	)
 	app.RequireStart().RequireStop()
 
-	s.Require().Len(collected.AdminRegistrars, 2,
-		"admin.Fx() must contribute the integration-key and signing-key registrars to admin_registrars")
+	s.Require().Len(collected.AdminRegistrars, 3,
+		"admin.Fx() must contribute the integration-key, signing-key and session registrars to admin_registrars")
 	s.Require().Len(collected.AdminMiddlewares, 1,
 		"admin.Fx() must contribute the guard to admin_middlewares")
 
@@ -133,6 +134,8 @@ func (s *FxSuite) TestFxProducesAdminRegistrar() {
 	s.NotNil(api.OpenAPI().Paths[admin.KeysPath])
 	s.NotNil(api.OpenAPI().Paths[admin.SigningKeysPath])
 	s.NotNil(api.OpenAPI().Paths[admin.SigningKeyRetirePath])
+	s.NotNil(api.OpenAPI().Paths[admin.SessionsPath])
+	s.NotNil(api.OpenAPI().Paths[admin.SessionsRevokePath])
 }
 
 func (s *FxSuite) TestFxRejectsNonPositiveMaxTTL() {

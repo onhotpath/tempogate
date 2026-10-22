@@ -4,8 +4,8 @@
 // tempogate image: rotation keeps working within limits, replaying a rotated
 // token revokes the newer one too, removing a domain from
 // OIDC_ALLOWED_DOMAINS (and restarting on the same state volume) ends the
-// domain's sessions, `tempogate sessions revoke` run inside the container
-// ends a session, and OIDC_REFRESH_MAX_LIFETIME is an absolute cap that
+// domain's sessions, `tempogate sessions revoke` (--email, --family,
+// --subject) run inside the container ends sessions, and OIDC_REFRESH_MAX_LIFETIME is an absolute cap that
 // rotation cannot extend. Before the fix every one of the negative steps
 // below refreshed successfully.
 //
@@ -33,6 +33,10 @@ import (
 
 // familyIDPattern lifts family ids out of `tempogate sessions list` output.
 var familyIDPattern = regexp.MustCompile(`(?m)^([0-9a-f]{32})\s`)
+
+// sessionRowPattern lifts the SUBJECT column out of a `sessions list` row
+// (FAMILY_ID CLIENT_ID EMAIL SUBJECT ...).
+var sessionRowPattern = regexp.MustCompile(`(?m)^[0-9a-f]{32}\s+\S+\s+\S+\s+(\S+)\s`)
 
 func TestRefreshLifecycle(t *testing.T) {
 	if testing.Short() {
@@ -119,6 +123,19 @@ func TestRefreshLifecycle(t *testing.T) {
 		require.Contains(t, tg.exec(t, "sessions", "revoke", "--family", families[0][1]), "revoked 1 session(s)")
 		requireInvalidGrant(t, refresh(rt), "the revoked family")
 		r.refreshOK(refresh(other), cliClientID)
+	})
+
+	t.Run("sessions revoke --subject ends every session of that account", func(t *testing.T) {
+		r.t = t
+		rt := r.cliRefreshToken(mockBase)
+		row := sessionRowPattern.FindStringSubmatch(tg.exec(t, "sessions", "list", "--email", allowedEmail))
+		require.NotNil(t, row, "the new session is listed")
+		subject := row[1]
+		require.Contains(t, tg.exec(t, "sessions", "list", "--subject", subject), allowedEmail)
+
+		require.Contains(t, tg.exec(t, "sessions", "revoke", "--subject", subject), "revoked")
+		requireInvalidGrant(t, refresh(rt), "a session of the revoked subject")
+		require.NotRegexp(t, familyIDPattern, tg.exec(t, "sessions", "list"), "no session of the only test account is left")
 	})
 
 	t.Run("removing the domain from the allowlist ends the session", func(t *testing.T) {

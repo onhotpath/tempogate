@@ -62,6 +62,19 @@ func newSigningKeysRegistrar(p signingKeysParams) func(huma.API) {
 	return NewSigningKeys(p.Keys, WithSigningKeysLogger(p.Logger.Named("admin"))).Register
 }
 
+type sessionsParams struct {
+	fx.In
+
+	Store  SessionStore
+	Logger *zap.Logger
+}
+
+// newSessionsRegistrar mounts the session routes over the sqlite adapter
+// that wraps the same store methods as `tempogate sessions`.
+func newSessionsRegistrar(p sessionsParams) func(huma.API) {
+	return NewSessions(p.Store, WithSessionsLogger(p.Logger.Named("admin"))).Register
+}
+
 type guardParams struct {
 	fx.In
 
@@ -90,12 +103,13 @@ func newGuardInstaller(p guardParams) (func(huma.API), error) {
 	return g.Install, nil
 }
 
-// Fx contributes the /admin/keys and /admin/signing-keys registrars into
-// api's "admin_registrars" group and the Guard into "admin_middlewares": the
-// routes live on the admin Surface, never on the public one, and always
-// behind the guard.
-// KeyRegistry is satisfied by state/sqlite's adapter constructor (see
-// state/sqlite/admin_adapter.go); the Signer is provided by keys.Fx.
+// Fx contributes the /admin/keys, /admin/signing-keys and /admin/sessions
+// registrars into api's "admin_registrars" group and the Guard into
+// "admin_middlewares": the routes live on the admin Surface, never on the
+// public one, and always behind the guard.
+// KeyRegistry and SessionStore are satisfied by state/sqlite's adapter
+// constructors (see state/sqlite/admin_adapter.go); the Signer is provided
+// by keys.Fx.
 func Fx() fx.Option {
 	return fx.Options(
 		fx.Provide(
@@ -105,6 +119,10 @@ func Fx() fx.Option {
 			),
 			fx.Annotate(
 				newSigningKeysRegistrar,
+				fx.ResultTags(`group:"admin_registrars"`),
+			),
+			fx.Annotate(
+				newSessionsRegistrar,
 				fx.ResultTags(`group:"admin_registrars"`),
 			),
 			fx.Annotate(

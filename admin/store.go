@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrIntegrationKeyNotFound is the consumer sentinel the sqlite layer wraps
@@ -56,4 +57,40 @@ type KeyRegistry interface {
 // revoke-takes-effect-eventually contract).
 type DenylistHydrator interface {
 	Hydrate(jti string)
+}
+
+// ErrSessionNotFound is the consumer sentinel the sqlite layer wraps when a
+// family revoke names a family with no refresh tokens at all, so the
+// handler can answer 404 the way an unknown integration key does.
+var ErrSessionNotFound = errors.New("admin: session not found")
+
+// Session is one live refresh-token family (one sign-in) as operators see
+// it. It deliberately carries no token value or hash.
+type Session struct {
+	FamilyID  string
+	ClientID  string
+	Subject   string
+	Email     string
+	AuthTime  time.Time
+	RotatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// SessionFilter narrows SessionStore.List. Empty fields do not filter; Email
+// matches case-insensitively, Subject exactly.
+type SessionFilter struct {
+	Email   string
+	Subject string
+}
+
+// SessionStore is the refresh-session contract admin/ depends on; a shim in
+// state/sqlite maps it onto the same *sqlite.Store methods `tempogate
+// sessions` calls, so the HTTP and CLI surfaces cannot drift. Each Revoke*
+// reports how many live sessions it ended; RevokeFamily wraps
+// ErrSessionNotFound for a family that never existed.
+type SessionStore interface {
+	List(ctx context.Context, f SessionFilter, now time.Time) ([]Session, error)
+	RevokeFamily(ctx context.Context, familyID string, at time.Time) (int, error)
+	RevokeEmail(ctx context.Context, email string, at time.Time) (int, error)
+	RevokeSubject(ctx context.Context, subject string, at time.Time) (int, error)
 }

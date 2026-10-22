@@ -541,8 +541,12 @@ func (s *StoreSuite) TestErrorsAfterClose() {
 			_, err := s.store.RevokeRefreshByEmail(s.ctx, "closed@example.com", time.Now().UTC())
 			return err
 		}},
+		{"RevokeRefreshBySubject", func() error {
+			_, err := s.store.RevokeRefreshBySubject(s.ctx, "closed", time.Now().UTC())
+			return err
+		}},
 		{"ListRefreshSessions", func() error {
-			_, err := s.store.ListRefreshSessions(s.ctx, "", time.Now().UTC())
+			_, err := s.store.ListRefreshSessions(s.ctx, RefreshSessionFilter{}, time.Now().UTC())
 			return err
 		}},
 		{"SaveDeviceCode", func() error {

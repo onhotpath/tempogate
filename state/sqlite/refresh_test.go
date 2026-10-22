@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
@@ -49,6 +50,33 @@ func (s *StoreSuite) TestRevokeRefreshFamily() {
 	n, err = s.store.RevokeRefreshFamily(s.ctx, "fam-a", time.Now().UTC())
 	s.Require().NoError(err)
 	s.Zero(n, "revoking twice revokes nothing new")
+
+	_, err = s.store.RevokeRefreshFamily(s.ctx, "fam-unknown", time.Now().UTC())
+	s.Truef(errors.Is(err, admin.ErrSessionNotFound), "a family that never existed is not found, got %v", err)
+}
+
+func (s *StoreSuite) TestRevokeRefreshBySubject() {
+	s.saveFamily("fam-a", "alice@example.com", "a1", "a2")
+	s.saveFamily("fam-b", "alice-renamed@example.com", "b1")
+	other := s.refresh("c1")
+	other.FamilyID = "fam-c"
+	other.Subject = "GOOGLE-SUB-ALICE"
+	s.Require().NoError(s.store.SaveRefresh(s.ctx, other))
+
+	n, err := s.store.RevokeRefreshBySubject(s.ctx, "google-sub-alice", time.Now().UTC())
+	s.Require().NoError(err)
+	s.Equal(2, n, "every family of the subject, whatever email it signed in with")
+
+	for _, tok := range []string{"a2", "b1"} {
+		_, err = s.store.ConsumeRefresh(s.ctx, tok, "ui", time.Now().UTC())
+		s.Truef(errors.Is(err, oidc.ErrRefreshNotFound), "%s: got %v", tok, err)
+	}
+	_, err = s.store.ConsumeRefresh(s.ctx, "c1", "ui", time.Now().UTC())
+	s.NoError(err, "a subject is matched exactly")
+
+	n, err = s.store.RevokeRefreshBySubject(s.ctx, "nobody", time.Now().UTC())
+	s.Require().NoError(err)
+	s.Zero(n)
 }
 
 // TestSaveRefreshIntoRevokedFamilyFails closes the rotate-vs-revoke race: a
@@ -138,7 +166,7 @@ func (s *StoreSuite) TestListRefreshSessions() {
 	expired.ExpiresAt = now.Add(-time.Minute)
 	s.Require().NoError(s.store.SaveRefresh(s.ctx, expired))
 
-	all, err := s.store.ListRefreshSessions(s.ctx, "", now)
+	all, err := s.store.ListRefreshSessions(s.ctx, RefreshSessionFilter{}, now)
 	s.Require().NoError(err)
 	s.Require().Len(all, 2, "only live sessions: not revoked, not expired, one row per family")
 	byFamily := map[string]RefreshSession{}
@@ -153,10 +181,17 @@ func (s *StoreSuite) TestListRefreshSessions() {
 	s.True(a.ExpiresAt.After(now))
 	s.Contains(byFamily, "fam-b")
 
-	alice, err := s.store.ListRefreshSessions(s.ctx, "ALICE@example.com", now)
+	alice, err := s.store.ListRefreshSessions(s.ctx, RefreshSessionFilter{Email: "ALICE@example.com"}, now)
 	s.Require().NoError(err)
 	s.Require().Len(alice, 1)
 	s.Equal("fam-a", alice[0].FamilyID)
+
+	bySub, err := s.store.ListRefreshSessions(s.ctx, RefreshSessionFilter{Subject: "google-sub-alice"}, now)
+	s.Require().NoError(err)
+	s.Len(bySub, 2, "both live families carry the fixture's subject")
+	none, err := s.store.ListRefreshSessions(s.ctx, RefreshSessionFilter{Email: "alice@example.com", Subject: "other"}, now)
+	s.Require().NoError(err)
+	s.Empty(none, "filters combine")
 }
 
 // TestMigration0011BackfillsRefreshLineage applies the migrations up to 0009

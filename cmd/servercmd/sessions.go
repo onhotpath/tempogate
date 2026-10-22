@@ -21,8 +21,8 @@ type sessionsParams struct {
 
 // newSessionsCmd lets an operator inspect and end refresh-token sessions
 // (one per sign-in, i.e. per refresh-token family) directly on the state
-// store, like `keys`. It is the revocation path until the admin HTTP API
-// gains an authenticated equivalent.
+// store, like `keys`. The admin API's /admin/sessions routes are its HTTP
+// twin over the same store methods; keep the two surfaces equal.
 func newSessionsCmd(load deps[sessionsParams]) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sessions",
@@ -33,7 +33,7 @@ func newSessionsCmd(load deps[sessionsParams]) *cobra.Command {
 }
 
 func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
-	var email string
+	var f sqlite.RefreshSessionFilter
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List live sessions (never prints token values)",
@@ -43,7 +43,7 @@ func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 				if err := storeReady(ctx, p.Store); err != nil {
 					return err
 				}
-				sessions, err := p.Store.ListRefreshSessions(ctx, email, time.Now().UTC())
+				sessions, err := p.Store.ListRefreshSessions(ctx, f, time.Now().UTC())
 				if err != nil {
 					return err
 				}
@@ -58,22 +58,23 @@ func newSessionsListCmd(load deps[sessionsParams]) *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&email, "email", "", "only sessions of this email (case-insensitive)")
+	c.Flags().StringVar(&f.Email, "email", "", "only sessions of this email (case-insensitive)")
+	c.Flags().StringVar(&f.Subject, "subject", "", "only sessions of this Google subject (exact)")
 	return c
 }
 
 func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
-	var email, family string
+	var email, subject, family string
 	c := &cobra.Command{
 		Use:   "revoke",
-		Short: "Revoke every session of a user (--email) or one session (--family)",
+		Short: "Revoke every session of a user (--email, --subject) or one session (--family)",
 		Long: "Revoke refresh-token sessions. The client's next refresh fails with invalid_grant.\n" +
 			"Access tokens already issued stay valid until they expire (OIDC_ACCESS_TOKEN_TTL).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// MarkFlagsOneRequired accepts an explicitly empty value, which
 			// would otherwise match nothing and report success.
-			if email == "" && family == "" {
-				return errors.New("one of --email or --family must be non-empty")
+			if email == "" && subject == "" && family == "" {
+				return errors.New("one of --email, --subject or --family must be non-empty")
 			}
 			ctx := cmd.Context()
 			return load(ctx, func(p sessionsParams) error {
@@ -85,9 +86,12 @@ func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 					n   int
 					err error
 				)
-				if email != "" {
+				switch {
+				case email != "":
 					n, err = p.Store.RevokeRefreshByEmail(ctx, email, now)
-				} else {
+				case subject != "":
+					n, err = p.Store.RevokeRefreshBySubject(ctx, subject, now)
+				default:
 					n, err = p.Store.RevokeRefreshFamily(ctx, family, now)
 				}
 				if err != nil {
@@ -99,9 +103,10 @@ func newSessionsRevokeCmd(load deps[sessionsParams]) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&email, "email", "", "revoke every session of this email (case-insensitive)")
-	c.Flags().StringVar(&family, "family", "", "revoke the session with this family id (see `sessions list`)")
-	c.MarkFlagsMutuallyExclusive("email", "family")
-	c.MarkFlagsOneRequired("email", "family")
+	c.Flags().StringVar(&subject, "subject", "", "revoke every session of this Google subject (exact)")
+	c.Flags().StringVar(&family, "family", "", "revoke the session with this family id (see `sessions list`); fails if no such session exists")
+	c.MarkFlagsMutuallyExclusive("email", "subject", "family")
+	c.MarkFlagsOneRequired("email", "subject", "family")
 	return c
 }
 
