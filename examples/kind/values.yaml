@@ -46,7 +46,7 @@ oidc:
 # serve refuses to start without authorization. Replace this rule with your
 # own: "<email:address|domain:domain>=<namespace>:<role>[,...]", roles read,
 # write or admin, temporal-system for every namespace. See
-# docs/configuration.md#authorization.
+# docs/authorization.md#authorization.
 authz:
   rules:
     - "email:alice@example.com=default:write"

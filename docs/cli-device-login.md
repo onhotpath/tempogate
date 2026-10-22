@@ -116,7 +116,7 @@ field, seconds). Each poll resolves to one of:
 | --------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
 | `authorization_pending` | Still waiting for the human to Approve.                    | Sleep `interval` seconds, poll again.                   |
 | `slow_down`           | Polling faster than the server's published interval.         | Bump local interval **+5 s** (per RFC 8628 §3.5), poll again. |
-| `access_denied`       | Human clicked **Deny**, or no [authorization rule](configuration.md#authorization) grants the signed-in account anything. | Exit non-zero with `the device authorization was denied`. |
+| `access_denied`       | Human clicked **Deny**, or no [authorization rule](authorization.md#authorization) grants the signed-in account anything. | Exit non-zero with `the device authorization was denied`. |
 | `expired_token`       | Device-code TTL elapsed before approval (`expires_in`).      | Exit non-zero, suggest re-running the command.          |
 | `invalid_grant`       | Server lost the `device_code` (storage rotated, manual revoke). | Exit non-zero.                                       |
 | Token response        | Approved. Same shape and TTL as a loopback-login token.      | Print to stdout, persist via `cli.Save`, exit zero.     |
@@ -179,7 +179,7 @@ approval sessions, so users mid-flow will see their verification page expire.
 
 The signed-in email is gated by `OIDC_ALLOWED_DOMAINS`, the same allowlist
 the loopback flow and the Web UI use. The token carries the permissions the
-server's [authorization rules](configuration.md#authorization) grant the
+server's [authorization rules](authorization.md#authorization) grant the
 account, the same as a loopback login; per-namespace scope downgrade on the
 approve page is not in this release. An admitted account no rule grants
 anything to is shown an "Access denied" page instead of the approve prompt,

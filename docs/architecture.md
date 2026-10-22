@@ -101,7 +101,7 @@ The integration-key jti denylist covers only JWTs; refresh tokens are opaque row
 
 A flood cannot fill the state volume or outlive its expiry.
 The reaper removes refresh tokens one family at a time, when no token in it is usable.
-So the tombstones for reuse detection never go early ([abuse controls](configuration.md#abuse-controls)).
+So the tombstones for reuse detection never go early ([abuse controls](hardening.md#abuse-controls)).
 
 **Migration is a separate step.** `serve` refuses to run against a stale schema.
 In Kubernetes, `migrate` is an initContainer of the single pod, and the `Recreate` strategy stops the old pod first.
@@ -125,7 +125,7 @@ The server-only `authz` package decides what the access token can do, from `emai
 - Resolution is in memory and needs nothing from Google, because tempogate keeps no upstream refresh token.
 - `serve` refuses to start with no rules and no default. Integration keys keep their own single (namespace, role).
 
-See [Authorization](configuration.md#authorization).
+See [Authorization](authorization.md#authorization).
 
 **Authenticated admin API.** A separate listener mints and revokes integration keys, retires signing keys, and lists and revokes sessions. Its routes:
 
@@ -139,12 +139,12 @@ So the `jti` denylist behind `DELETE /admin/keys/{id}` protects only tempogate's
 The hard kill switch is to retire a signing key.
 After `KEYS_RETIREMENT_GRACE` its `kid` leaves the JWKS, and no token it signed verifies anywhere.
 `serve` reloads keys every `KEYS_RELOAD_INTERVAL`, so rotation and retirement need no restart.
-A new key is published at once but signs only after `KEYS_PUBLISH_DELAY`, because Temporal does not fetch the JWKS again for an unknown `kid` ([revocation](configuration.md#revocation-and-signing-key-retirement)).
+A new key is published at once but signs only after `KEYS_PUBLISH_DELAY`, because Temporal does not fetch the JWKS again for an unknown `kid` ([revocation](operations.md#revocation-and-signing-key-retirement)).
 
 **Observable without leaking.** Prometheus metrics (logins, tokens by grant, OAuth2 error codes, Google latency, state-store errors) are only on the private admin listener.
 Feature packages report through their own small observer interfaces, so only the server build links the Prometheus client.
 Each request logs one line from an allowlist of fields: the path without its query, and no headers or bodies.
-`/readyz` checks the state store on every call; `/healthz` is only a liveness probe ([observability](configuration.md#observability)).
+`/readyz` checks the state store on every call; `/healthz` is only a liveness probe ([observability](operations.md#observability)).
 
 **Co-hostable.** `OIDC_ISSUER` can include a path.
 The OIDC surface then serves under that prefix on a shared hostname, and the health probes stay at the root ([sub-path hosting](configuration.md#sub-path-hosting)).
@@ -174,7 +174,7 @@ Keys minted as `worker` before this rule still authorize nothing.
 A role on `temporal-system` grants access to every namespace; the default ClaimMapper has no other construct for this.
 The authorizer treats a literal `*` as a namespace name, so tempogate rewrites the `perms.AddWildcard` Go API to `temporal-system:<role>`.
 The model is in [`perms`](../perms/perms.go).
-`/admin/keys` and the OIDC `/token` flow both build their claim through `perms.Grant`; `/token` uses the [authorization rules](configuration.md#authorization).
+`/admin/keys` and the OIDC `/token` flow both build their claim through `perms.Grant`; `/token` uses the [authorization rules](authorization.md#authorization).
 
 A token for `tenant-a` cannot do any action on `tenant-b`.
 The default authorizer at the Temporal frontend enforces that boundary, not tempogate.
@@ -188,4 +188,5 @@ A caller that needs several namespaces gets several keys; people get several nam
 
 - [docs/getting-started.md](getting-started.md) - the architecture, end to end, in ten minutes
 - [docs/configuration.md](configuration.md) - every setting
+- [docs/authorization.md](authorization.md), [docs/operations.md](operations.md) and [docs/hardening.md](hardening.md) - the behaviour behind the settings
 - [charts/tempogate/README.md](../charts/tempogate/README.md) - the Kubernetes deployment shape and its constraints

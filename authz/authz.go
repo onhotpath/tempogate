@@ -25,7 +25,7 @@ import (
 
 // UpgradeNote is where the errors below send an operator upgrading from the
 // release in which every admitted user was cluster admin.
-const UpgradeNote = "docs/configuration.md#upgrading-to-deny-by-default-authorization"
+const UpgradeNote = "docs/upgrading.md#upgrading-to-deny-by-default-authorization"
 
 // ErrNoPolicy is the refusal `serve` stops with when neither rules nor a
 // default are configured: an upgrade then fails at deploy time, not at the

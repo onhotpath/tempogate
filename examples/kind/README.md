@@ -42,7 +42,7 @@ chart installs, the `migrate` initContainer runs, and the server serves
 `serve` refuses to start without authorization, so the overlay carries one
 rule, `email:alice@example.com=default:write`. Replace it with your own
 `authz.rules` (see
-[Authorization](../../docs/configuration.md#authorization)).
+[Authorization](../../docs/authorization.md#authorization)).
 
 It does **not** wire SSO — no upstream Google client is configured, so the
 login flow is not exercised here. The full interactive SSO + CLI-token story

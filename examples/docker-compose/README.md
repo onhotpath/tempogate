@@ -121,7 +121,7 @@ OIDC_AUTHZ_RULES_0: "email:${DEMO_EMAIL:-alice@example.com}=temporal-system:admi
 
 To try a narrower grant, add rules to the `tempogate` service and restart it, e.g. `OIDC_AUTHZ_RULES_1: "email:bob@example.com=default:read"`, then sign in as bob with `DEMO_EMAIL=bob@example.com docker compose up -d`.
 An identity no rule matches is refused at sign-in with `access_denied`.
-See [Authorization](../../docs/configuration.md#authorization).
+See [Authorization](../../docs/authorization.md#authorization).
 
 ## Next
 

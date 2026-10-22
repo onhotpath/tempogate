@@ -107,7 +107,7 @@ services:
       # the state volume. Unset (plain PEM) by default for the demo; in real
       # deployments generate once with `openssl rand -base64 32`, supply via a
       # Secret, and keep it out of the volume's backups. Once set, tempogate
-      # needs it to start. See docs/configuration.md#signing-key-encryption.
+      # needs it to start. See docs/hardening.md#signing-key-encryption.
       KEYS_ENCRYPTION_KEY: "${TEMPOGATE_KEYS_ENCRYPTION_KEY:-}"
       OIDC_ALLOWED_DOMAINS: "${TEMPOGATE_ALLOWED_DOMAINS:-example.com}"
       # Authorization: which Temporal permissions each signed-in person gets.
@@ -117,7 +117,7 @@ services:
       #   OIDC_AUTHZ_RULES_1: "email:bob@example.com=default:read"
       #   OIDC_AUTHZ_RULES_2: "domain:example.com=default:write"
       # Anyone no rule matches is refused at sign-in (access_denied). See
-      # docs/configuration.md#authorization.
+      # docs/authorization.md#authorization.
       OIDC_AUTHZ_RULES_0: "email:${DEMO_EMAIL:-alice@example.com}=temporal-system:admin"
       # Workspace mode: Google's `hd` claim must also match. Recommended for
       # any Google Workspace organization.

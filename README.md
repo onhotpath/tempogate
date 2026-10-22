@@ -43,7 +43,7 @@ You point Temporal at it with two settings, and you change no Temporal code.
 
 **For your people**
 
-- **Browser SSO for the Temporal Web UI.** People sign in with Google. [Workspace mode](docs/configuration.md#hosted-domain-workspace-mode) blocks consumer Google accounts.
+- **Browser SSO for the Temporal Web UI.** People sign in with Google. [Workspace mode](docs/authorization.md#hosted-domain-workspace-mode) blocks consumer Google accounts.
 - **Tokens for the terminal.** Run `tempogate login` once. Then `tempogate token` prints a fresh JWT for the Temporal CLI and SDKs, and refreshes it before it expires.
 - **Sign-in with no browser.** `tempogate login --device` works on SSH hosts, cloud VMs and CI shells ([RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)).
 
@@ -159,7 +159,7 @@ OIDC_AUTHZ_RULES_1='domain:example.com=orders:read,payments:read'    # everyone 
 > To keep that behaviour while you write rules, set `OIDC_AUTHZ_DEFAULT_PERMISSIONS=temporal-system:admin`.
 > See [the upgrade guide](docs/upgrading.md).
 
-Read [Authorization](docs/configuration.md#authorization) for the grammar, and [Multi-tenancy](docs/architecture.md#multi-tenancy) for how Temporal enforces namespace boundaries.
+Read [Authorization](docs/authorization.md#authorization) for the grammar, and [Multi-tenancy](docs/architecture.md#multi-tenancy) for how Temporal enforces namespace boundaries.
 
 ### Get a token on your laptop
 
@@ -215,8 +215,8 @@ Each lever thus has a different effect:
 Retiring a signing key is the hard kill switch.
 First rotate with `tempogate keys generate --force`.
 The server publishes the new key without a restart, and signs with it after `KEYS_PUBLISH_DELAY` (default 5 minutes).
-Follow the [rotation runbook](docs/configuration.md#rotation-runbook).
-Sessions also end automatically: see [Refresh-token sessions](docs/configuration.md#refresh-token-sessions) for the idle and absolute lifetimes, and for reuse detection.
+Follow the [rotation runbook](docs/operations.md#rotation-runbook).
+Sessions also end automatically: see [Refresh-token sessions](docs/operations.md#refresh-token-sessions) for the idle and absolute lifetimes, and for reuse detection.
 
 ## Configuration
 
@@ -230,7 +230,8 @@ tempogate reads its settings in three layers, and the last layer wins:
 For Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 The [configuration reference](docs/configuration.md#quick-reference) lists every setting with its default.
-It also covers [PostgreSQL for several replicas](docs/configuration.md#postgresql), [sub-path hosting](docs/configuration.md#sub-path-hosting) on a shared hostname, and [metrics](docs/configuration.md#observability).
+It also covers [PostgreSQL for several replicas](docs/configuration.md#postgresql) and [sub-path hosting](docs/configuration.md#sub-path-hosting) on a shared hostname.
+[docs/operations.md](docs/operations.md#observability) describes the metrics, request logs and health probes.
 
 ## Documentation
 
@@ -238,8 +239,11 @@ It also covers [PostgreSQL for several replicas](docs/configuration.md#postgresq
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Web UI SSO and a CLI token in ten minutes, with a mock identity provider |
 | [Installation](docs/installation.md) | Image, Helm chart, CLI binaries, Homebrew and build from source |
+| [Configuration](docs/configuration.md) | Every setting and its default |
+| [Authorization](docs/authorization.md) | Workspace mode, authorization rules and the token subject |
+| [Operations](docs/operations.md) | Sessions, revocation, key rotation, metrics, logs and probes |
+| [Hardening](docs/hardening.md) | Rate limits, security headers and signing-key encryption |
 | [Upgrading](docs/upgrading.md) | What to change when you upgrade, release by release |
-| [Configuration](docs/configuration.md) | Every setting, revocation, key rotation and observability |
 | [Architecture](docs/architecture.md) | How the parts fit together, design decisions and multi-tenancy |
 | [CLI loopback login](docs/cli-loopback-login.md) | The `tempogate login` flow, token storage and refresh |
 | [CLI device login](docs/cli-device-login.md) | `tempogate login --device` for hosts with no browser |
@@ -270,7 +274,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
 - tempogate creates the state database with mode `0600`, in a `0700` directory when it creates the directory.
 - It stores bearer secrets (refresh tokens, authorization codes, device codes and session IDs) only as SHA-256 hashes.
-- It stores the signing key as plain PEM, unless you set `KEYS_ENCRYPTION_KEY`. Set it in production, so that a leaked backup cannot mint tokens. See [Signing-key encryption](docs/configuration.md#signing-key-encryption).
+- It stores the signing key as plain PEM, unless you set `KEYS_ENCRYPTION_KEY`. Set it in production, so that a leaked backup cannot mint tokens. See [Signing-key encryption](docs/hardening.md#signing-key-encryption).
 
 Report vulnerabilities through [GitHub Security Advisories](https://github.com/onhotpath/tempogate/security/advisories/new), as [SECURITY.md](SECURITY.md) describes.
 **Do not** open a public issue for a security report.

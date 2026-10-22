@@ -64,7 +64,7 @@ curl -fsS http://127.0.0.1:8000/healthz
   Service with a NetworkPolicy. The chart ships no ServiceMonitor or scrape
   annotations, and the admin listener must never sit behind a public Service
   or Ingress. See
-  [docs/configuration.md](../../docs/configuration.md#observability).
+  [docs/operations.md](../../docs/operations.md#observability).
 - **Probes.** `livenessProbe` hits `/healthz` (process only);
   `readinessProbe` hits `/readyz`, which also returns `503` while the
   SQLite state store is unavailable, taking the pod out of rotation without
@@ -119,7 +119,7 @@ authz:
 Deny is the default: tempogate refuses to start until `authz.rules` or `authz.defaultPermissions` is set.
 Upgrading from a release without rules, set `authz.defaultPermissions: "temporal-system:admin"` to keep every admitted user cluster admin while you write rules.
 A rule change takes effect after a rollout restart, at each user's next token refresh.
-See [docs/configuration.md](../../docs/configuration.md#authorization).
+See [docs/authorization.md](../../docs/authorization.md#authorization).
 
 ### Admin token
 
@@ -160,7 +160,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `service.admin.enabled` | `false` | Bind the admin listener on all pod interfaces and add a `<fullname>-admin` Service. Requires `admin.tokenSha256SecretRef`. |
 | `service.admin.type` / `port` | `ClusterIP` / `8081` | Admin Service type and port (also the container port and `ADMIN_LISTENER` port). |
 | `listenAddress` | `0.0.0.0` | `HTTP_LISTENER` bind host (must not be loopback in-cluster). |
-| `trustedProxies` | `[]` | `HTTP_TRUSTED_PROXIES`: CIDRs of the proxies (e.g. the ingress controller) whose `X-Forwarded-For` is believed for per-client rate limits. Empty: every client behind the ingress shares one budget. See [docs/configuration.md](../../docs/configuration.md#abuse-controls). |
+| `trustedProxies` | `[]` | `HTTP_TRUSTED_PROXIES`: CIDRs of the proxies (e.g. the ingress controller) whose `X-Forwarded-For` is believed for per-client rate limits. Empty: every client behind the ingress shares one budget. See [docs/hardening.md](../../docs/hardening.md#abuse-controls). |
 | `ingress.enabled` | `false` | Enable Ingress. |
 | `ingress.className` / `hosts` / `tls` | _(see values.yaml)_ | Ingress wiring. |
 | `httpRoute.enabled` | `false` | Gateway API HTTPRoute (alternative to Ingress). |
@@ -178,7 +178,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `state.mountPath` | `/var/lib/tempogate` | Where the PVC is mounted. |
 | `state.sqlitePath` | `/var/lib/tempogate/state.db` | `STATE_SQLITE_PATH` (must be under `mountPath`). |
 | `log.level` | `info` | `LOG_LEVEL` (`debug`/`info`/`warn`/`error`). |
-| `keys.encryptionKeySecretRef` | `{name,key}` empty | Secret holding `KEYS_ENCRYPTION_KEY` (base64 32-byte key that encrypts the stored signing key). Recommended in production; once set, tempogate needs it to boot. See [docs/configuration.md](../../docs/configuration.md#signing-key-encryption). |
+| `keys.encryptionKeySecretRef` | `{name,key}` empty | Secret holding `KEYS_ENCRYPTION_KEY` (base64 32-byte key that encrypts the stored signing key). Recommended in production; once set, tempogate needs it to boot. See [docs/hardening.md](../../docs/hardening.md#signing-key-encryption). |
 | `oidc.issuer` | `""` | `OIDC_ISSUER` — externally reachable base URL. |
 | `oidc.allowInsecureIssuer` | `false` | `OIDC_ALLOW_INSECURE_ISSUER` - development only. `serve` refuses a plain-http issuer on a non-loopback host unless this is `true`. |
 | `oidc.sessionSigningKeySecretRef` | `{name,key}` empty | Secret holding `OIDC_SESSION_SIGNING_KEY` (base64url 32-byte HMAC key for the device-flow verification-page cookie). tempogate refuses to boot when unset. |
@@ -187,7 +187,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `auth.allowInsecureRedirectUris` | `false` | `OIDC_ALLOW_INSECURE_REDIRECT_URIS` - dev only; allow plain-http non-loopback redirect URIs. |
 | `auth.allowedDomains` | `[]` | `OIDC_ALLOWED_DOMAINS` — SSO email-domain gate. |
 | `auth.allowedHostedDomains` | `[]` | `OIDC_ALLOWED_HOSTED_DOMAINS` - Google Workspace `hd` gate ("Workspace mode"); recommended for Workspace organizations. |
-| `authz.rules` | `[]` | `OIDC_AUTHZ_RULES_<n>` - `"<selector>=<namespace>:<role>[,...]"` rules mapping `email:<address>` or `domain:<domain>` to Temporal permissions. See [docs/configuration.md](../../docs/configuration.md#authorization). |
+| `authz.rules` | `[]` | `OIDC_AUTHZ_RULES_<n>` - `"<selector>=<namespace>:<role>[,...]"` rules mapping `email:<address>` or `domain:<domain>` to Temporal permissions. See [docs/authorization.md](../../docs/authorization.md#authorization). |
 | `authz.defaultPermissions` | `""` | `OIDC_AUTHZ_DEFAULT_PERMISSIONS` - permissions for admitted people no rule matches. Empty denies them. With `authz.rules` also empty, tempogate refuses to start; `temporal-system:admin` keeps the pre-rules behaviour (logged as a warning). |
 | `auth.clientSecretsSecretRef` | `{name,key}` empty | Secret holding `OIDC_CLIENT_SECRETS`. |
 | `auth.upstream.google.clientIdSecretRef` | `{name,key}` empty | Secret holding the Google client id. |

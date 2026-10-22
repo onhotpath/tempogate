@@ -36,7 +36,7 @@ curl --retry 20 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:8000/he
 
 Keep the signing key and the state volume across restarts.
 The generated client secret and the rule are only for this health check.
-For a real sign-in, also set `OIDC_ISSUER`, the registered clients, the allowed domains, the [authorization rules](configuration.md#authorization) and the Google credentials.
+For a real sign-in, also set `OIDC_ISSUER`, the registered clients, the allowed domains, the [authorization rules](authorization.md#authorization) and the Google credentials.
 Keep those secrets in a secret manager, not only in your shell, before you use this as a lasting deployment.
 To stop the example, run `docker stop tempogate`.
 
