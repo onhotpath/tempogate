@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -10,24 +9,23 @@ import (
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
-type recordingObserver struct {
-	mu  sync.Mutex
-	ops []string
+type recordingObserver struct{ meter *observetest.Meter }
+
+func newRecordingObserver() *recordingObserver {
+	return &recordingObserver{meter: observetest.NewMeter()}
 }
 
-func (r *recordingObserver) ObserveDBError(op string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ops = append(r.ops, op)
-}
-
+// calls is the op label of every failure counted, in order.
 func (r *recordingObserver) calls() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.ops...)
+	var ops []string
+	for _, m := range r.meter.Measurements("tempogate.db_errors") {
+		ops = append(ops, m.Attrs["op"])
+	}
+	return ops
 }
 
 func TestObserve(t *testing.T) {
@@ -35,8 +33,8 @@ func TestObserve(t *testing.T) {
 		// Every runtime store operation reports a failure under a fixed op
 		// name, so tempogate_db_errors_total can say which query is failing.
 		t.Run("DBErrorsAreObservedByOp", func(t *testing.T) {
-			obs := &recordingObserver{}
-			st := newTestStore(t, srv, WithErrorObserver(obs))
+			obs := newRecordingObserver()
+			st := newTestStore(t, srv, WithMeter(obs.meter))
 			st.pool.Close()
 
 			ctx := t.Context()
@@ -93,8 +91,8 @@ func TestObserve(t *testing.T) {
 		// A miss is a normal protocol outcome (replayed code, unknown
 		// token), not a database failure, and must not inflate the counter.
 		t.Run("NotFoundIsNotADBError", func(t *testing.T) {
-			obs := &recordingObserver{}
-			st := newTestStore(t, srv, WithErrorObserver(obs))
+			obs := newRecordingObserver()
+			st := newTestStore(t, srv, WithMeter(obs.meter))
 			ctx := t.Context()
 
 			_, err := st.ConsumeRefresh(ctx, "never-issued", "ui", time.Now())

@@ -95,7 +95,7 @@ func (s *TokenSuite) TestRefreshWithNoPermissionsRevokesTheFamily() {
 	s.Equal("invalid_grant", s.decodeOAuthError(resp))
 	s.True(s.store.familyRevoked("fam-1"), "a person no longer granted anything loses the session")
 	s.Equal(0, s.store.refreshCount(), "nothing rotated")
-	s.Equal([]string{"refresh_authz_denied"}, s.observed.revocations)
+	s.Equal([]string{"refresh_authz_denied"}, s.observed.revocationCalls())
 	s.Equal([]string{"refresh_token"}, s.observed.denials())
 	logs := s.logs.String()
 	s.Contains(logs, "level=WARN")

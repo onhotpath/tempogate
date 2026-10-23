@@ -10,6 +10,7 @@ import (
 
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
@@ -23,7 +24,7 @@ type Params struct {
 	MaxConns    int           `name:"sqlite_max_conns"`
 	BusyTimeout time.Duration `name:"sqlite_busy_timeout"`
 
-	Observer ErrorObserver `optional:"true"`
+	Meter observe.Meter `optional:"true"`
 }
 
 func newFx(p Params) (*Store, error) {
@@ -31,7 +32,7 @@ func newFx(p Params) (*Store, error) {
 		WithPath(p.Path),
 		WithMaxConns(p.MaxConns),
 		WithBusyTimeout(p.BusyTimeout),
-		WithErrorObserver(p.Observer),
+		WithMeter(p.Meter),
 	}
 	if p.Logger != nil {
 		opts = append(opts, WithLogger(p.Logger.Named("sqlite")))

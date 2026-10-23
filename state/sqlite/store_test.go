@@ -15,6 +15,7 @@ import (
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
 	tlog "github.com/onhotpath/tempogate/log"
+	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
@@ -59,6 +60,13 @@ func (s *StoreSuite) latestVersion() int {
 func (s *StoreSuite) TestNewRejectsEmptyPath() {
 	_, err := New(WithPath(""))
 	s.Require().Error(err)
+}
+
+func (s *StoreSuite) TestNewFailsWhenTheMeterRefuses() {
+	boom := errors.New("boom")
+	_, err := New(WithPath(filepath.Join(s.T().TempDir(), "m.db")), WithMeter(observetest.FailingMeter(boom)))
+	s.Require().ErrorIs(err, boom)
+	s.ErrorContains(err, "sqlite: observe: counter tempogate.db_errors")
 }
 
 func (s *StoreSuite) TestIsCurrent() {

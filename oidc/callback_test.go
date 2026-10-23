@@ -151,7 +151,7 @@ func (s *CallbackSuite) SetupTest() {
 	s.up = &fakeUpstream{id: aliceIdentity()}
 	s.binding = newTestBinding(s.T(), testIssuer)
 	s.logs = &bytes.Buffer{}
-	s.observed = &recordingObserver{}
+	s.observed = newRecordingObserver()
 	s.resolver = newStubResolver("temporal-system:admin")
 	s.srv = s.serverFor(s.store, s.up)
 	s.client = &http.Client{
@@ -167,12 +167,11 @@ func (s *CallbackSuite) TearDownTest() {
 
 func (s *CallbackSuite) serverFor(store oidc.CallbackStore, up google.Exchanger) *httptest.Server {
 	c := oidc.NewCallback(store, googleConnectors(s.T(), up, ""), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(s.resolver),
-		oidc.WithCallbackAuthzObserver(s.observed),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 		oidc.WithCallbackIssuer(testIssuer),
 		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(s.logs, nil))),
-		oidc.WithLoginObserver(s.observed),
+		oidc.WithCallbackTelemetry(s.observed.Telemetry),
 	)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))

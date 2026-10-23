@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"time"
 )
 
 // Connector federates the browser leg of a login to one upstream identity
@@ -51,8 +50,8 @@ type Connector interface {
 	//     validity window;
 	//   - set EmailVerified only when the upstream proves it, never by
 	//     default: the server refuses an unproven email;
-	//   - bound every network call (the upstreamhttp helper) and report it
-	//     to an UpstreamObserver;
+	//   - bound every network call (the upstreamhttp helper) and time it
+	//     with Telemetry.StartUpstream;
 	//   - return every other failure as *UpstreamError, and never put a
 	//     code, token or assertion in its text.
 	Complete(ctx context.Context, p CompleteParams) (Completion, error)
@@ -171,15 +170,6 @@ type UpstreamError struct {
 func (e *UpstreamError) Error() string { return e.Err.Error() }
 
 func (e *UpstreamError) Unwrap() error { return e.Err }
-
-// UpstreamObserver is told the latency and outcome of every call a
-// connector makes upstream, by operation ("discovery", "code_exchange",
-// "verify_id_token"). A failure is an *UpstreamError, whose Timeout flag
-// tells a call that ran out of time from one the upstream answered. The
-// metrics package satisfies it.
-type UpstreamObserver interface {
-	ObserveUpstream(op string, took time.Duration, err error)
-}
 
 // connectorIDPattern keeps an id safe as a path segment, a cookie path, a
 // token subject prefix and a label value.

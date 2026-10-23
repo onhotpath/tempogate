@@ -130,9 +130,9 @@ func (s *RateLimitSuite) TestEndpointsHaveSeparateBudgets() {
 // Every rejection is reported by endpoint, never by client address, so the
 // metric stays low-cardinality whatever the traffic.
 func (s *RateLimitSuite) TestRejectionsAreObservedByEndpoint() {
-	obs := &recordingObserver{}
+	obs := newRecordingObserver()
 	h := s.handlerFor(oidc.RateLimits{Authorize: 1, DeviceAuthorization: 1, DeviceVerification: 1, Token: 1},
-		oidc.WithRateLimitObserver(obs))
+		oidc.WithRateLimiterTelemetry(obs.Telemetry))
 	for _, r := range []struct{ method, path string }{
 		{http.MethodGet, "/authorize"},
 		{http.MethodPost, "/device_authorization"},

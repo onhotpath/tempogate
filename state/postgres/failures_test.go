@@ -133,8 +133,8 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				obs := &recordingObserver{}
-				s := newTestStore(t, srv, WithErrorObserver(obs))
+				obs := newRecordingObserver()
+				s := newTestStore(t, srv, WithMeter(obs.meter))
 				if tc.seed != nil {
 					tc.seed(t, s)
 				}
@@ -149,8 +149,8 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 		}
 
 		t.Run("a notification too large to send", func(t *testing.T) {
-			obs := &recordingObserver{}
-			s := newTestStore(t, srv, WithErrorObserver(obs))
+			obs := newRecordingObserver()
+			s := newTestStore(t, srv, WithMeter(obs.meter))
 			jti := strings.Repeat("j", 9000) // NOTIFY payloads stop at 8000 bytes
 			require.NoError(t, s.SaveIntegrationKey(t.Context(), admin.IntegrationKey{ID: "k", Namespace: "ns", Role: admin.RoleRead, Owner: "o", JTI: jti, CreatedAt: at}))
 			_, err := s.MarkIntegrationKeyRevoked(t.Context(), "k", at)
@@ -214,6 +214,6 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, s.Close()) })
 		require.ErrorContains(t, s.Ping(t.Context()), "postgres: ping: ")
-		require.Error(t, s.Probe(t.Context()), "the default observer swallows the report")
+		require.Error(t, s.Probe(t.Context()), "a store without a meter still returns the error")
 	})
 }
