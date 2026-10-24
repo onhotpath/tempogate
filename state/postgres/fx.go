@@ -10,6 +10,7 @@ import (
 
 	"github.com/onhotpath/tempogate/api"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
@@ -26,7 +27,7 @@ type Params struct {
 	ConnMaxIdleTime      time.Duration `name:"postgres_conn_max_idle_time"`
 	AllowInsecureSSLMode bool          `name:"postgres_allow_insecure_sslmode"`
 
-	Observer ErrorObserver `optional:"true"`
+	Meter observe.Meter `optional:"true"`
 }
 
 func newFx(p Params) (*Store, error) {
@@ -37,7 +38,7 @@ func newFx(p Params) (*Store, error) {
 		WithMaxConns(p.MaxConns),
 		WithConnMaxIdleTime(p.ConnMaxIdleTime),
 		WithAllowInsecureSSLMode(p.AllowInsecureSSLMode),
-		WithErrorObserver(p.Observer),
+		WithMeter(p.Meter),
 	}
 	if p.Logger != nil {
 		opts = append(opts, WithLogger(p.Logger.Named("postgres")))

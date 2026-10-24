@@ -23,7 +23,9 @@ import (
 	// Pure-Go SQLite driver registered under the "sqlite" name with database/sql.
 	_ "modernc.org/sqlite"
 
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/state/internal/changefeed"
+	"github.com/onhotpath/tempogate/state/internal/instrument"
 )
 
 type options struct {
@@ -31,15 +33,7 @@ type options struct {
 	maxConns    int
 	busyTimeout time.Duration
 	logger      *zap.Logger
-	observer    ErrorObserver
-}
-
-// ErrorObserver is told every store operation that failed with a database
-// error, under a fixed op name (e.g. "consume_refresh"). Not-found results
-// are protocol outcomes, not errors, and are never reported. The metrics
-// package satisfies it; this package never imports Prometheus.
-type ErrorObserver interface {
-	ObserveDBError(op string)
+	meter       observe.Meter
 }
 
 type Option func(*options)
@@ -54,19 +48,9 @@ func WithLogger(l *zap.Logger) Option { return func(o *options) { o.logger = l }
 
 func WithBusyTimeout(d time.Duration) Option { return func(o *options) { o.busyTimeout = d } }
 
-// WithErrorObserver reports failed operations to obs. Nil keeps the no-op
-// default.
-func WithErrorObserver(obs ErrorObserver) Option {
-	return func(o *options) {
-		if obs != nil {
-			o.observer = obs
-		}
-	}
-}
-
-type nopObserver struct{}
-
-func (nopObserver) ObserveDBError(string) {}
+// WithMeter declares the store's metrics (failed operations, by op) on m.
+// Nil records nothing.
+func WithMeter(m observe.Meter) Option { return func(o *options) { o.meter = m } }
 
 func defaultOptions() *options {
 	return &options{
@@ -74,15 +58,14 @@ func defaultOptions() *options {
 		maxConns:    1,
 		busyTimeout: 5 * time.Second,
 		logger:      zap.NewNop(),
-		observer:    nopObserver{},
 	}
 }
 
 type Store struct {
-	db       *sql.DB
-	probe    *sql.DB
-	observer ErrorObserver
-	changes  changefeed.Hub
+	db      *sql.DB
+	probe   *sql.DB
+	ops     *instrument.Ops
+	changes changefeed.Hub
 }
 
 func New(opts ...Option) (*Store, error) {
@@ -92,6 +75,10 @@ func New(opts ...Option) (*Store, error) {
 	}
 	if o.path == "" {
 		return nil, fmt.Errorf("sqlite: empty path")
+	}
+	ops, err := instrument.New(o.meter)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: %w", err)
 	}
 	if err := restrictFiles(o.path, o.logger); err != nil {
 		return nil, err
@@ -113,7 +100,7 @@ func New(opts ...Option) (*Store, error) {
 	probe.SetMaxIdleConns(0)
 	probe.SetMaxOpenConns(1)
 
-	return &Store{db: db, probe: probe, observer: o.observer}, nil
+	return &Store{db: db, probe: probe, ops: ops}, nil
 }
 
 // restrictFiles makes the database owner-only before SQLite opens it: the
@@ -197,11 +184,10 @@ func (s *Store) Probe(ctx context.Context) error {
 	return nil
 }
 
-// fail reports a failed operation to the observer and returns err unchanged,
-// so call sites keep their own error context.
+// fail counts a failed operation and returns err unchanged, so call sites
+// keep their own error context.
 func (s *Store) fail(op string, err error) error {
-	s.observer.ObserveDBError(op)
-	return err
+	return s.ops.Fail(context.Background(), op, err)
 }
 
 func (s *Store) Close() error {

@@ -248,10 +248,10 @@ func (s *DeviceUISuite) SetupTest() {
 
 	s.redeemer = newFakeAuthCodeRedeemer(deviceUITestIdentity)
 	s.resolver = newStubResolver("temporal-system:admin")
-	s.observed = &recordingObserver{}
+	s.observed = newRecordingObserver()
 
 	ui, err := oidc.NewDeviceUI(s.store, s.sessions, s.clients, s.redeemer, s.key, testIssuer, oidc.WithDeviceUIPermissionResolver(s.resolver),
-		oidc.WithDeviceUIAuthzObserver(s.observed),
+		oidc.WithDeviceUITelemetry(s.observed.Telemetry),
 		oidc.WithDeviceUIClock(func() time.Time { return deviceUINow }),
 		oidc.WithDeviceUIStateNonceGenerator(func() (string, error) { return deviceUITestStateNonce, nil }),
 	)

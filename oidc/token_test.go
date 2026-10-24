@@ -273,12 +273,11 @@ func (s *TokenSuite) SetupTest() {
 
 	s.store = newMemTokenStore()
 	s.deviceStore = newMemDeviceFlowStore()
-	s.observed = &recordingObserver{}
+	s.observed = newRecordingObserver()
 	s.resolver = newStubResolver("temporal-system:admin")
 	s.logs = &bytes.Buffer{}
 	tok := oidc.NewToken(s.store, signer, s.clients, oidc.WithPermissionResolver(s.resolver),
-		oidc.WithTokenObserver(s.observed),
-		oidc.WithAuthzObserver(s.observed),
+		oidc.WithTokenTelemetry(s.observed.Telemetry),
 		oidc.WithTokenLogger(slog.New(slog.NewTextHandler(s.logs, nil))),
 		oidc.WithTokenClock(func() time.Time { return signNow }),
 		oidc.WithRefreshGenerator(func() (string, error) { return fixedRefresh, nil }),

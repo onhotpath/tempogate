@@ -44,7 +44,7 @@ func (l RateLimits) Validate() error {
 
 // endpointLimit is one throttled operation's limiter. html marks the
 // browser-facing form, which gets a readable body instead of OAuth JSON.
-// label names the endpoint to the RateLimitObserver.
+// label names the endpoint in tempogate_rate_limited_total.
 type endpointLimit struct {
 	limiter    *ratelimit.Limiter
 	retryAfter string
@@ -59,7 +59,7 @@ type RateLimiter struct {
 	limits         RateLimits
 	trustedProxies []netip.Prefix
 	now            func() time.Time
-	observer       RateLimitObserver
+	telemetry      *Telemetry
 	endpoints      map[string]endpointLimit // by Huma operation ID
 }
 
@@ -82,18 +82,18 @@ func WithRateLimiterClock(now func() time.Time) RateLimiterOption {
 	return func(r *RateLimiter) { r.now = now }
 }
 
-// WithRateLimitObserver reports every rejected request to o, e.g. the
-// Prometheus metrics. Nil keeps the no-op default.
-func WithRateLimitObserver(o RateLimitObserver) RateLimiterOption {
+// WithRateLimiterTelemetry records every rejected request. Nil keeps
+// recording nothing.
+func WithRateLimiterTelemetry(t *Telemetry) RateLimiterOption {
 	return func(r *RateLimiter) {
-		if o != nil {
-			r.observer = o
+		if t != nil {
+			r.telemetry = t
 		}
 	}
 }
 
 func NewRateLimiter(opts ...RateLimiterOption) *RateLimiter {
-	r := &RateLimiter{now: time.Now, observer: nopObserver{}}
+	r := &RateLimiter{now: time.Now, telemetry: &Telemetry{}}
 	for _, o := range opts {
 		o(r)
 	}
@@ -141,7 +141,7 @@ func (r *RateLimiter) Middleware(ctx huma.Context, next func(huma.Context)) {
 		return
 	}
 
-	r.observer.ObserveRateLimited(e.label)
+	r.telemetry.rateLimited.Inc(ctx.Context(), rateLimitLabels{endpoint: e.label})
 	ctx.SetHeader("Retry-After", e.retryAfter)
 	ctx.SetHeader("Cache-Control", "no-store")
 	var body []byte

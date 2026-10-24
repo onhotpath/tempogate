@@ -218,9 +218,9 @@ type DeviceUI struct {
 	logger *slog.Logger
 
 	// authorizer is asked before a device code is approved; a person it
-	// grants nothing has the code denied instead. authz counts those.
+	// grants nothing has the code denied instead. telemetry counts those.
 	authorizer PermissionResolver
-	authz      AuthzObserver
+	telemetry  *Telemetry
 }
 
 // DeviceUIOption configures a DeviceUI at construction. Every seam a test
@@ -270,12 +270,12 @@ func WithDeviceUIPermissionResolver(a PermissionResolver) DeviceUIOption {
 	}
 }
 
-// WithDeviceUIAuthzObserver reports every device code denied because the
-// resolver granted nothing. Nil keeps the no-op default.
-func WithDeviceUIAuthzObserver(o AuthzObserver) DeviceUIOption {
+// WithDeviceUITelemetry records every device code denied because the
+// resolver granted nothing. Nil keeps recording nothing.
+func WithDeviceUITelemetry(t *Telemetry) DeviceUIOption {
 	return func(u *DeviceUI) {
-		if o != nil {
-			u.authz = o
+		if t != nil {
+			u.telemetry = t
 		}
 	}
 }
@@ -353,7 +353,7 @@ func NewDeviceUI(
 		ipAttempts:       ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerIP, userCodeAttemptWindow)),
 		sessionAttempts:  ratelimit.New(ratelimit.WithLimit(defaultUserCodeAttemptsPerSession, userCodeAttemptWindow)),
 		authorizer:       denyAll{},
-		authz:            nopObserver{},
+		telemetry:        &Telemetry{},
 	}
 	for _, o := range opts {
 		o(u)
@@ -817,7 +817,7 @@ func (u *DeviceUI) refuseIfNoAccess(ctx context.Context, bs BrowserSession, cano
 	if ok {
 		return nil, nil
 	}
-	u.authz.ObserveAuthzDenied(authzStageDeviceVerification)
+	u.telemetry.authzDenied.Inc(ctx, authzLabels{stage: authzStageDeviceVerification})
 	u.logger.InfoContext(ctx, "device-ui approval refused: no authorization rule grants this account any Temporal permissions",
 		"op", logOpDeviceDecision,
 		"cause", reasonAuthzDenied,

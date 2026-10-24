@@ -43,7 +43,7 @@ type Client struct {
 	issuerURL  string
 	clientID   string
 	now        func() time.Time
-	observer   oidc.UpstreamObserver
+	telemetry  *oidc.Telemetry
 	timeout    time.Duration
 	httpClient *http.Client
 
@@ -57,21 +57,17 @@ type Client struct {
 	backoff  time.Duration
 }
 
-type nopObserver struct{}
-
-func (nopObserver) ObserveUpstream(string, time.Duration, error) {}
-
 // Option configures a Client.
 type Option func(*Client)
 
-// WithObserver reports upstream call latency and errors to o, by operation:
+// WithTelemetry records upstream call latency and errors, by operation:
 // "discovery" (on first use and on each retry after a failure, never for a
 // cached failure), "code_exchange" and "verify_id_token" (which includes the
-// JWKS fetch on a key-cache miss). Nil keeps the no-op default.
-func WithObserver(o oidc.UpstreamObserver) Option {
+// JWKS fetch on a key-cache miss). Nil keeps recording nothing.
+func WithTelemetry(t *oidc.Telemetry) Option {
 	return func(c *Client) {
-		if o != nil {
-			c.observer = o
+		if t != nil {
+			c.telemetry = t
 		}
 	}
 }
@@ -105,7 +101,7 @@ func New(clientID, clientSecret, tokenEndpoint, issuerURL string, opts ...Option
 		issuerURL: strings.TrimRight(issuerURL, "/"),
 		clientID:  clientID,
 		now:       time.Now,
-		observer:  nopObserver{},
+		telemetry: &oidc.Telemetry{},
 		timeout:   upstreamhttp.DefaultTimeout,
 	}
 	for _, o := range opts {
@@ -185,12 +181,12 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, redirectURI, codeV
 func (c *Client) exchange(ctx context.Context, code, redirectURI, codeVerifier string) (*oauth2.Token, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
-	start := time.Now()
+	done := c.telemetry.StartUpstream(ctx, "code_exchange")
 	tok, err := c.oauth.Exchange(callCtx, code,
 		oauth2.SetAuthURLParam("redirect_uri", redirectURI),
 		oauth2.VerifierOption(codeVerifier))
 	if err == nil {
-		c.observer.ObserveUpstream("code_exchange", time.Since(start), nil)
+		done(nil)
 		return tok, nil
 	}
 	ue := c.callErr(callCtx, oidc.UpstreamReasonExchange, fmt.Errorf("google: code exchange: %w", err))
@@ -198,21 +194,21 @@ func (c *Client) exchange(ctx context.Context, code, redirectURI, codeVerifier s
 	if errors.As(err, &re) {
 		ue.OAuthError = re.ErrorCode
 	}
-	c.observer.ObserveUpstream("code_exchange", time.Since(start), ue)
+	done(ue)
 	return nil, ue
 }
 
 func (c *Client) verify(ctx context.Context, verifier *coreosoidc.IDTokenVerifier, rawID string) (*coreosoidc.IDToken, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
-	start := time.Now()
+	done := c.telemetry.StartUpstream(ctx, "verify_id_token")
 	idToken, err := verifier.Verify(callCtx, rawID)
 	if err == nil {
-		c.observer.ObserveUpstream("verify_id_token", time.Since(start), nil)
+		done(nil)
 		return idToken, nil
 	}
 	ue := c.callErr(callCtx, oidc.UpstreamReasonIDToken, fmt.Errorf("google: verify id_token: %w", err))
-	c.observer.ObserveUpstream("verify_id_token", time.Since(start), ue)
+	done(ue)
 	return nil, ue
 }
 
@@ -243,19 +239,19 @@ func (c *Client) idVerifier(ctx context.Context) (*coreosoidc.IDTokenVerifier, e
 	// fetches it makes later, so those go through the upstream client too.
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
-	start := time.Now()
+	done := c.telemetry.StartUpstream(ctx, "discovery")
 	provider, err := coreosoidc.NewProvider(callCtx, c.issuerURL)
 	if err != nil {
 		// A timeout is backed off like any other failure and, like any
 		// other failure, never cached past the backoff window.
 		ue := c.callErr(callCtx, oidc.UpstreamReasonDiscovery, fmt.Errorf("google: discovery (%s): %w", c.issuerURL, err))
-		c.observer.ObserveUpstream("discovery", time.Since(start), ue)
+		done(ue)
 		c.backoff = min(max(2*c.backoff, discoveryInitialBackoff), discoveryMaxBackoff)
 		c.retryAt = now.Add(c.backoff)
 		c.lastErr = ue
 		return nil, c.lastErr
 	}
-	c.observer.ObserveUpstream("discovery", time.Since(start), nil)
+	done(nil)
 	c.verifier = provider.Verifier(&coreosoidc.Config{ClientID: c.clientID})
 	c.lastErr, c.backoff = nil, 0
 	return c.verifier, nil

@@ -20,13 +20,8 @@ type PermissionResolver interface {
 	Resolve(ctx context.Context, email string) (*perms.Grant, error)
 }
 
-// AuthzObserver is told every time an admitted person is refused because
-// the PermissionResolver grants them nothing. stage is one of the authzStage*
-// constants below, a fixed set usable as a metrics label.
-type AuthzObserver interface {
-	ObserveAuthzDenied(stage string)
-}
-
+// Stages of tempogate_authz_denied_total, the count of admitted people
+// refused because the PermissionResolver grants them nothing.
 const (
 	// authzStageLogin is the Google callback, before any code is minted.
 	authzStageLogin = "login"

@@ -5,36 +5,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/state/internal/instrument"
 )
 
-type recordingErrorObserver struct {
-	mu  sync.Mutex
-	ops []string
+type recordingErrorObserver struct{ meter *observetest.Meter }
+
+func newRecordingErrorObserver() *recordingErrorObserver {
+	return &recordingErrorObserver{meter: observetest.NewMeter()}
 }
 
-func (r *recordingErrorObserver) ObserveDBError(op string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ops = append(r.ops, op)
-}
-
+// calls is the op label of every failure counted, in order.
 func (r *recordingErrorObserver) calls() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.ops...)
+	var ops []string
+	for _, m := range r.meter.Measurements("tempogate.db_errors") {
+		ops = append(ops, m.Attrs["op"])
+	}
+	return ops
 }
 
 // observedStore is a migrated store wired to a fresh recording observer.
 func (s *StoreSuite) observedStore() (*Store, *recordingErrorObserver, string) {
-	obs := &recordingErrorObserver{}
+	obs := newRecordingErrorObserver()
 	path := filepath.Join(s.T().TempDir(), "observed.db")
-	st, err := New(WithPath(path), WithBusyTimeout(time.Second), WithErrorObserver(obs))
+	st, err := New(WithPath(path), WithBusyTimeout(time.Second), WithMeter(obs.meter))
 	s.Require().NoError(err)
 	s.Require().NoError(st.Migrate(s.ctx))
 	s.T().Cleanup(func() { _ = st.Close() })
@@ -158,8 +157,10 @@ func (s *StoreSuite) TestProbeHonoursContext() {
 // observeSuiteStore attaches a fresh recording observer to the suite's own
 // migrated store, so the suite's seed helpers can set up rows first.
 func (s *StoreSuite) observeSuiteStore() *recordingErrorObserver {
-	obs := &recordingErrorObserver{}
-	s.store.observer = obs
+	obs := newRecordingErrorObserver()
+	ops, err := instrument.New(obs.meter)
+	s.Require().NoError(err)
+	s.store.ops = ops
 	return obs
 }
 

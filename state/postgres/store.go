@@ -30,7 +30,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/state/internal/changefeed"
+	"github.com/onhotpath/tempogate/state/internal/instrument"
 )
 
 type options struct {
@@ -41,16 +43,8 @@ type options struct {
 	connMaxIdleTime      time.Duration
 	allowInsecureSSLMode bool
 	logger               *zap.Logger
-	observer             ErrorObserver
+	meter                observe.Meter
 	migrations           fs.FS
-}
-
-// ErrorObserver is told every store operation that failed with a database
-// error, under a fixed op name (e.g. "consume_refresh"). Not-found results
-// are protocol outcomes, not errors, and are never reported. The metrics
-// package satisfies it; this package never imports Prometheus.
-type ErrorObserver interface {
-	ObserveDBError(op string)
 }
 
 type Option func(*options)
@@ -89,33 +83,22 @@ func WithAllowInsecureSSLMode(allow bool) Option {
 // WithAllowInsecureSSLMode, and a change-feed connection that dropped.
 func WithLogger(l *zap.Logger) Option { return func(o *options) { o.logger = l } }
 
-// WithErrorObserver reports failed operations to obs. Nil keeps the no-op
-// default.
-func WithErrorObserver(obs ErrorObserver) Option {
-	return func(o *options) {
-		if obs != nil {
-			o.observer = obs
-		}
-	}
-}
-
-type nopObserver struct{}
-
-func (nopObserver) ObserveDBError(string) {}
+// WithMeter declares the store's metrics (failed operations, by op) on m.
+// Nil records nothing.
+func WithMeter(m observe.Meter) Option { return func(o *options) { o.meter = m } }
 
 func defaultOptions() *options {
 	return &options{
 		maxConns:        10,
 		connMaxIdleTime: 30 * time.Minute,
 		logger:          zap.NewNop(),
-		observer:        nopObserver{},
 		migrations:      migrationsFS,
 	}
 }
 
 type Store struct {
 	pool       *pgxpool.Pool
-	observer   ErrorObserver
+	ops        *instrument.Ops
 	logger     *zap.Logger
 	migrations fs.FS
 
@@ -144,6 +127,11 @@ func New(opts ...Option) (*Store, error) {
 	}
 	if o.connMaxIdleTime < 0 {
 		return nil, fmt.Errorf("postgres: STATE_POSTGRES_CONN_MAX_IDLE_TIME must not be negative, got %s", o.connMaxIdleTime)
+	}
+
+	ops, err := instrument.New(o.meter)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: %w", err)
 	}
 
 	serving := connSource{dsn: o.dsn, file: o.dsnFile, setting: "STATE_POSTGRES_DSN", allowInsecure: o.allowInsecureSSLMode, logger: o.logger}
@@ -178,7 +166,7 @@ func New(opts ...Option) (*Store, error) {
 	}
 	return &Store{
 		pool:       pool,
-		observer:   o.observer,
+		ops:        ops,
 		logger:     o.logger,
 		migrations: o.migrations,
 		listen:     listen,
@@ -216,11 +204,10 @@ func (s *Store) Probe(ctx context.Context) error {
 	return nil
 }
 
-// fail reports a failed operation to the observer and returns err unchanged,
-// so call sites keep their own error context.
+// fail counts a failed operation and returns err unchanged, so call sites
+// keep their own error context.
 func (s *Store) fail(op string, err error) error {
-	s.observer.ObserveDBError(op)
-	return err
+	return s.ops.Fail(context.Background(), op, err)
 }
 
 // Close stops the change feed, if it ever started, and closes the pool.

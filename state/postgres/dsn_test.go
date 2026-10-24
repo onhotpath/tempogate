@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/onhotpath/tempogate/observe/observetest"
 )
 
 func TestNewRefusesAnInsecureRemoteDSN(t *testing.T) {
@@ -78,6 +81,7 @@ func TestNewValidatesItsSettings(t *testing.T) {
 		{"unparsable DSN", []Option{WithDSN("postgres://u:secretpw@localhost:notaport/x")}, "postgres: parse STATE_POSTGRES_DSN: "},
 		{"missing DSN file", []Option{WithDSNFile(filepath.Join(t.TempDir(), "absent"))}, "postgres: read STATE_POSTGRES_DSN_FILE: "},
 		{"insecure listen DSN", []Option{WithDSN("postgres://localhost/x"), WithListenDSN("postgres://direct.example.com/x")}, `STATE_POSTGRES_LISTEN_DSN host "direct.example.com"`},
+		{"meter refuses", []Option{WithDSN("postgres://localhost/x"), WithMeter(observetest.FailingMeter(errors.New("refused")))}, "postgres: observe: counter tempogate.db_errors: refused"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

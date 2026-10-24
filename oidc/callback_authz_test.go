@@ -36,7 +36,7 @@ func (s *CallbackSuite) TestNoPermissionsRedirectsAccessDeniedWithoutACode() {
 
 	s.Equal(0, s.store.codeCount(), "no code is minted for a person with no grant")
 	s.False(s.store.pending(fixedState), "the auth request is spent")
-	s.Equal([]string{"failure/authz_denied"}, s.observed.logins)
+	s.Equal([]string{"failure/authz_denied"}, s.observed.loginCalls())
 	s.Equal([]string{"login"}, s.observed.denials())
 	s.Contains(s.logs.String(), `"cause":"authz_denied"`)
 	s.Contains(s.logs.String(), `"email":"alice@example.com"`)
@@ -60,7 +60,7 @@ func (s *CallbackSuite) TestResolverFailureIsServerError() {
 	defer resp.Body.Close()
 	s.Equal(http.StatusInternalServerError, resp.StatusCode)
 	s.Equal(0, s.store.codeCount())
-	s.Equal([]string{"failure/internal"}, s.observed.logins)
+	s.Equal([]string{"failure/internal"}, s.observed.loginCalls())
 }
 
 func (s *CallbackSuite) TestCallbackWithoutResolverDeniesEveryone() {

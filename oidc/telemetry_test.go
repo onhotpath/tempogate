@@ -1,89 +1,74 @@
 package oidc_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"sync"
+	"strings"
+	"testing"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 )
 
-// recordingObserver satisfies oidc.LoginObserver, oidc.TokenObserver and
-// oidc.RateLimitObserver and keeps every call so a test can assert the exact
-// label values reported.
+// recordingObserver is an *oidc.Telemetry over an in-memory meter, read back
+// as the exact label values each metric recorded.
 type recordingObserver struct {
-	mu          sync.Mutex
-	logins      []string
-	tokens      []string
-	revocations []string
-	limited     []string
-	authzDenied []string
+	*oidc.Telemetry
+	meter *observetest.Meter
 }
 
-func (r *recordingObserver) ObserveAuthzDenied(stage string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.authzDenied = append(r.authzDenied, stage)
+func newRecordingObserver() *recordingObserver {
+	m := observetest.NewMeter()
+	t, err := oidc.NewTelemetry(m)
+	if err != nil {
+		panic(err)
+	}
+	return &recordingObserver{Telemetry: t, meter: m}
+}
+
+// labels joins the values of keys with "/" for every measurement on names,
+// in order; a key a measurement lacks reads as empty.
+func (r *recordingObserver) labels(names []string, keys ...string) []string {
+	var out []string
+	for _, m := range r.meter.Measurements(names...) {
+		vals := make([]string, len(keys))
+		for i, k := range keys {
+			vals[i] = m.Attrs[k]
+		}
+		out = append(out, strings.Join(vals, "/"))
+	}
+	return out
 }
 
 func (r *recordingObserver) denials() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.authzDenied...)
-}
-
-func (r *recordingObserver) ObserveLogin(result, reason string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.logins = append(r.logins, result+"/"+reason)
-}
-
-func (r *recordingObserver) ObserveToken(grant, errorCode string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.tokens = append(r.tokens, grant+"/"+errorCode)
-}
-
-func (r *recordingObserver) ObserveFamilyRevoked(event string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.revocations = append(r.revocations, event)
-}
-
-func (r *recordingObserver) ObserveRateLimited(endpoint string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.limited = append(r.limited, endpoint)
+	return r.labels([]string{"tempogate.authz_denied"}, "stage")
 }
 
 func (r *recordingObserver) loginCalls() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.logins...)
+	return r.labels([]string{"tempogate.logins"}, "result", "reason")
 }
 
+// tokenCalls reads a minted token as "grant/" and a failure as
+// "grant/error".
 func (r *recordingObserver) tokenCalls() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.tokens...)
+	return r.labels([]string{"tempogate.tokens_issued", "tempogate.token_errors"}, "grant", "error")
 }
 
 func (r *recordingObserver) revocationCalls() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.revocations...)
+	return r.labels([]string{"tempogate.refresh_family_revocations"}, "event")
 }
 
 func (r *recordingObserver) rateLimitCalls() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.limited...)
+	return r.labels([]string{"tempogate.rate_limited"}, "endpoint")
 }
 
 func (s *CallbackSuite) TestLoginOutcomesAreObserved() {
@@ -149,7 +134,7 @@ func (s *CallbackSuite) TestHostedDomainRefusalIsObserved() {
 	s.store.put(s.pendingRequest(fixedState))
 	c := oidc.NewCallback(s.store, googleConnectors(s.T(), s.up, "example.com"), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
-		oidc.WithLoginObserver(s.observed),
+		oidc.WithCallbackTelemetry(s.observed.Telemetry),
 	)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -170,7 +155,7 @@ func (s *CallbackSuite) TestCodeGenerationFailureIsObserved() {
 	c := oidc.NewCallback(s.store, googleConnectors(s.T(), s.up, ""), s.binding, allowedDomains, oidc.WithCallbackPermissionResolver(permitAll),
 		oidc.WithCallbackClock(func() time.Time { return fixedNow }),
 		oidc.WithCodeGenerator(func() (string, error) { return "", errors.New("entropy exhausted") }),
-		oidc.WithLoginObserver(s.observed),
+		oidc.WithCallbackTelemetry(s.observed.Telemetry),
 	)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -280,4 +265,48 @@ func (s *TokenSuite) TestTokenServerErrorIsObserved() {
 	_ = resp.Body.Close()
 
 	s.Equal([]string{"authorization_code/server_error"}, s.observed.tokenCalls())
+}
+
+// Every instrument keeps the name, unit and buckets the exposition has
+// always had (docs/operations.md).
+func TestTelemetryDeclaresItsInstruments(t *testing.T) {
+	m := observetest.NewMeter()
+	_, err := oidc.NewTelemetry(m)
+	require.NoError(t, err)
+
+	for _, name := range []string{
+		"tempogate.logins", "tempogate.tokens_issued", "tempogate.token_errors",
+		"tempogate.refresh_family_revocations", "tempogate.authz_denied",
+		"tempogate.rate_limited", "tempogate.upstream_errors",
+	} {
+		cfg, ok := m.Declared(name)
+		require.True(t, ok, name)
+		assert.NotEmpty(t, cfg.Description, name)
+	}
+	cfg, ok := m.Declared("tempogate.upstream_request.duration")
+	require.True(t, ok)
+	assert.Equal(t, "s", cfg.Unit)
+	assert.Equal(t, []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}, cfg.Buckets)
+}
+
+func TestTelemetryDeclarationFailureIsReturned(t *testing.T) {
+	boom := errors.New("boom")
+	_, err := oidc.NewTelemetry(observetest.FailingMeter(boom))
+	require.ErrorIs(t, err, boom)
+}
+
+// A call the connector flagged as timed out is counted apart from one the
+// upstream answered with an error, so a stalled IdP is visible as such.
+func TestUpstreamTimeoutsCountedApart(t *testing.T) {
+	obs := newRecordingObserver()
+	ctx := context.Background()
+	obs.StartUpstream(ctx, "discovery")(&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Timeout: true, Err: errors.New("deadline")})
+	obs.StartUpstream(ctx, "discovery")(&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("503")})
+	obs.StartUpstream(ctx, "code_exchange")(errors.New("not an UpstreamError"))
+	obs.StartUpstream(ctx, "verify_id_token")(nil)
+
+	assert.Equal(t, []string{"discovery/timeout", "discovery/error", "code_exchange/error"},
+		obs.labels([]string{"tempogate.upstream_errors"}, "op", "reason"))
+	assert.Equal(t, []string{"discovery", "discovery", "code_exchange", "verify_id_token"},
+		obs.labels([]string{"tempogate.upstream_request.duration"}, "op"), "failed calls are timed too")
 }

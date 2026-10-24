@@ -166,9 +166,8 @@ type Token struct {
 	logger         *slog.Logger
 	now            func() time.Time
 	newRefresh     func() (string, error)
-	observer       TokenObserver
+	telemetry      *Telemetry
 	authorizer     PermissionResolver
-	authz          AuthzObserver
 
 	accessTTL          time.Duration
 	refreshTTL         time.Duration
@@ -254,13 +253,14 @@ func WithDeviceCodeStore(s DeviceCodeStore) TokenOption {
 	return func(t *Token) { t.devices = s }
 }
 
-// WithTokenObserver reports every /token outcome (minted, or the OAuth2
-// error code) and every refresh-family revocation to o, e.g. the Prometheus
-// metrics. Nil keeps the no-op default.
-func WithTokenObserver(o TokenObserver) TokenOption {
+// WithTokenTelemetry records every /token outcome (minted, or the OAuth2
+// error code), every refresh-family revocation and every token refused
+// because the PermissionResolver granted nothing. Nil keeps recording
+// nothing.
+func WithTokenTelemetry(tm *Telemetry) TokenOption {
 	return func(t *Token) {
-		if o != nil {
-			t.observer = o
+		if tm != nil {
+			t.telemetry = tm
 		}
 	}
 }
@@ -276,16 +276,6 @@ func WithPermissionResolver(a PermissionResolver) TokenOption {
 	}
 }
 
-// WithAuthzObserver reports every token refused because the
-// PermissionResolver granted nothing. Nil keeps the no-op default.
-func WithAuthzObserver(o AuthzObserver) TokenOption {
-	return func(t *Token) {
-		if o != nil {
-			t.authz = o
-		}
-	}
-}
-
 func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts ...TokenOption) *Token {
 	t := &Token{
 		store:              store,
@@ -294,9 +284,8 @@ func NewToken(store TokenStore, signer *keys.Signer, clients TokenClients, opts 
 		logger:             slog.New(slog.DiscardHandler),
 		now:                clock.Now,
 		newRefresh:         randomRefresh,
-		observer:           nopObserver{},
+		telemetry:          &Telemetry{},
 		authorizer:         denyAll{},
-		authz:              nopObserver{},
 		accessTTL:          DefaultAccessTokenTTL,
 		refreshTTL:         DefaultRefreshTokenTTL,
 		refreshMaxLifetime: DefaultRefreshMaxLifetime,
@@ -364,12 +353,12 @@ func (t *Token) handle(ctx context.Context, in *tokenInput) (*tokenOutput, error
 func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error) {
 	form, err := url.ParseQuery(string(in.RawBody))
 	if err != nil {
-		t.observer.ObserveToken(grantLabelOther, "invalid_request")
+		t.telemetry.token(ctx, grantLabelOther, "invalid_request")
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "malformed form body")
 	}
 
 	out, err := t.dispatch(ctx, form, in.Authorization)
-	t.observer.ObserveToken(grantLabel(form.Get("grant_type")), tokenErrorCode(err))
+	t.telemetry.token(ctx, grantLabel(form.Get("grant_type")), tokenErrorCode(err))
 	return out, err
 }
 
@@ -574,7 +563,7 @@ func (t *Token) authorizationCodeGrant(ctx context.Context, form url.Values, aut
 // refuseNoPermissions records a token refused because the resolver granted
 // nothing and returns the OAuth2 error for it.
 func (t *Token) refuseNoPermissions(ctx context.Context, grant string, id Identity, clientID, code string) error {
-	t.authz.ObserveAuthzDenied(grant)
+	t.telemetry.authzDenied.Inc(ctx, authzLabels{stage: grant})
 	t.logger.WarnContext(ctx, "oidc: token refused: no authorization rule grants this account any Temporal permissions",
 		"event", "token_authz_denied",
 		"grant", grant,
@@ -667,7 +656,7 @@ func (t *Token) refreshTokenGrant(ctx context.Context, form url.Values, authHead
 	id := Identity{ConnectorID: rt.ConnectorID, Subject: rt.Subject, Email: rt.Email}
 	out, err := t.issue(ctx, id, rt.ClientID, "", lineage{familyID: rt.FamilyID, authTime: rt.AuthTime})
 	if errors.Is(err, errNoPermissions) {
-		t.authz.ObserveAuthzDenied(grantLabelRefreshToken)
+		t.telemetry.authzDenied.Inc(ctx, authzLabels{stage: grantLabelRefreshToken})
 		if err := t.revokeFamily(ctx, rt, now, "refresh_authz_denied",
 			"oidc: refresh refused: no authorization rule grants this account any Temporal permissions any more; revoked the token family"); err != nil {
 			return nil, err
@@ -701,7 +690,7 @@ func (t *Token) revokeFamily(ctx context.Context, rt Refresh, now time.Time, eve
 	if err != nil {
 		return fmt.Errorf("oidc: revoke refresh token family: %w", err)
 	}
-	t.observer.ObserveFamilyRevoked(event)
+	t.telemetry.familyRevocations.Inc(ctx, revocationLabels{event: event})
 	t.logger.WarnContext(ctx, msg,
 		"event", event,
 		"family_id", rt.FamilyID,

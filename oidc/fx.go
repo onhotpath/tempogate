@@ -11,6 +11,7 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe"
 )
 
 // sessionSigningKeyBytes is the required HMAC-SHA256 key length. RFC 4231
@@ -97,8 +98,7 @@ type callbackParams struct {
 	Binding    *UpstreamBinding
 	Logger     *slog.Logger
 	Resolver   PermissionResolver
-	Logins     LoginObserver `optional:"true"`
-	Authz      AuthzObserver `optional:"true"`
+	Telemetry  *Telemetry
 
 	Issuer         string `name:"oidc_issuer"`
 	AllowedDomains string `name:"oidc_allowed_domains"`
@@ -109,9 +109,8 @@ func newCallbackRegistrar(p callbackParams) func(huma.API) {
 	c := NewCallback(p.Store, p.Connectors, p.Binding, p.AllowedDomains,
 		WithCallbackIssuer(p.Issuer),
 		WithCallbackLogger(p.Logger),
-		WithLoginObserver(p.Logins),
+		WithCallbackTelemetry(p.Telemetry),
 		WithCallbackPermissionResolver(p.Resolver),
-		WithCallbackAuthzObserver(p.Authz),
 	)
 	return c.Register
 }
@@ -126,8 +125,7 @@ type tokenParams struct {
 	Connectors *Connectors
 	Logger     *slog.Logger
 	Resolver   PermissionResolver
-	Tokens     TokenObserver `optional:"true"`
-	Authz      AuthzObserver `optional:"true"`
+	Telemetry  *Telemetry
 
 	AllowedDomains     string        `name:"oidc_allowed_domains"`
 	AccessTokenTTL     time.Duration `name:"oidc_access_token_ttl"`
@@ -163,9 +161,8 @@ func newToken(p tokenParams) (*Token, error) {
 		WithAllowedDomains(p.AllowedDomains),
 		WithTokenLifetimes(p.AccessTokenTTL, p.RefreshTokenTTL, p.RefreshMaxLifetime),
 		WithTokenLogger(p.Logger),
-		WithTokenObserver(p.Tokens),
+		WithTokenTelemetry(p.Telemetry),
 		WithPermissionResolver(p.Resolver),
-		WithAuthzObserver(p.Authz),
 	), nil
 }
 
@@ -279,7 +276,7 @@ type deviceUIParams struct {
 	Logger     *slog.Logger
 	SigningKey sessionSigningKey
 	Resolver   PermissionResolver
-	Authz      AuthzObserver `optional:"true"`
+	Telemetry  *Telemetry
 
 	Issuer string `name:"oidc_issuer"`
 }
@@ -310,7 +307,7 @@ func newDeviceUIRegistrar(p deviceUIParams) (func(huma.API), error) {
 		// the operator has no way to diagnose a stuck device flow.
 		WithDeviceUILogger(p.Logger),
 		WithDeviceUIPermissionResolver(p.Resolver),
-		WithDeviceUIAuthzObserver(p.Authz),
+		WithDeviceUITelemetry(p.Telemetry),
 	)
 	if err != nil {
 		return nil, err
@@ -327,7 +324,7 @@ type rateLimiterParams struct {
 	DeviceVerification  int    `name:"http_rate_limit_device_verification"`
 	Token               int    `name:"http_rate_limit_token"`
 
-	Observer RateLimitObserver `optional:"true"`
+	Telemetry *Telemetry
 }
 
 // newRateLimitMiddleware builds the per-client rate limiter for the public
@@ -351,8 +348,20 @@ func newRateLimitMiddleware(p rateLimiterParams) (func(huma.Context, func(huma.C
 	return NewRateLimiter(
 		WithRateLimits(limits),
 		WithTrustedProxies(proxies),
-		WithRateLimitObserver(p.Observer),
+		WithRateLimiterTelemetry(p.Telemetry),
 	).Middleware, nil
+}
+
+type telemetryParams struct {
+	fx.In
+
+	Meter observe.Meter `optional:"true"`
+}
+
+// newTelemetry declares oidc's instruments on the graph's observe.Meter;
+// without one (no telemetry module) nothing is recorded.
+func newTelemetry(p telemetryParams) (*Telemetry, error) {
+	return NewTelemetry(p.Meter)
 }
 
 // Fx contributes the /authorize, /callback/{connector}, /token, /userinfo,
@@ -369,6 +378,7 @@ func Fx() fx.Option {
 				fx.ResultTags(`group:"api_middlewares"`),
 			),
 		),
+		fx.Provide(newTelemetry),
 		fx.Provide(newClientRegistry),
 		fx.Provide(newSessionSigningKey),
 		fx.Provide(newSessionManager),

@@ -20,7 +20,7 @@ type params struct {
 	IssuerURL     string `name:"google_issuer_url"`
 	HostedDomains string `name:"oidc_allowed_hosted_domains"`
 
-	Observer oidc.UpstreamObserver `optional:"true"`
+	Telemetry *oidc.Telemetry `optional:"true"`
 }
 
 // newFx builds the Google connector. Without OIDC_ALLOWED_HOSTED_DOMAINS the
@@ -36,7 +36,7 @@ func newFx(p params) (*Connector, error) {
 			"op", "oidc.callback",
 		)
 	}
-	client := New(p.ClientID, p.ClientSecret, p.TokenEndpoint, p.IssuerURL, WithObserver(p.Observer))
+	client := New(p.ClientID, p.ClientSecret, p.TokenEndpoint, p.IssuerURL, WithTelemetry(p.Telemetry))
 	return NewConnector(Config{
 		ClientID:      p.ClientID,
 		AuthEndpoint:  p.AuthEndpoint,

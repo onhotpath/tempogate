@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"go.uber.org/fx/fxtest"
 	"golang.org/x/oauth2"
 
+	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/connector/google"
 )
@@ -501,7 +503,7 @@ func (s *GoogleSuite) TestStalledUpstreamTimesOut() {
 			s.Equal(tc.reason, ue.Reason)
 			s.True(ue.Timeout, "a call that got no answer in time is flagged as a timeout")
 			s.GreaterOrEqual(took, testTimeout, "the call is given its full budget")
-			s.Contains(obs.calls, tc.op+"/timeout")
+			s.Contains(obs.calls(), tc.op+"/timeout")
 		})
 	}
 }
@@ -567,28 +569,42 @@ func reasonOf(err error) string {
 	return ""
 }
 
-// recordingObserver satisfies oidc.UpstreamObserver.
-type recordingObserver struct{ calls []string }
+// recordingObserver is an *oidc.Telemetry over an in-memory meter.
+type recordingObserver struct {
+	*oidc.Telemetry
+	meter *observetest.Meter
+}
 
-func (r *recordingObserver) ObserveUpstream(op string, took time.Duration, err error) {
-	outcome := "ok"
-	var ue *oidc.UpstreamError
-	switch {
-	case errors.As(err, &ue) && ue.Timeout:
-		outcome = "timeout"
-	case err != nil:
-		outcome = "error"
+func newRecordingObserver(t testing.TB) *recordingObserver {
+	m := observetest.NewMeter()
+	tm, err := oidc.NewTelemetry(m)
+	require.NoError(t, err)
+	return &recordingObserver{Telemetry: tm, meter: m}
+}
+
+// calls reads every timed upstream call back as "op/outcome": ok, or the
+// error reason it was counted with, plus "/untimed" if it took no time.
+func (r *recordingObserver) calls() []string {
+	var out []string
+	for _, m := range r.meter.Measurements("tempogate.upstream_request.duration", "tempogate.upstream_errors") {
+		if m.Name == "tempogate.upstream_errors" {
+			// Counted right after its call's duration.
+			out[len(out)-1] = strings.Replace(out[len(out)-1], "/ok", "/"+m.Attrs["reason"], 1)
+			continue
+		}
+		call := m.Attrs["op"] + "/ok"
+		if m.Value <= 0 {
+			call += "/untimed"
+		}
+		out = append(out, call)
 	}
-	if took <= 0 {
-		outcome += "/untimed"
-	}
-	r.calls = append(r.calls, op+"/"+outcome)
+	return out
 }
 
 func (s *GoogleSuite) observedClientFor(srv *httptest.Server, opts ...google.Option) (*google.Client, *recordingObserver) {
-	obs := &recordingObserver{}
+	obs := newRecordingObserver(s.T())
 	return google.New(testClientID, "secret", srv.URL+"/token",
-		srv.URL, append(opts, google.WithObserver(obs))...), obs
+		srv.URL, append(opts, google.WithTelemetry(obs.Telemetry))...), obs
 }
 
 // Every upstream round-trip is timed by operation, so a slow or failing
@@ -605,7 +621,7 @@ func (s *GoogleSuite) TestUpstreamCallsAreObserved() {
 	s.Equal([]string{
 		"discovery/ok", "code_exchange/ok", "verify_id_token/ok",
 		"code_exchange/ok", "verify_id_token/ok",
-	}, obs.calls)
+	}, obs.calls())
 }
 
 func (s *GoogleSuite) TestUpstreamFailureIsObserved() {
@@ -616,7 +632,7 @@ func (s *GoogleSuite) TestUpstreamFailureIsObserved() {
 	_, err := c.ExchangeAndVerify(s.ctx, "code", testRedirect, testVerifier, testNonce)
 	s.Require().Error(err)
 
-	s.Equal([]string{"discovery/ok", "code_exchange/error"}, obs.calls)
+	s.Equal([]string{"discovery/ok", "code_exchange/error"}, obs.calls())
 }
 
 // A failed discovery is observed once per attempt that reaches the IdP; a
@@ -642,23 +658,22 @@ func (s *GoogleSuite) TestDiscoveryRetriesAreObserved() {
 	s.Equal([]string{
 		"discovery/error",
 		"discovery/ok", "code_exchange/ok", "verify_id_token/ok",
-	}, obs.calls)
+	}, obs.calls())
 }
 
-// TestFxWiresTheObserver proves google.Fx hands the graph's
-// oidc.UpstreamObserver (the Prometheus metrics in production) to the
-// connector it contributes, so upstream calls made through the real wiring
-// are counted.
-func TestFxWiresTheObserver(t *testing.T) {
+// TestFxWiresTheTelemetry proves google.Fx hands the graph's *oidc.Telemetry
+// to the connector it contributes, so upstream calls made through the real
+// wiring are counted.
+func TestFxWiresTheTelemetry(t *testing.T) {
 	srv := newIDP(t).server(t)
-	obs := &recordingObserver{}
+	obs := newRecordingObserver(t)
 	var conns struct {
 		fx.In
 		All []oidc.Connector `group:"oidc_connectors"`
 	}
 	fxtest.New(t,
 		google.Fx(),
-		fx.Provide(func() oidc.UpstreamObserver { return obs }),
+		fx.Supply(obs.Telemetry),
 		fx.Supply(slog.New(slog.DiscardHandler)),
 		fx.Supply(
 			fx.Annotate(testClientID, fx.ResultTags(`name:"google_client_id"`)),
@@ -679,5 +694,5 @@ func TestFxWiresTheObserver(t *testing.T) {
 		Nonce:        testNonce,
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"discovery/ok", "code_exchange/ok", "verify_id_token/ok"}, obs.calls)
+	require.Equal(t, []string{"discovery/ok", "code_exchange/ok", "verify_id_token/ok"}, obs.calls())
 }

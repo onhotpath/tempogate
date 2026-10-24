@@ -78,9 +78,8 @@ type Callback struct {
 	now             func() time.Time
 	newCode         func() (string, error)
 	completeTimeout time.Duration
-	logins          LoginObserver
+	telemetry       *Telemetry
 	authorizer      PermissionResolver
-	authz           AuthzObserver
 }
 
 type CallbackOption func(*Callback)
@@ -116,12 +115,13 @@ func WithCallbackLogger(l *slog.Logger) CallbackOption {
 	return func(c *Callback) { c.logger = l }
 }
 
-// WithLoginObserver reports every callback outcome (success or the failure
-// reason) to o, e.g. the Prometheus metrics. Nil keeps the no-op default.
-func WithLoginObserver(o LoginObserver) CallbackOption {
+// WithCallbackTelemetry records every callback outcome (success or the
+// failure reason) and every sign-in refused because the resolver granted
+// nothing. Nil keeps recording nothing.
+func WithCallbackTelemetry(t *Telemetry) CallbackOption {
 	return func(c *Callback) {
-		if o != nil {
-			c.logins = o
+		if t != nil {
+			c.telemetry = t
 		}
 	}
 }
@@ -134,16 +134,6 @@ func WithCallbackPermissionResolver(a PermissionResolver) CallbackOption {
 	return func(c *Callback) {
 		if a != nil {
 			c.authorizer = a
-		}
-	}
-}
-
-// WithCallbackAuthzObserver reports every sign-in refused because the
-// resolver granted nothing. Nil keeps the no-op default.
-func WithCallbackAuthzObserver(o AuthzObserver) CallbackOption {
-	return func(c *Callback) {
-		if o != nil {
-			c.authz = o
 		}
 	}
 }
@@ -164,9 +154,8 @@ func NewCallback(
 		now:             clock.Now,
 		newCode:         randomCode,
 		completeTimeout: completeTimeout,
-		logins:          nopObserver{},
+		telemetry:       &Telemetry{},
 		authorizer:      denyAll{},
-		authz:           nopObserver{},
 	}
 	for _, o := range opts {
 		o(c)
@@ -202,7 +191,7 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 	if reason == reasonNone {
 		result = loginSuccess
 	}
-	c.logins.ObserveLogin(result, reason)
+	c.telemetry.logins.Inc(ctx, loginLabels{result: result, reason: reason})
 	return out, err
 }
 
@@ -276,7 +265,7 @@ func (c *Callback) complete(ctx context.Context, conn Connector, in *callbackInp
 		return nil, reasonInternal, fmt.Errorf("oidc: resolve permissions: %w", err)
 	}
 	if !ok {
-		c.authz.ObserveAuthzDenied(authzStageLogin)
+		c.telemetry.authzDenied.Inc(ctx, authzLabels{stage: authzStageLogin})
 		c.logger.InfoContext(ctx, id+" sign-in refused: no authorization rule grants this account any Temporal permissions",
 			"op", logOpCallback,
 			"connector", id,

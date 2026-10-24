@@ -254,8 +254,8 @@ func TestReaper(t *testing.T) {
 		})
 
 		t.Run("RunLogsErrorsAndKeepsGoing", func(t *testing.T) {
-			obs := &recordingObserver{}
-			s := newTestStore(t, srv, WithErrorObserver(obs))
+			obs := newRecordingObserver()
+			s := newTestStore(t, srv, WithMeter(obs.meter))
 			core, logs := observer.New(zapcore.WarnLevel)
 			r := testReaper(s, WithReaperInterval(10*time.Millisecond), WithReaperLogger(zap.New(core)))
 			s.pool.Close()

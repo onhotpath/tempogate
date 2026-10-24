@@ -171,7 +171,7 @@ func (s *CallbackSuite) serveConnector(conns *oidc.Connectors, opts ...oidc.Call
 		oidc.WithCodeGenerator(func() (string, error) { return fixedCode, nil }),
 		oidc.WithCallbackIssuer(testIssuer),
 		oidc.WithCallbackLogger(slog.New(slog.NewJSONHandler(s.logs, nil))),
-		oidc.WithLoginObserver(s.observed),
+		oidc.WithCallbackTelemetry(s.observed.Telemetry),
 	}, opts...)...)
 	mux := http.NewServeMux()
 	c.Register(humago.New(mux, huma.DefaultConfig("test", "0.0.0")))
@@ -374,7 +374,7 @@ func (s *CallbackSuite) TestConnectorRefusalAndMissingResponse() {
 	}
 	for _, tc := range cases {
 		s.Run(tc.name, func() {
-			s.observed = &recordingObserver{}
+			s.observed = newRecordingObserver()
 			okta := newFakeConnector("okta")
 			tc.set(okta)
 			srv := s.serveConnector(connectorsOf(s.T(), okta))

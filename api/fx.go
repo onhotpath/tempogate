@@ -42,7 +42,7 @@ type serversParams struct {
 	// admin Surface ahead of every admin registrar.
 	AdminMiddlewares []func(huma.API) `group:"admin_middlewares"`
 
-	// Metrics is the Prometheus exposition handler (metrics.Fx), mounted at
+	// Metrics is the Prometheus exposition handler (telemetry.Fx), mounted at
 	// GET /metrics on the admin surface outside /admin/*, so a scraper needs
 	// no admin token. Optional: graphs without metrics serve no /metrics.
 	Metrics http.Handler `name:"metrics_handler" optional:"true"`

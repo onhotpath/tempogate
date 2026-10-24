@@ -14,9 +14,9 @@ import (
 	"github.com/onhotpath/tempogate/authz"
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
-	"github.com/onhotpath/tempogate/metrics"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/connector/google"
+	"github.com/onhotpath/tempogate/telemetry"
 )
 
 // deps hands a subcommand its dependencies only when it runs, and releases
@@ -85,12 +85,12 @@ func keysModules(g graph) []fx.Option {
 }
 
 // serverModules is the full HTTP server stack `serve` and `gen-oas` need,
-// Prometheus metrics included. Building it validates the OIDC configuration,
+// telemetry included. Building it validates the OIDC configuration,
 // so only those two subcommands fail when it is missing.
 func serverModules(g graph) []fx.Option {
 	return []fx.Option{
 		fx.Invoke(checkIssuer),
-		metrics.Fx(),
+		telemetry.Fx(),
 		g.state,
 		keys.Fx(),
 		authz.Fx(),

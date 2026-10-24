@@ -117,7 +117,7 @@ func (r *Reaper) sweep(ctx context.Context) {
 		return // shutting down; the interrupted batch is retried next start
 	}
 	if err != nil {
-		r.store.observer.ObserveDBError("reap")
+		_ = r.store.ops.Fail(ctx, "reap", err)
 		r.logger.Warn("reaping expired state failed", zap.Error(err))
 	}
 	fields := make([]zap.Field, 0, len(counts))
