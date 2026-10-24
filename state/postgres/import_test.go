@@ -390,3 +390,93 @@ func TestImportValueConvertsSQLiteForms(t *testing.T) {
 	_, err = importValue(1.5, "integer")
 	require.ErrorContains(t, err, "cannot store a float64 in a column of type integer")
 }
+
+// A copy that fails part-way rolls back entirely: the target keeps exactly
+// what it held, here one keypair of its own, and the error says what broke.
+func TestImportFailuresRollBack(t *testing.T) {
+	forEachServer(t, func(t *testing.T, srv testServer) {
+		cases := map[string]struct {
+			// force, if set, imports with ImportForce over the target's own
+			// keypair.
+			force bool
+			setup func(t *testing.T, s *Store)
+			src   func(t *testing.T) Source
+			want  string
+		}{
+			"a table held by a running replica": {
+				setup: func(t *testing.T, s *Store) {
+					tx, err := s.pool.Begin(t.Context())
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+					_, err = tx.Exec(t.Context(), `LOCK TABLE keypairs IN ACCESS SHARE MODE`)
+					require.NoError(t, err)
+				},
+				want: "lock tables (stop every replica first)",
+			},
+			"a row that cannot be cleared": {
+				force: true,
+				setup: func(t *testing.T, s *Store) { failOn(t, s, "keypairs", "DELETE") },
+				want:  "clear keypairs",
+			},
+			"a row that cannot be written": {
+				setup: func(t *testing.T, s *Store) { failOn(t, s, "jti_denylist", "INSERT") },
+				want:  "copy jti_denylist",
+			},
+			"a derived table that cannot be rebuilt": {
+				setup: func(t *testing.T, s *Store) { failOn(t, s, "refresh_families", "INSERT") },
+				want:  "rebuild refresh_families",
+			},
+			"a row with too many values": {
+				src: func(t *testing.T) Source {
+					return sourceFrom(t, func(f fakeSource) {
+						d := f["jti_denylist"]
+						d.rows[0] = append(d.rows[0], "secret-extra-value")
+					})
+				},
+				want: "a jti_denylist row has",
+			},
+		}
+		for name, tc := range cases {
+			t.Run(name, func(t *testing.T) {
+				dst := newTestStore(t, srv)
+				var opts []ImportOption
+				if tc.force {
+					opts = append(opts, ImportForce())
+					require.NoError(t, dst.SaveKeypair(t.Context(), keys.Keypair{
+						Kid: "kid-target", Alg: "RS256", PrivatePEM: []byte("p"), PublicPEM: []byte("p"), CreatedAt: importT0,
+					}))
+				}
+				if tc.setup != nil {
+					tc.setup(t, dst)
+				}
+				var src Source = newSQLiteSource(t)
+				if tc.src != nil {
+					src = tc.src(t)
+				}
+
+				_, err := dst.Import(t.Context(), src, opts...)
+				require.ErrorContains(t, err, tc.want)
+				require.NotContains(t, err.Error(), "secret")
+
+				rows, err := dst.pool.Query(t.Context(), `SELECT kid FROM keypairs`)
+				require.NoError(t, err)
+				kids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+				require.NoError(t, err)
+				if tc.force {
+					require.Equal(t, []string{"kid-target"}, kids, "the target keeps what it held")
+				} else {
+					require.Empty(t, kids, "a failed import writes nothing")
+				}
+			})
+		}
+	})
+}
+
+// An unmigrated database has nothing to copy into.
+func TestImportRefusesAnUnmigratedTarget(t *testing.T) {
+	forEachServer(t, func(t *testing.T, srv testServer) {
+		dst := newUnmigratedStore(t, srv)
+		_, err := dst.Import(t.Context(), newSQLiteSource(t))
+		require.ErrorContains(t, err, "the database has no tables; migrate it first")
+	})
+}

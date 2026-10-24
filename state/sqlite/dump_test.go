@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -53,4 +54,16 @@ func (s *StoreSuite) TestDumpTablesAfterClose() {
 	s.Require().NoError(s.store.Close())
 	s.Require().Error(s.store.DumpTables(s.ctx, func(string, []string, [][]any) error { return nil }))
 	s.store = nil
+}
+
+// A table that cannot be read fails the dump, naming the table.
+func (s *StoreSuite) TestDumpTablesFailsOnAnUnreadableTable() {
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	err := s.store.DumpTables(ctx, func(string, []string, [][]any) error {
+		cancel()
+		return nil
+	})
+	s.Require().ErrorIs(err, context.Canceled)
+	s.Require().ErrorContains(err, "sqlite: read auth_requests")
 }

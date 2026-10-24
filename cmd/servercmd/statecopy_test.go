@@ -3,6 +3,7 @@ package servercmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,20 +19,22 @@ import (
 // fakeImporter records what `state copy` asks of the target. Import reads
 // the source through, so a test sees what would have been copied.
 type fakeImporter struct {
-	calls  []string
-	force  bool
-	tables []string
-	err    error
+	calls      []string
+	force      bool
+	tables     []string
+	pingErr    error
+	migrateErr error
+	err        error
 }
 
 func (f *fakeImporter) Ping(context.Context) error {
 	f.calls = append(f.calls, "ping")
-	return nil
+	return f.pingErr
 }
 
 func (f *fakeImporter) Migrate(context.Context) error {
 	f.calls = append(f.calls, "migrate")
-	return nil
+	return f.migrateErr
 }
 
 func (f *fakeImporter) Import(ctx context.Context, src postgres.Source, opts ...postgres.ImportOption) (map[string]int64, error) {
@@ -116,6 +119,41 @@ func TestStateCopy(t *testing.T) {
 		_, err = runStateCopy(t, target, path)
 		require.ErrorContains(t, err, "run `tempogate migrate` against it with STATE_DRIVER=sqlite first")
 		require.Empty(t, target.calls)
+	})
+
+	t.Run("a source path that cannot be read is reported", func(t *testing.T) {
+		path := filepath.Join(migratedSQLite(t), "state.db")
+		target := &fakeImporter{}
+		_, err := runStateCopy(t, target, path)
+		require.ErrorContains(t, err, "source: ")
+		require.Empty(t, target.calls)
+	})
+
+	t.Run("a source that is not a database is refused", func(t *testing.T) {
+		target := &fakeImporter{}
+		_, err := runStateCopy(t, target, t.TempDir())
+		require.Error(t, err)
+		require.Empty(t, target.calls)
+	})
+
+	t.Run("an unreachable target is reported before anything is written", func(t *testing.T) {
+		target := &fakeImporter{pingErr: errors.New("connection refused")}
+		_, err := runStateCopy(t, target, migratedSQLite(t))
+		require.ErrorContains(t, err, "target unreachable: connection refused")
+		require.Equal(t, []string{"ping"}, target.calls)
+	})
+
+	t.Run("a target that fails to migrate is not copied into", func(t *testing.T) {
+		target := &fakeImporter{migrateErr: errors.New("permission denied")}
+		_, err := runStateCopy(t, target, migratedSQLite(t))
+		require.ErrorContains(t, err, "target: permission denied")
+		require.Equal(t, []string{"ping", "migrate"}, target.calls)
+	})
+
+	t.Run("an import failure is returned", func(t *testing.T) {
+		target := &fakeImporter{err: errors.New("copy keypairs: boom")}
+		_, err := runStateCopy(t, target, migratedSQLite(t))
+		require.ErrorContains(t, err, "copy keypairs: boom")
 	})
 
 	t.Run("a target holding state names --force", func(t *testing.T) {

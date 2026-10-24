@@ -132,19 +132,17 @@ func (s *Store) Import(ctx context.Context, src Source, opts ...ImportOption) (m
 // targetColumns returns each table of the current schema, but
 // schema_migrations, with its columns' data types by name.
 func targetColumns(ctx context.Context, tx pgx.Tx) (map[string]map[string]string, error) {
-	rows, err := tx.Query(ctx,
+	// ForEachRow reports a failed Query too.
+	rows, _ := tx.Query(ctx,
 		`SELECT c.table_name, c.column_name, c.data_type
 		 FROM information_schema.columns c
 		 JOIN information_schema.tables t
 		   ON t.table_schema = c.table_schema AND t.table_name = c.table_name
 		 WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE'
 		   AND c.table_name != 'schema_migrations'`)
-	if err != nil {
-		return nil, fmt.Errorf("postgres: import: read schema: %w", err)
-	}
 	out := map[string]map[string]string{}
 	var table, column, dataType string
-	_, err = pgx.ForEachRow(rows, []any{&table, &column, &dataType}, func() error {
+	_, err := pgx.ForEachRow(rows, []any{&table, &column, &dataType}, func() error {
 		if out[table] == nil {
 			out[table] = map[string]string{}
 		}
@@ -161,10 +159,10 @@ func targetColumns(ctx context.Context, tx pgx.Tx) (map[string]map[string]string
 }
 
 func lockForImport(ctx context.Context, tx pgx.Tx, tables []string) error {
-	if _, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true)`, importLockTimeout); err != nil {
-		return fmt.Errorf("postgres: import: set lock_timeout: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `LOCK TABLE `+identifiers(tables)+` IN ACCESS EXCLUSIVE MODE`); err != nil {
+	// Without arguments pgx sends both statements in one simple-protocol
+	// round trip; SET LOCAL ends with the transaction.
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '`+importLockTimeout+`'; `+
+		`LOCK TABLE `+identifiers(tables)+` IN ACCESS EXCLUSIVE MODE`); err != nil {
 		return fmt.Errorf("postgres: import: lock tables (stop every replica first): %w", err)
 	}
 	return nil
@@ -231,9 +229,6 @@ func copyTable(ctx context.Context, tx pgx.Tx, table string, columns []string, t
 	n, err := tx.CopyFrom(ctx, pgx.Identifier{table}, columns, pgx.CopyFromRows(rows))
 	if err != nil {
 		return 0, fmt.Errorf("postgres: import: copy %s: %w", table, err)
-	}
-	if n != int64(len(rows)) {
-		return 0, fmt.Errorf("postgres: import: copied %d of %d %s rows", n, len(rows), table)
 	}
 	return n, nil
 }

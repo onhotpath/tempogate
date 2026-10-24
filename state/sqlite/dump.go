@@ -26,33 +26,20 @@ func (s *Store) DumpTables(ctx context.Context, visit func(table string, columns
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	names, err := tx.QueryContext(ctx,
+	_, names, err := queryAll(ctx, tx,
 		`SELECT name FROM sqlite_schema
 		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'
 		 ORDER BY name`)
 	if err != nil {
 		return op.Fail(fmt.Errorf("sqlite: list tables: %w", err))
 	}
-	var tables []string
-	for names.Next() {
-		var name string
-		if err := names.Scan(&name); err != nil {
-			_ = names.Close()
-			return op.Fail(fmt.Errorf("sqlite: list tables: %w", err))
-		}
-		tables = append(tables, name)
-	}
-	if err := names.Close(); err != nil {
-		return op.Fail(fmt.Errorf("sqlite: list tables: %w", err))
-	}
-	if err := names.Err(); err != nil {
-		return op.Fail(fmt.Errorf("sqlite: list tables: %w", err))
-	}
-
-	for _, table := range tables {
-		columns, rows, err := dumpTable(ctx, tx, table)
+	for _, name := range names {
+		table, _ := name[0].(string)
+		// table comes from sqlite_schema, not from input; quoting keeps an
+		// odd name from being read as SQL all the same.
+		columns, rows, err := queryAll(ctx, tx, `SELECT * FROM "`+strings.ReplaceAll(table, `"`, `""`)+`"`) // #nosec G202 -- a quoted name from sqlite_schema.
 		if err != nil {
-			return op.Fail(err)
+			return op.Fail(fmt.Errorf("sqlite: read %s: %w", table, err))
 		}
 		if err := visit(table, columns, rows); err != nil {
 			return err
@@ -61,17 +48,16 @@ func (s *Store) DumpTables(ctx context.Context, visit func(table string, columns
 	return nil
 }
 
-func dumpTable(ctx context.Context, tx *sql.Tx, table string) ([]string, [][]any, error) {
-	// table comes from sqlite_schema, not from input; quoting keeps an odd
-	// name from being read as SQL all the same.
-	rows, err := tx.QueryContext(ctx, `SELECT * FROM "`+strings.ReplaceAll(table, `"`, `""`)+`"`) // #nosec G202 -- a quoted name from sqlite_schema.
+// queryAll runs query in tx and returns its column names and every row.
+func queryAll(ctx context.Context, tx *sql.Tx, query string) ([]string, [][]any, error) {
+	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sqlite: read %s: %w", table, err)
+		return nil, nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	columns, err := rows.Columns()
 	if err != nil {
-		return nil, nil, fmt.Errorf("sqlite: read %s: %w", table, err)
+		return nil, nil, err
 	}
 	var out [][]any
 	for rows.Next() {
@@ -81,12 +67,9 @@ func dumpTable(ctx context.Context, tx *sql.Tx, table string) ([]string, [][]any
 			ptrs[i] = &row[i]
 		}
 		if err := rows.Scan(ptrs...); err != nil {
-			return nil, nil, fmt.Errorf("sqlite: read %s: %w", table, err)
+			return nil, nil, err
 		}
 		out = append(out, row)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("sqlite: read %s: %w", table, err)
-	}
-	return columns, out, nil
+	return columns, out, rows.Err()
 }
