@@ -1,0 +1,64 @@
+# Throwaway PostgreSQL for test/deploy/kind-smoke.sh's HA phase: one pod on
+# an emptyDir, no TLS, reachable only inside the kind cluster. The script
+# creates the `tempogate-postgres` Secret (password and DSN) first. Not a
+# deployment template: run a managed or operator-backed Postgres with TLS
+# in production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          # The newest supported major, digest-pinned like the store's
+          # tests (state/postgres/pg_test.go); bump both together.
+          image: postgres:18-alpine@sha256:83148c0bc09eac4d598b70a61e1404d0212b76c95c504bfd6c81a4c59ec91792
+          env:
+            - name: POSTGRES_USER
+              value: tempogate
+            - name: POSTGRES_DB
+              value: tempogate
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tempogate-postgres
+                  key: password
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "tempogate", "-d", "tempogate", "-h", "127.0.0.1"]
+            periodSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

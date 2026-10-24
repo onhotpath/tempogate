@@ -5,7 +5,8 @@ name: deploy
 #   chart:   helm lint --strict + kubeconform -strict on the rendered chart
 #            for several value sets, and the static chart assertions;
 #   kind:    install the chart into a kind cluster with an image built from
-#            this commit (migrate initContainer, Ready, upgrade, helm test);
+#            this commit (migrate initContainer, Ready, upgrade, helm test),
+#            on SQLite and then with two replicas on an in-cluster Postgres;
 #   compose: the docker-compose example's static safety lint (loopback-only
 #            ports, no baked-in secrets), `docker compose config` on every
 #            example compose file, and the docker-compose example's migrate
@@ -140,7 +141,7 @@ jobs:
           cache-from: type=gha,scope=deploy-tempogate
           cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=deploy-tempogate' || '' }}
 
-      - name: kind smoke (install, migrate, Ready, upgrade, helm test)
+      - name: kind smoke (install, migrate, Ready, upgrade, helm test; SQLite and HA on Postgres)
         run: make test-deploy-kind SKIP_BUILD=1 DEPLOY_IMAGE="$DEPLOY_IMAGE"
 
   compose:

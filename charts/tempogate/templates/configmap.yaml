@@ -7,7 +7,21 @@ metadata:
 data:
   LOG_LEVEL: {{ .Values.log.level | quote }}
   HTTP_LISTENER: {{ printf "%s:%v" .Values.listenAddress .Values.service.port | quote }}
+  STATE_DRIVER: {{ .Values.state.driver | quote }}
+  {{- if include "tempogate.postgres" . }}
+  STATE_POSTGRES_DSN_FILE: {{ include "tempogate.postgresDsnFile" . | quote }}
+  {{- with .Values.state.postgres.maxConns }}
+  STATE_POSTGRES_MAX_CONNS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.state.postgres.connMaxIdleTime }}
+  STATE_POSTGRES_CONN_MAX_IDLE_TIME: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.state.postgres.allowInsecureSslMode }}
+  STATE_POSTGRES_ALLOW_INSECURE_SSLMODE: "true"
+  {{- end }}
+  {{- else }}
   STATE_SQLITE_PATH: {{ .Values.state.sqlitePath | quote }}
+  {{- end }}
   {{- with .Values.trustedProxies }}
   HTTP_TRUSTED_PROXIES: {{ join "," . | quote }}
   {{- end }}

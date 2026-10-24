@@ -6,12 +6,22 @@ metadata:
   labels:
     {{- include "tempogate.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   # SQLite tolerates one writer; a rolling update would briefly run two
   # pods contending for the same PVC. Recreate stops the old pod first,
   # which is also what makes the migrate initContainer below race-free.
+  # Postgres replicas share the database, so they roll (see
+  # updateStrategy in values.yaml).
   strategy:
+    {{- if .Values.updateStrategy }}
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+    {{- else if include "tempogate.postgres" . }}
+    type: RollingUpdate
+    {{- else }}
     type: Recreate
+    {{- end }}
   selector:
     matchLabels:
       {{- include "tempogate.selectorLabels" . | nindent 6 }}
@@ -38,10 +48,12 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # `tempogate migrate` runs before `serve` on the same volume, in the
-      # same pod. With one replica and the Recreate strategy the previous
-      # pod has exited before this one starts, so the migration never races
-      # a running server and never needs a second ReadWriteOnce attachment.
+      # `tempogate migrate` runs before `serve`, in the same pod. On SQLite,
+      # with one replica and the Recreate strategy, the previous pod has
+      # exited before this one starts, so the migration never races a
+      # running server and never needs a second ReadWriteOnce attachment.
+      # On Postgres every pod runs it; concurrent runs serialize on an
+      # advisory lock and apply each version once.
       initContainers:
         - name: migrate
           {{- with .Values.securityContext }}
@@ -53,7 +65,8 @@ spec:
           args: ["migrate"]
           # Same non-secret config and extraEnv as `serve`, so an operator
           # override (e.g. STATE_SQLITE_BUSY_TIMEOUT) applies to both. No
-          # secrets: migrate builds only the SQLite store.
+          # secret env: migrate builds only the state store, and reads the
+          # Postgres DSN from its mounted file.
           envFrom:
             - configMapRef:
                 name: {{ include "tempogate.configMapName" . }}
@@ -67,8 +80,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            - name: state
-              mountPath: {{ .Values.state.mountPath }}
+            {{- include "tempogate.volumeMounts" . | trim | nindent 12 }}
       containers:
         - name: {{ .Chart.Name }}
           {{- with .Values.securityContext }}
@@ -112,12 +124,17 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            - name: state
-              mountPath: {{ .Values.state.mountPath }}
-            {{- with .Values.volumeMounts }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "tempogate.volumeMounts" . | trim | nindent 12 }}
       volumes:
+        {{- if include "tempogate.postgres" . }}
+        - name: postgres-dsn
+          secret:
+            secretName: {{ .Values.state.postgres.dsnSecretRef.name }}
+            items:
+              - key: {{ required "state.postgres.dsnSecretRef.key is required when .name is set" .Values.state.postgres.dsnSecretRef.key }}
+                path: dsn
+            defaultMode: 0440
+        {{- else }}
         - name: state
           {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
           persistentVolumeClaim:
@@ -125,6 +142,7 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

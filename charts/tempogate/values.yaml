@@ -2,13 +2,12 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# tempogate's default state store is SQLite on a single ReadWriteOnce PVC,
-# and SQLite tolerates exactly one writer process. Running more than one
-# replica would corrupt state. Horizontal scaling needs a shared backend
-# (planned upstream); until then this MUST stay 1 and `autoscaling` MUST
-# stay disabled. The Deployment uses the Recreate strategy for the same
-# reason: two pods cannot hold the PVC writer at once. The chart refuses
-# to render with replicaCount > 1 or autoscaling.enabled=true.
+# Pods. With the default SQLite state store (state.driver=sqlite) this MUST
+# stay 0 or 1: SQLite lives on a single ReadWriteOnce PVC and tolerates
+# exactly one writer process, so a second replica would corrupt state. The
+# chart refuses to render with replicaCount > 1 or autoscaling.enabled=true
+# on SQLite. With state.driver=postgres any number of replicas share one
+# database; see `state.postgres` below.
 replicaCount: 1
 
 image:
@@ -140,15 +139,38 @@ startupProbe:
   periodSeconds: 3
   failureThreshold: 20
 
-# Not supported: see the replicaCount comment for why tempogate cannot be
-# scaled horizontally yet. The chart ships no HorizontalPodAutoscaler and
-# refuses to render with enabled=true.
+# Deployment update strategy. Empty picks one by state driver: Recreate on
+# SQLite (two pods cannot hold the PVC writer at once, and the migrate
+# initContainer must not race a running server), RollingUpdate on Postgres.
+# On SQLite only Recreate is accepted. During a RollingUpdate the first new
+# pod migrates the shared database while old pods still serve: an older
+# binary ignores schema versions it does not know, so this works whenever the
+# new release's migrations are backward compatible. docs/upgrading.md names
+# any release whose migrations are not; upgrade to it with
+# {type: Recreate}.
+updateStrategy: {}
+
+# HorizontalPodAutoscaler (autoscaling/v2). Requires state.driver=postgres;
+# the chart refuses to render it on SQLite. replicaCount is then left to the
+# autoscaler. Set at least one target.
 autoscaling:
   enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+# PodDisruptionBudget, for voluntary disruptions such as node drains. Only
+# useful with more than one replica (state.driver=postgres): with one pod,
+# maxUnavailable: 1 still lets a drain evict it.
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 1
 
 # Persistent volume for the SQLite state store: the signing keypair, auth
 # codes, and refresh tokens. Losing it rotates signing keys and invalidates
 # every issued refresh token, so back it with durable storage in production.
+# Ignored with state.driver=postgres: no PVC is rendered then.
 persistence:
   enabled: true
   # Bind an existing PVC instead of creating one. When set, size /
@@ -159,11 +181,49 @@ persistence:
   size: 1Gi
   annotations: {}
 
-# Where tempogate keeps its SQLite database. sqlitePath MUST live under
-# mountPath so the database lands on the PVC above.
 state:
+  # STATE_DRIVER: `sqlite` (the default: one replica, a file on the PVC
+  # above) or `postgres` (one or more replicas on a shared PostgreSQL 15+
+  # database, no PVC). See docs/configuration.md#state-store.
+  driver: sqlite
+
+  # Where tempogate keeps its SQLite database. sqlitePath MUST live under
+  # mountPath so the database lands on the PVC above.
   mountPath: /var/lib/tempogate
   sqlitePath: /var/lib/tempogate/state.db
+
+  # Used only with driver=postgres. See docs/configuration.md#postgresql.
+  postgres:
+    # Existing Secret holding the connection string, e.g.
+    #   postgres://tempogate@db.example.com:5432/tempogate?sslmode=verify-full&sslrootcert=/etc/tempogate/db-ca/ca.pem&require_auth=scram-sha-256
+    # Required. It is mounted as a file and passed as
+    # STATE_POSTGRES_DSN_FILE, which tempogate re-reads for every new
+    # connection, so a rotated password applies without a restart. Both the
+    # serve container and the migrate initContainer get it; it is the only
+    # secret migrate sees. The role needs to create tables (migrate) and
+    # read and write rows (serve). Mount the server's CA bundle for
+    # sslrootcert through volumes/volumeMounts.
+    dsnSecretRef:
+      name: ""
+      key: ""
+    # STATE_POSTGRES_LISTEN_DSN from an existing Secret: the connection
+    # string for each replica's one LISTEN connection. Empty uses the DSN
+    # above. Set it to reach Postgres directly when the DSN goes through a
+    # transaction-mode pooler such as PgBouncer.
+    listenDsnSecretRef:
+      name: ""
+      key: ""
+    # STATE_POSTGRES_MAX_CONNS: pool size per replica (at least 2). 0 keeps
+    # the binary default (10). Size the server's max_connections for
+    # replicas x this, plus one LISTEN connection per replica.
+    maxConns: 0
+    # STATE_POSTGRES_CONN_MAX_IDLE_TIME (Go duration). Empty keeps the
+    # binary default (30m).
+    connMaxIdleTime: ""
+    # STATE_POSTGRES_ALLOW_INSECURE_SSLMODE. Development only: tempogate
+    # refuses a non-loopback host without sslmode=verify-full unless this
+    # is true.
+    allowInsecureSslMode: false
 
 log:
   level: info
@@ -208,7 +268,8 @@ oidc:
   # TO BOOT if this is empty, not base64url, or does not decode to
   # exactly 32 bytes — set this before upgrading or the Deployment will
   # crash-loop. The migrate initContainer does not need it: `tempogate
-  # migrate` builds only the SQLite store and never receives secrets.
+  # migrate` builds only the state store, and its only secret is the
+  # Postgres DSN (state.postgres.dsnSecretRef) when that driver is used.
   # Supply it via an existing Secret you create out of band; generate the
   # value once with:
   #   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
@@ -314,8 +375,10 @@ admin:
 # [{name: STATE_SQLITE_BUSY_TIMEOUT, value: "10s"}].
 extraEnv: []
 
-# Extra volumes / mounts on the Deployment (the state PVC is wired
-# automatically from `persistence`).
+# Extra volumes on the Deployment, mounted by volumeMounts into the serve
+# container and the migrate initContainer, e.g. the Postgres server's CA
+# bundle for sslrootcert. The state PVC and the Postgres DSN are wired
+# automatically.
 volumes: []
 volumeMounts: []
 

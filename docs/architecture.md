@@ -67,13 +67,15 @@ Each subcommand builds only what it uses, when it runs:
 **Pluggable state, SQLite by default.** The state store (signing keypair, authorization codes, refresh tokens) is an interface with two backends, selected by `STATE_DRIVER`.
 
 - **SQLite** (default) uses the pure-Go `modernc.org/sqlite` driver on a PersistentVolumeClaim: no CGO and no external database.
-  It tolerates one writer, so the chart enforces one replica (`replicaCount: 1`, no autoscaling, `Recreate` strategy).
+  It tolerates one writer, so on SQLite the chart enforces one replica (`replicaCount: 1`, no autoscaling, `Recreate` strategy).
 - **PostgreSQL 15+** (`state/postgres`, native `pgx` driver) serves several replicas, with row locks under READ COMMITTED:
   - a rotation locks the family row FOR SHARE, and a revocation updates it first;
   - a poll locks the device code row, and a retirement locks the active keypairs;
   - migrations and first-boot key generation take transaction-level advisory locks;
   - every replica reaps in `FOR UPDATE SKIP LOCKED` batches;
   - `LISTEN/NOTIFY` sends key changes and integration-key revocations to every replica, with the periodic reloads as the backstop.
+
+  The chart's HA mode (`state.driver=postgres`) runs any number of replicas, rolls updates, and can autoscale.
 
 Each backend has its own migrations directory, paired by number and name from the Postgres baseline (SQLite's 0014) on.
 `state/doc.go` states the guarantees of every backend: consume-once, conditional transitions, ordering, an application-owned clock and optional change notifications.
