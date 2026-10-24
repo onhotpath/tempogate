@@ -1,0 +1,19 @@
+# Helm values for HA mode, layered over values-smoke.yaml by
+# test/deploy/kind-smoke.sh: two replicas on the throwaway Postgres from
+# test/deploy/postgres.yaml. The script creates the referenced Secret. Also
+# rendered by chart-lint.sh and chart-assertions.sh. Not a deployment
+# template: the in-cluster Postgres has no TLS, hence the dev-only
+# allowInsecureSslMode.
+replicaCount: 2
+
+state:
+  driver: postgres
+  postgres:
+    dsnSecretRef:
+      name: tempogate-postgres
+      key: dsn
+    maxConns: 4
+    allowInsecureSslMode: true
+
+podDisruptionBudget:
+  enabled: true

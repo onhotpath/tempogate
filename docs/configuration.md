@@ -277,7 +277,7 @@ A lost listener reconnects with backoff (logged at `warn`) and re-reads what it 
 - Every replica must share `OIDC_SESSION_SIGNING_KEY` and the rest of the configuration. You need no sticky sessions, because all flow state is in the database.
 - On an empty database, replicas that start together generate one signing key between them.
 - Each replica counts rate limits (`HTTP_RATE_LIMIT_*`) separately, so the effective limit is replicas × the configured value.
-- The Helm chart does not offer this mode yet: it still runs one replica on SQLite.
+- The Helm chart runs this mode with `state.driver=postgres`; see [HA mode on PostgreSQL](../charts/tempogate/README.md#ha-mode-on-postgresql).
 
 ### OIDC — server identity and Google federation
 

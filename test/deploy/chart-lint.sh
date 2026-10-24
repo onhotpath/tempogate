@@ -39,6 +39,9 @@ scenarios=(
   "--set persistence.enabled=false --set serviceAccount.create=false"
   "--values $ROOT/test/deploy/values-smoke.yaml"
   "--values $ROOT/examples/kind/values.yaml"
+  "--values $ROOT/test/deploy/values-smoke.yaml --values $ROOT/test/deploy/values-postgres.yaml"
+  "--values $ROOT/test/deploy/values-postgres.yaml --set replicaCount=3"
+  "--values $ROOT/test/deploy/values-full.yaml --values $ROOT/test/deploy/values-postgres.yaml --set autoscaling.enabled=true --set autoscaling.targetMemoryUtilizationPercentage=80 --set state.postgres.listenDsnSecretRef.name=tempogate-postgres --set state.postgres.listenDsnSecretRef.key=listen-dsn --set state.postgres.connMaxIdleTime=10m"
 )
 
 failures=0

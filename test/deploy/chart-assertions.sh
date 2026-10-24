@@ -46,9 +46,61 @@ q() { yq "select(.kind == \"$1\")" <<<"$manifests" | yq "$2"; }
 echo "==> single-writer guard"
 expect_render_error "replicaCount=2 is rejected" "replicaCount" --set replicaCount=2
 expect_render_error "autoscaling.enabled=true is rejected" "autoscaling" --set autoscaling.enabled=true
+expect_render_error "updateStrategy RollingUpdate is rejected" "Recreate" --set updateStrategy.type=RollingUpdate
 expect_eq "replicaCount=0 still renders (scale to zero)" "0" \
   "$(render --set replicaCount=0 | yq 'select(.kind == "Deployment") | .spec.replicas')"
 expect_eq "no HorizontalPodAutoscaler is rendered" "" "$(yq 'select(.kind == "HorizontalPodAutoscaler")' <<<"$manifests")"
+expect_eq "no PodDisruptionBudget is rendered" "" "$(yq 'select(.kind == "PodDisruptionBudget")' <<<"$manifests")"
+expect_eq "SQLite Deployment uses Recreate" "Recreate" "$(q Deployment .spec.strategy.type)"
+expect_eq "STATE_DRIVER defaults to sqlite" "sqlite" "$(q ConfigMap .data.STATE_DRIVER)"
+expect_render_error "an unknown state.driver is rejected" "state.driver" --set state.driver=mysql
+
+echo "==> HA mode on Postgres"
+PG_VALUES="$ROOT/test/deploy/values-postgres.yaml"
+expect_render_error "Postgres without a DSN Secret is rejected" "dsnSecretRef" --set state.driver=postgres
+pg=$(render --values "$PG_VALUES" --set replicaCount=3) || fail "Postgres render with replicaCount=3: $pg"
+pgq() { yq "select(.kind == \"$1\")" <<<"$pg" | yq "$2"; }
+pginit() { pgq Deployment ".spec.template.spec.initContainers[] | select(.name == \"migrate\") | $1"; }
+expect_eq "Postgres renders replicaCount=3" "3" "$(pgq Deployment .spec.replicas)"
+expect_eq "Postgres Deployment uses RollingUpdate" "RollingUpdate" "$(pgq Deployment .spec.strategy.type)"
+expect_eq "updateStrategy overrides the Postgres default" "Recreate" \
+  "$(render --values "$PG_VALUES" --set updateStrategy.type=Recreate | yq 'select(.kind == "Deployment") | .spec.strategy.type')"
+expect_eq "Postgres renders no PVC" "" "$(yq 'select(.kind == "PersistentVolumeClaim") | .metadata.name' <<<"$pg")"
+expect_eq "Postgres pod has no state volume" "0" \
+  "$(pgq Deployment '[.spec.template.spec.volumes[] | select(.name == "state")] | length')"
+expect_eq "ConfigMap sets STATE_DRIVER=postgres" "postgres" "$(pgq ConfigMap .data.STATE_DRIVER)"
+expect_eq "ConfigMap has no STATE_SQLITE_PATH on Postgres" "null" "$(pgq ConfigMap .data.STATE_SQLITE_PATH)"
+expect_eq "ConfigMap points STATE_POSTGRES_DSN_FILE at the mounted Secret" "/etc/tempogate/postgres/dsn" \
+  "$(pgq ConfigMap .data.STATE_POSTGRES_DSN_FILE)"
+expect_eq "ConfigMap never holds a DSN" "0" \
+  "$(pgq ConfigMap '.data | keys | map(select(. == "STATE_POSTGRES_DSN" or . == "STATE_POSTGRES_LISTEN_DSN")) | length')"
+expect_eq "DSN Secret key is mounted as the dsn file" "tempogate-postgres:dsn->dsn" \
+  "$(pgq Deployment '.spec.template.spec.volumes[] | select(.name == "postgres-dsn") | .secret.secretName + ":" + .secret.items[0].key + "->" + .secret.items[0].path')"
+for c in migrate tempogate; do
+  expect_eq "$c mounts the DSN Secret read-only" "/etc/tempogate/postgres:true" \
+    "$(pgq Deployment "(.spec.template.spec.initContainers + .spec.template.spec.containers)[] | select(.name == \"$c\") |
+      .volumeMounts[] | select(.name == \"postgres-dsn\") | .mountPath + \":\" + (.readOnly | tostring)")"
+done
+expect_eq "Postgres migrate initContainer still gets no secret env" "0" \
+  "$(pginit '[.env // [] | .[] | select(.valueFrom.secretKeyRef)] | length')"
+pg_listen=$(render --values "$PG_VALUES" --set state.postgres.listenDsnSecretRef.name=l \
+  --set state.postgres.listenDsnSecretRef.key=k | yq 'select(.kind == "Deployment")')
+expect_eq "listenDsnSecretRef reaches serve as STATE_POSTGRES_LISTEN_DSN" "l:k" \
+  "$(yq '.spec.template.spec.containers[0].env[] | select(.name == "STATE_POSTGRES_LISTEN_DSN") | .valueFrom.secretKeyRef.name + ":" + .valueFrom.secretKeyRef.key' <<<"$pg_listen")"
+expect_eq "listenDsnSecretRef does not reach migrate" "0" \
+  "$(yq '.spec.template.spec.initContainers[] | select(.name == "migrate") | [.env // [] | .[] | select(.name == "STATE_POSTGRES_LISTEN_DSN")] | length' <<<"$pg_listen")"
+expect_eq "listenDsnSecretRef is ignored on SQLite" "0" \
+  "$(render --set state.postgres.listenDsnSecretRef.name=l --set state.postgres.listenDsnSecretRef.key=k |
+    yq 'select(.kind == "Deployment")' |
+    yq '[.spec.template.spec.containers[0].env // [] | .[] | select(.name == "STATE_POSTGRES_LISTEN_DSN")] | length')"
+expect_eq "PodDisruptionBudget renders when enabled" "1" "$(pgq PodDisruptionBudget .spec.maxUnavailable)"
+pg_hpa=$(render --values "$PG_VALUES" --set autoscaling.enabled=true)
+expect_eq "autoscaling renders an HPA on Postgres" "2-5" \
+  "$(yq 'select(.kind == "HorizontalPodAutoscaler") | (.spec.minReplicas | tostring) + "-" + (.spec.maxReplicas | tostring)' <<<"$pg_hpa")"
+expect_eq "autoscaling leaves replicas to the HPA" "null" \
+  "$(yq 'select(.kind == "Deployment") | .spec.replicas' <<<"$pg_hpa")"
+expect_render_error "autoscaling without a target is rejected" "targetCPUUtilizationPercentage" \
+  --values "$PG_VALUES" --set autoscaling.enabled=true --set autoscaling.targetCPUUtilizationPercentage=0
 
 echo "==> ServiceAccount token automount off"
 expect_eq "ServiceAccount automountServiceAccountToken" "false" "$(q ServiceAccount .automountServiceAccountToken)"
@@ -106,6 +158,12 @@ expect_eq "extraEnv reaches the migrate initContainer" "7s" \
   "$(render --set 'extraEnv[0].name=STATE_SQLITE_BUSY_TIMEOUT' --set 'extraEnv[0].value=7s' |
     yq 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") |
       .env[] | select(.name == "STATE_SQLITE_BUSY_TIMEOUT") | .value')"
+# A Postgres CA bundle for sslrootcert must reach migrate as well as serve.
+expect_eq "volumeMounts reach the migrate initContainer" "/etc/db-ca" \
+  "$(render --set 'volumes[0].name=db-ca' --set 'volumes[0].emptyDir.medium=Memory' \
+    --set 'volumeMounts[0].name=db-ca' --set 'volumeMounts[0].mountPath=/etc/db-ca' |
+    yq 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") |
+      .volumeMounts[] | select(.name == "db-ca") | .mountPath')"
 
 # Authorization rules render as indexed env keys, in order, and the default
 # as one key; neither is rendered when unset.

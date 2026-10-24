@@ -164,7 +164,8 @@ test-e2e: test-e2e-images test-e2e-go ## build images + run the Web UI SSO + CLI
 
 # Deployment smoke tests: install the Helm chart into a throwaway kind
 # cluster (migrate initContainer succeeds, pod becomes Ready, an upgrade
-# migrates again in a fresh pod, helm test passes) and boot the
+# migrates again in a fresh pod, helm test passes; on SQLite, then with two
+# replicas on an in-cluster Postgres) and boot the
 # docker-compose example's tempogate services. Need docker; helm + kubectl
 # for the chart. Both build DEPLOY_IMAGE first unless SKIP_BUILD=1. kind,
 # kubeconform and yq are pinned and installed into $(BIN_DIR), which is put

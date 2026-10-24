@@ -3,6 +3,11 @@
 This page lists what you must change when you upgrade tempogate.
 Do the steps in sequence.
 
+**Rolling upgrades on PostgreSQL.**
+With several replicas on PostgreSQL (the Helm chart's HA mode), an upgrade rolls: the first new pod runs `tempogate migrate` while older pods still serve.
+An older binary ignores schema versions it does not know, so this works when a release's migrations are backward compatible.
+A release whose migrations older replicas cannot run against says so in its section below; stop every replica before migrating to it (chart: `updateStrategy: {type: Recreate}`).
+
 ## v0.2.0 to v0.3.0
 
 v0.3.0 has many breaking changes.
