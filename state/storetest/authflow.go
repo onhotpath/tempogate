@@ -261,6 +261,44 @@ func authFlowCases() []testCase {
 				require.Error(t, err)
 				require.NotContains(t, err.Error(), secret)
 			}
+			_, err := b.Store.LookupDeviceCodeByUserCode(t.Context(), "SECRETUC")
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "SECRETUC")
+		}},
+		{"Errors/DuplicatesNeverEchoTheSecret", func(t *testing.T, b Backend) {
+			ctx := t.Context()
+			ar := authRequest("dup-state-value")
+			require.NoError(t, b.Store.SaveAuthRequest(ctx, ar))
+			ac := authCode("dup-code-value")
+			require.NoError(t, b.Store.SaveAuthCode(ctx, ac))
+			rt := refresh("dup-refresh-value", "fam-1")
+			require.NoError(t, b.Store.SaveRefresh(ctx, rt))
+			bs := browserSession("dup-sid-value")
+			require.NoError(t, b.Store.SaveBrowserSession(ctx, bs))
+			require.NoError(t, b.Store.SaveDeviceCode(ctx, deviceCode("dup-device-value", "BCDFGHJK")))
+
+			for secret, err := range map[string]error{
+				ar.InternalState:   b.Store.SaveAuthRequest(ctx, ar),
+				ac.Code:            b.Store.SaveAuthCode(ctx, ac),
+				rt.Token:           b.Store.SaveRefresh(ctx, rt),
+				bs.SID:             b.Store.SaveBrowserSession(ctx, bs),
+				"dup-device-value": b.Store.SaveDeviceCode(ctx, deviceCode("dup-device-value", "LMNPQRST")),
+				"BCDFGHJK":         b.Store.SaveDeviceCode(ctx, deviceCode("other-device-value", "BCDFGHJK")),
+			} {
+				require.Error(t, err, secret)
+				require.NotContains(t, err.Error(), secret)
+			}
+		}},
+		{"Errors/SecondDeviceDecisionNeverEchoesTheUserCode", func(t *testing.T, b Backend) {
+			require.NoError(t, b.Store.SaveDeviceCode(t.Context(), deviceCode("dc-1", "BCDFGHJK")))
+			require.NoError(t, b.Store.DenyDeviceCode(t.Context(), "BCDFGHJK", t0))
+			for _, err := range []error{
+				b.Store.ApproveDeviceCode(t.Context(), "BCDFGHJK", oidc.Identity{ConnectorID: "google", Subject: "sub-alice"}, t0),
+				b.Store.DenyDeviceCode(t.Context(), "BCDFGHJK", t0),
+			} {
+				require.ErrorIs(t, err, oidc.ErrDeviceCodeNotPending)
+				require.NotContains(t, err.Error(), "BCDFGHJK")
+			}
 		}},
 	}
 }
