@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/onhotpath/tempogate/internal/clock"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -178,6 +179,8 @@ func (m *SessionManager) IssueCookie(ctx context.Context, id Identity) (string, 
 		return "", nil, fmt.Errorf("oidc: generate session sid: %w", err)
 	}
 
+	redact.Declare(ctx, redact.Secret, sid)
+	declareIdentity(ctx, id.Subject, id.Email)
 	now := m.now()
 	bs := BrowserSession{
 		SID:         sid,
@@ -210,10 +213,14 @@ func (m *SessionManager) IssueCookie(ctx context.Context, id Identity) (string, 
 // unexpected store errors propagate so they aren't silently swallowed as
 // "no session".
 func (m *SessionManager) Get(ctx context.Context, r *http.Request) (BrowserSession, error) {
+	if c, err := r.Cookie(m.cookie.name); err == nil {
+		redact.Declare(ctx, redact.Secret, c.Value)
+	}
 	sid, ok := m.sidFromRequest(r)
 	if !ok {
 		return BrowserSession{}, ErrNoSession
 	}
+	redact.Declare(ctx, redact.Secret, sid)
 
 	bs, err := m.store.LookupBrowserSession(ctx, sid)
 	if errors.Is(err, ErrBrowserSessionNotFound) {
@@ -226,6 +233,7 @@ func (m *SessionManager) Get(ctx context.Context, r *http.Request) (BrowserSessi
 	if !m.now().Before(bs.ExpiresAt) || bs.Subject == "" {
 		return BrowserSession{}, ErrNoSession
 	}
+	declareIdentity(ctx, bs.Subject, bs.Email)
 	return bs, nil
 }
 

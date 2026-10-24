@@ -33,6 +33,8 @@ const deviceCodeColumns = `user_code, client_id, scope, connector_id, subject, e
 	created_at, expires_at`
 
 func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
+	ctx, op := s.ops.Start(ctx, "save_device_code")
+	defer op.End()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO device_codes
 		   (device_code_hash, user_code, client_id, scope, connector_id, subject, email,
@@ -47,7 +49,7 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 		return ErrDuplicateDeviceCode
 	}
 	if err != nil {
-		return s.fail("save_device_code", fmt.Errorf("postgres: save device code: %w", err))
+		return op.Fail(fmt.Errorf("postgres: save device code: %w", err))
 	}
 	return nil
 }
@@ -69,6 +71,8 @@ func (s *Store) LookupDeviceCodeByUserCode(ctx context.Context, userCode string)
 }
 
 func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oidc.DeviceCode, error) {
+	ctx, op := s.ops.Start(ctx, "lookup_device_code")
+	defer op.End()
 	// #nosec G202 -- column is one of the two constants above, never input.
 	dc, err := scanDeviceCode(s.pool.QueryRow(ctx,
 		`SELECT `+deviceCodeColumns+` FROM device_codes WHERE `+column+` = $1`, value))
@@ -76,7 +80,7 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return oidc.DeviceCode{}, s.fail("lookup_device_code", fmt.Errorf("postgres: lookup device code by %s: %w", column, err))
+		return oidc.DeviceCode{}, op.Fail(fmt.Errorf("postgres: lookup device code by %s: %w", column, err))
 	}
 	return dc, nil
 }
@@ -87,6 +91,8 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 // last_polled_at, and every poll that then finds itself inside the interval
 // is slow_down, which bumps interval_seconds by 5 and reports true.
 func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (bool, error) {
+	ctx, op := s.ops.Start(ctx, "poll_device_code")
+	defer op.End()
 	var slowDown bool
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var (
@@ -118,7 +124,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		return false, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return false, s.fail("poll_device_code", fmt.Errorf("postgres: poll device code: %w", err))
+		return false, op.Fail(fmt.Errorf("postgres: poll device code: %w", err))
 	}
 	return slowDown, nil
 }
@@ -149,9 +155,11 @@ func (s *Store) DenyDeviceCode(ctx context.Context, userCode string, now time.Ti
 }
 
 func (s *Store) decideDeviceCode(ctx context.Context, stmt string, args ...any) error {
+	ctx, op := s.ops.Start(ctx, "decide_device_code")
+	defer op.End()
 	tag, err := s.pool.Exec(ctx, stmt, args...)
 	if err != nil {
-		return s.fail("decide_device_code", fmt.Errorf("postgres: decide device code: %w", err))
+		return op.Fail(fmt.Errorf("postgres: decide device code: %w", err))
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrDeviceCodeNotPending
@@ -164,6 +172,8 @@ func (s *Store) decideDeviceCode(ctx context.Context, stmt string, args ...any) 
 // Called only on the final token-mint path, after an Approve has stamped the
 // row.
 func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
+	ctx, op := s.ops.Start(ctx, "consume_device_code")
+	defer op.End()
 	dc, err := scanDeviceCode(s.pool.QueryRow(ctx,
 		`DELETE FROM device_codes WHERE device_code_hash = $1 RETURNING `+deviceCodeColumns,
 		secret.Hash(deviceCode)))
@@ -171,7 +181,7 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return oidc.DeviceCode{}, s.fail("consume_device_code", fmt.Errorf("postgres: consume device code: %w", err))
+		return oidc.DeviceCode{}, op.Fail(fmt.Errorf("postgres: consume device code: %w", err))
 	}
 	dc.Code = deviceCode
 	return dc, nil

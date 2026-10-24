@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/onhotpath/tempogate/redact"
 )
 
 // connSource is where a connection string comes from: inline, or a file
@@ -21,6 +23,9 @@ type connSource struct {
 	setting       string
 	allowInsecure bool
 	logger        *zap.Logger
+	// redaction learns the password of every DSN read, so a rotated one is
+	// masked too.
+	redaction *redact.Set
 }
 
 func (c connSource) read() (string, error) {
@@ -46,6 +51,7 @@ func (c connSource) poolConfig() (*pgxpool.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("postgres: parse %s: %w", c.setting, err)
 	}
+	c.redaction.Declare(redact.Secret, cfg.ConnConfig.Password)
 	if err := c.checkTLS(&cfg.ConnConfig.Config); err != nil {
 		return nil, err
 	}

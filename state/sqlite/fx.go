@@ -24,7 +24,8 @@ type Params struct {
 	MaxConns    int           `name:"sqlite_max_conns"`
 	BusyTimeout time.Duration `name:"sqlite_busy_timeout"`
 
-	Meter observe.Meter `optional:"true"`
+	Meter  observe.Meter  `optional:"true"`
+	Tracer observe.Tracer `optional:"true"`
 }
 
 func newFx(p Params) (*Store, error) {
@@ -33,6 +34,7 @@ func newFx(p Params) (*Store, error) {
 		WithMaxConns(p.MaxConns),
 		WithBusyTimeout(p.BusyTimeout),
 		WithMeter(p.Meter),
+		WithTracer(p.Tracer),
 	}
 	if p.Logger != nil {
 		opts = append(opts, WithLogger(p.Logger.Named("sqlite")))

@@ -73,3 +73,9 @@ func TestRedeclaringDifferentlyFails(t *testing.T) {
 	_, err = observe.NewCounter[opLabels](m, "test.calls", observe.WithDescription("two"))
 	require.Error(t, err)
 }
+
+func TestAttrHoldsAStringOrAnInt(t *testing.T) {
+	assert.Equal(t, "v", observe.String("k", "v").Value())
+	assert.Equal(t, 200, observe.Int("k", 200).Value())
+	assert.Equal(t, "", observe.Attr{Key: "k"}.Value(), "the zero Attr is an empty string")
+}

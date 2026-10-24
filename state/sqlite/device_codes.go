@@ -38,6 +38,8 @@ var ErrDeviceCodeNotFound = fmt.Errorf("%w: sqlite", oidc.ErrDeviceCodeNotFound)
 var ErrDeviceCodeNotPending = fmt.Errorf("%w: sqlite", oidc.ErrDeviceCodeNotPending)
 
 func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
+	ctx, op := s.ops.Start(ctx, "save_device_code")
+	defer op.End()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO device_codes
 		   (device_code_hash, user_code, client_id, scope, connector_id, subject, email,
@@ -56,7 +58,7 @@ func (s *Store) SaveDeviceCode(ctx context.Context, dc oidc.DeviceCode) error {
 				return ErrDuplicateDeviceCode
 			}
 		}
-		return s.fail("save_device_code", fmt.Errorf("sqlite: save device code: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: save device code: %w", err))
 	}
 	return nil
 }
@@ -80,6 +82,8 @@ func (s *Store) LookupDeviceCodeByUserCode(ctx context.Context, userCode string)
 }
 
 func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oidc.DeviceCode, error) {
+	ctx, op := s.ops.Start(ctx, "lookup_device_code")
+	defer op.End()
 	var (
 		dc           oidc.DeviceCode
 		connectorID  sql.NullString
@@ -105,7 +109,7 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return oidc.DeviceCode{}, s.fail("lookup_device_code", fmt.Errorf("sqlite: lookup device code by %s: %w", column, err))
+		return oidc.DeviceCode{}, op.Fail(fmt.Errorf("sqlite: lookup device code by %s: %w", column, err))
 	}
 	dc.ConnectorID = connectorID.String
 	dc.Subject = subject.String
@@ -125,6 +129,8 @@ func (s *Store) lookupDeviceCode(ctx context.Context, column, value string) (oid
 // are slow_down. The interval is judged in Go because timestamps are stored
 // as Go time strings that SQLite's date functions cannot read.
 func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.Time) (bool, error) {
+	ctx, op := s.ops.Start(ctx, "poll_device_code")
+	defer op.End()
 	hash := secret.Hash(deviceCode)
 	var (
 		lastPolled    sql.NullTime
@@ -140,7 +146,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		return false, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return false, s.fail("poll_device_code", fmt.Errorf("sqlite: poll device code: %w", err))
+		return false, op.Fail(fmt.Errorf("sqlite: poll device code: %w", err))
 	}
 
 	if !lastPolled.Valid || now.Sub(lastPolled.Time) >= time.Duration(interval)*time.Second {
@@ -154,7 +160,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 			now, hash, prev,
 		)
 		if err != nil {
-			return false, s.fail("poll_device_code", fmt.Errorf("sqlite: poll device code: %w", err))
+			return false, op.Fail(fmt.Errorf("sqlite: poll device code: %w", err))
 		}
 		if n, err := res.RowsAffected(); err != nil || n == 1 {
 			return false, err
@@ -169,7 +175,7 @@ func (s *Store) PollDeviceCode(ctx context.Context, deviceCode string, now time.
 		 WHERE device_code_hash = ?`,
 		now, hash,
 	); err != nil {
-		return false, s.fail("poll_device_code", fmt.Errorf("sqlite: poll device code slow_down: %w", err))
+		return false, op.Fail(fmt.Errorf("sqlite: poll device code slow_down: %w", err))
 	}
 	return true, nil
 }
@@ -212,6 +218,8 @@ func (s *Store) DenyDeviceCode(ctx context.Context, userCode string, now time.Ti
 // /token rejects an expired code anyway; refusing the decision too keeps the
 // row from ever reading as approved past its lifetime.
 func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string, args []any, userCode string) error {
+	ctx, op := s.ops.Start(ctx, "decide_device_code")
+	defer op.End()
 	var expiresAt time.Time
 	err := s.db.QueryRowContext(ctx,
 		`SELECT expires_at FROM device_codes WHERE user_code = ?`, userCode,
@@ -220,7 +228,7 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 		return ErrDeviceCodeNotPending
 	}
 	if err != nil {
-		return s.fail("decide_device_code", fmt.Errorf("sqlite: decide device code: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: decide device code: %w", err))
 	}
 	if !now.Before(expiresAt) {
 		return fmt.Errorf("%w: expired", ErrDeviceCodeNotPending)
@@ -228,11 +236,11 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 
 	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
-		return s.fail("decide_device_code", fmt.Errorf("sqlite: decide device code: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: decide device code: %w", err))
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return s.fail("decide_device_code", fmt.Errorf("sqlite: decide device code rows: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: decide device code rows: %w", err))
 	}
 	if n == 0 {
 		return ErrDeviceCodeNotPending
@@ -246,6 +254,8 @@ func (s *Store) decideDeviceCode(ctx context.Context, now time.Time, stmt string
 // — the loser sees zero rows and gets ErrDeviceCodeNotFound. Called only on
 // the final token-mint path, after an Approve has stamped the row.
 func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.DeviceCode, error) {
+	ctx, op := s.ops.Start(ctx, "consume_device_code")
+	defer op.End()
 	var (
 		dc           = oidc.DeviceCode{Code: deviceCode}
 		connectorID  sql.NullString
@@ -270,7 +280,7 @@ func (s *Store) ConsumeDeviceCode(ctx context.Context, deviceCode string) (oidc.
 		return oidc.DeviceCode{}, ErrDeviceCodeNotFound
 	}
 	if err != nil {
-		return oidc.DeviceCode{}, s.fail("consume_device_code", fmt.Errorf("sqlite: consume device code: %w", err))
+		return oidc.DeviceCode{}, op.Fail(fmt.Errorf("sqlite: consume device code: %w", err))
 	}
 	dc.ConnectorID = connectorID.String
 	dc.Subject = subject.String

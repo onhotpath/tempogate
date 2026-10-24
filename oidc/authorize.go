@@ -14,6 +14,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/onhotpath/tempogate/internal/clock"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -157,6 +158,8 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 	); err != nil {
 		return nil, err
 	}
+	redact.Declare(ctx, redact.Secret, in.State, in.Nonce)
+	redact.Declare(ctx, redact.Identifier, in.ClientID)
 	if err := a.clients.Validate(in.ClientID, in.RedirectURI); err != nil {
 		if errors.Is(err, ErrUnknownClient) {
 			return nil, oauthErr(http.StatusBadRequest, "invalid_client", "unknown client_id")
@@ -186,6 +189,7 @@ func (a *Authorizer) handle(ctx context.Context, in *authorizeInput) (*authorize
 	if err != nil {
 		return nil, fmt.Errorf("oidc: generate state: %w", err)
 	}
+	redact.Declare(ctx, redact.Secret, internalState)
 
 	conn := a.connectors.Active()
 	now := a.now()

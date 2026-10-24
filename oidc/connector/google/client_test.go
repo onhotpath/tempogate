@@ -26,6 +26,7 @@ import (
 	"go.uber.org/fx/fxtest"
 	"golang.org/x/oauth2"
 
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/connector/google"
@@ -577,7 +578,7 @@ type recordingObserver struct {
 
 func newRecordingObserver(t testing.TB) *recordingObserver {
 	m := observetest.NewMeter()
-	tm, err := oidc.NewTelemetry(m)
+	tm, err := oidc.NewTelemetry(m, nil)
 	require.NoError(t, err)
 	return &recordingObserver{Telemetry: tm, meter: m}
 }
@@ -605,6 +606,29 @@ func (s *GoogleSuite) observedClientFor(srv *httptest.Server, opts ...google.Opt
 	obs := newRecordingObserver(s.T())
 	return google.New(testClientID, "secret", srv.URL+"/token",
 		srv.URL, append(opts, google.WithTelemetry(obs.Telemetry))...), obs
+}
+
+// Inside a traced request every upstream round-trip is a span of it, ended
+// once.
+func (s *GoogleSuite) TestUpstreamCallsAreSpansOfTheRequest() {
+	srv := newIDP(s.T()).server(s.T())
+	tr := observetest.NewTracer()
+	tm, err := oidc.NewTelemetry(nil, tr)
+	s.Require().NoError(err)
+	c := google.New(testClientID, "secret", srv.URL+"/token", srv.URL, google.WithTelemetry(tm))
+
+	ctx, root := tr.Start(s.ctx, "request", observe.AsRoot())
+	_, err = c.ExchangeAndVerify(ctx, "code", testRedirect, testVerifier, testNonce)
+	s.Require().NoError(err)
+	root.End()
+
+	var names []string
+	for _, sp := range tr.Spans()[1:] {
+		names = append(names, sp.Name)
+		s.Equal("request", sp.Parent.Name, sp.Name)
+		s.True(sp.Ended, sp.Name)
+	}
+	s.Equal([]string{"upstream discovery", "upstream code_exchange", "upstream verify_id_token"}, names)
 }
 
 // Every upstream round-trip is timed by operation, so a slow or failing

@@ -31,6 +31,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/observe"
+	"github.com/onhotpath/tempogate/redact"
 	"github.com/onhotpath/tempogate/state/internal/changefeed"
 	"github.com/onhotpath/tempogate/state/internal/instrument"
 )
@@ -44,6 +45,8 @@ type options struct {
 	allowInsecureSSLMode bool
 	logger               *zap.Logger
 	meter                observe.Meter
+	tracer               observe.Tracer
+	redaction            *redact.Set
 	migrations           fs.FS
 }
 
@@ -87,6 +90,14 @@ func WithLogger(l *zap.Logger) Option { return func(o *options) { o.logger = l }
 // Nil records nothing.
 func WithMeter(m observe.Meter) Option { return func(o *options) { o.meter = m } }
 
+// WithTracer makes every operation run inside a traced request a span of its
+// own. Nil starts no spans.
+func WithTracer(t observe.Tracer) Option { return func(o *options) { o.tracer = t } }
+
+// WithRedaction declares the password of every DSN the store reads in s, so
+// no exported span carries it. Nil declares nothing.
+func WithRedaction(s *redact.Set) Option { return func(o *options) { o.redaction = s } }
+
 func defaultOptions() *options {
 	return &options{
 		maxConns:        10,
@@ -129,12 +140,12 @@ func New(opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("postgres: STATE_POSTGRES_CONN_MAX_IDLE_TIME must not be negative, got %s", o.connMaxIdleTime)
 	}
 
-	ops, err := instrument.New(o.meter)
+	ops, err := instrument.New(o.meter, o.tracer)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
 
-	serving := connSource{dsn: o.dsn, file: o.dsnFile, setting: "STATE_POSTGRES_DSN", allowInsecure: o.allowInsecureSSLMode, logger: o.logger}
+	serving := connSource{dsn: o.dsn, file: o.dsnFile, setting: "STATE_POSTGRES_DSN", allowInsecure: o.allowInsecureSSLMode, logger: o.logger, redaction: o.redaction}
 	if o.dsnFile != "" {
 		serving.setting = "STATE_POSTGRES_DSN_FILE"
 	}
@@ -154,7 +165,7 @@ func New(opts ...Option) (*Store, error) {
 
 	listen := serving
 	if o.listenDSN != "" {
-		listen = connSource{dsn: o.listenDSN, setting: "STATE_POSTGRES_LISTEN_DSN", allowInsecure: o.allowInsecureSSLMode, logger: o.logger}
+		listen = connSource{dsn: o.listenDSN, setting: "STATE_POSTGRES_LISTEN_DSN", allowInsecure: o.allowInsecureSSLMode, logger: o.logger, redaction: o.redaction}
 		if _, err := listen.connConfig(); err != nil {
 			return nil, err
 		}
@@ -197,17 +208,13 @@ func (s *Store) Ping(ctx context.Context) error {
 // it fails while the database is unreachable, refuses this role, or was
 // replaced by an empty one.
 func (s *Store) Probe(ctx context.Context) error {
+	ctx, op := s.ops.Start(ctx, "probe")
+	defer op.End()
 	var one int
 	if err := s.pool.QueryRow(ctx, `SELECT 1 FROM schema_migrations LIMIT 1`).Scan(&one); err != nil {
-		return s.fail("probe", fmt.Errorf("postgres: probe: %w", err))
+		return op.Fail(fmt.Errorf("postgres: probe: %w", err))
 	}
 	return nil
-}
-
-// fail counts a failed operation and returns err unchanged, so call sites
-// keep their own error context.
-func (s *Store) fail(op string, err error) error {
-	return s.ops.Fail(context.Background(), op, err)
 }
 
 // Close stops the change feed, if it ever started, and closes the pool.

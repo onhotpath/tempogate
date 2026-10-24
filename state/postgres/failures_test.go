@@ -28,6 +28,94 @@ func failOn(t *testing.T, s *Store, table, op string) {
 	require.NoError(t, err)
 }
 
+// unreadable nulls column on every row of table, a value the store cannot
+// scan back: the shape of a row damaged by a hand edit.
+func unreadable(t *testing.T, s *Store, table, column string) {
+	t.Helper()
+	_, err := s.pool.Exec(t.Context(), fmt.Sprintf(
+		`ALTER TABLE %[1]s ALTER COLUMN %[2]s DROP NOT NULL; UPDATE %[1]s SET %[2]s = NULL`, table, column))
+	require.NoError(t, err)
+}
+
+// TestUnreadableRowsAreObserved: a replayed code or token whose tombstone
+// cannot be read back is a database failure, not a clean "reused" verdict,
+// and a listing that hits an unreadable row fails instead of dropping it.
+// Both are counted.
+func TestUnreadableRowsAreObserved(t *testing.T) {
+	forEachServer(t, func(t *testing.T, srv testServer) {
+		at := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+		cases := []struct {
+			name, op, table, column string
+			seed                    func(t *testing.T, s *Store)
+			call                    func(t *testing.T, s *Store) error
+		}{
+			{
+				name: "auth code tombstone", op: "consume_auth_code", table: "auth_codes", column: "created_at",
+				seed: func(t *testing.T, s *Store) {
+					require.NoError(t, s.SaveAuthCode(t.Context(), oidc.AuthCode{Code: "c", ClientID: "ui", CreatedAt: at, ExpiresAt: at.Add(time.Minute)}))
+					_, err := s.ConsumeAuthCode(t.Context(), "c", "fam", at)
+					require.NoError(t, err)
+				},
+				call: func(t *testing.T, s *Store) error {
+					_, err := s.ConsumeAuthCode(t.Context(), "c", "fam-2", at)
+					require.NotErrorIs(t, err, oidc.ErrAuthCodeReused)
+					return err
+				},
+			},
+			{
+				name: "refresh token tombstone", op: "consume_refresh", table: "refresh_tokens", column: "created_at",
+				seed: func(t *testing.T, s *Store) {
+					require.NoError(t, s.SaveRefresh(t.Context(), oidc.Refresh{Token: "r", ClientID: "ui", FamilyID: "fam", AuthTime: at, CreatedAt: at, ExpiresAt: at.Add(time.Hour)}))
+					_, err := s.ConsumeRefresh(t.Context(), "r", "ui", at)
+					require.NoError(t, err)
+				},
+				call: func(t *testing.T, s *Store) error {
+					_, err := s.ConsumeRefresh(t.Context(), "r", "ui", at)
+					require.NotErrorIs(t, err, oidc.ErrRefreshReused)
+					return err
+				},
+			},
+			{
+				name: "keypairs", op: "load_keypairs", table: "keypairs", column: "created_at",
+				seed: func(t *testing.T, s *Store) {
+					require.NoError(t, s.SaveKeypair(t.Context(), keys.Keypair{Kid: "a", Alg: "RS256", PrivatePEM: []byte("p"), PublicPEM: []byte("p"), CreatedAt: at}))
+				},
+				call: func(t *testing.T, s *Store) error { _, err := s.LoadKeypairs(t.Context()); return err },
+			},
+			{
+				name: "integration keys", op: "list_integration_keys", table: "integration_keys", column: "created_at",
+				seed: func(t *testing.T, s *Store) {
+					require.NoError(t, s.SaveIntegrationKey(t.Context(), admin.IntegrationKey{ID: "k", Namespace: "ns", Role: admin.RoleRead, Owner: "o", JTI: "j", CreatedAt: at}))
+				},
+				call: func(t *testing.T, s *Store) error {
+					_, err := s.ListIntegrationKeys(t.Context(), admin.ListFilter{})
+					return err
+				},
+			},
+			{
+				name: "refresh sessions", op: "list_refresh_sessions", table: "refresh_tokens", column: "auth_time",
+				seed: func(t *testing.T, s *Store) {
+					require.NoError(t, s.SaveRefresh(t.Context(), oidc.Refresh{Token: "r", ClientID: "ui", FamilyID: "fam", AuthTime: at, CreatedAt: at, ExpiresAt: at.Add(time.Hour)}))
+				},
+				call: func(t *testing.T, s *Store) error {
+					_, err := s.ListRefreshSessions(t.Context(), admin.SessionFilter{}, at)
+					return err
+				},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				obs := newRecordingObserver()
+				s := newTestStore(t, srv, WithMeter(obs.meter), WithTracer(obs.tracer))
+				tc.seed(t, s)
+				unreadable(t, s, tc.table, tc.column)
+				require.ErrorContains(t, tc.call(t, s), "NULL")
+				require.Equal(t, []string{tc.op}, obs.calls())
+			})
+		}
+	})
+}
+
 // TestAFailedStatementRollsBackAndIsObserved: whichever statement of a
 // store transaction fails, the call reports the database error (counted
 // under its op) and leaves nothing half written.
@@ -134,7 +222,7 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				obs := newRecordingObserver()
-				s := newTestStore(t, srv, WithMeter(obs.meter))
+				s := newTestStore(t, srv, WithMeter(obs.meter), WithTracer(obs.tracer))
 				if tc.seed != nil {
 					tc.seed(t, s)
 				}
@@ -150,7 +238,7 @@ func TestAFailedStatementRollsBackAndIsObserved(t *testing.T) {
 
 		t.Run("a notification too large to send", func(t *testing.T) {
 			obs := newRecordingObserver()
-			s := newTestStore(t, srv, WithMeter(obs.meter))
+			s := newTestStore(t, srv, WithMeter(obs.meter), WithTracer(obs.tracer))
 			jti := strings.Repeat("j", 9000) // NOTIFY payloads stop at 8000 bytes
 			require.NoError(t, s.SaveIntegrationKey(t.Context(), admin.IntegrationKey{ID: "k", Namespace: "ns", Role: admin.RoleRead, Owner: "o", JTI: jti, CreatedAt: at}))
 			_, err := s.MarkIntegrationKeyRevoked(t.Context(), "k", at)

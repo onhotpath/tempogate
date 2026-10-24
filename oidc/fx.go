@@ -12,6 +12,7 @@ import (
 
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/observe"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 // sessionSigningKeyBytes is the required HMAC-SHA256 key length. RFC 4231
@@ -25,6 +26,8 @@ type clientRegistryParams struct {
 	Clients       string `name:"oidc_clients"`
 	Secrets       string `name:"oidc_client_secrets"`
 	AllowInsecure bool   `name:"oidc_allow_insecure_redirect_uris"`
+
+	Redaction *redact.Set `optional:"true"`
 }
 
 // newClientRegistry parses the single shared ClientRegistry both /authorize
@@ -39,6 +42,10 @@ func newClientRegistry(p clientRegistryParams) (ClientRegistry, error) {
 	}
 	if err := reg.WithSecrets(p.Secrets); err != nil {
 		return nil, err
+	}
+	for id, c := range reg {
+		p.Redaction.Declare(redact.Identifier, id)
+		p.Redaction.Declare(redact.Secret, c.Secret)
 	}
 	return reg, nil
 }
@@ -181,6 +188,8 @@ type sessionSigningKeyParams struct {
 	fx.In
 
 	SigningKeyB64 string `name:"oidc_session_signing_key"`
+
+	Redaction *redact.Set `optional:"true"`
 }
 
 // newSessionSigningKey validates the HMAC-SHA256 key so a misconfigured
@@ -190,6 +199,7 @@ type sessionSigningKeyParams struct {
 // base64url-decoded length other than 32 is rejected because a shorter key
 // would silently weaken the cookie MAC.
 func newSessionSigningKey(p sessionSigningKeyParams) (sessionSigningKey, error) {
+	p.Redaction.Declare(redact.Secret, p.SigningKeyB64)
 	if p.SigningKeyB64 == "" {
 		return nil, fmt.Errorf("oidc: OIDC_SESSION_SIGNING_KEY is required (base64url-encoded %d bytes)", sessionSigningKeyBytes)
 	}
@@ -355,13 +365,15 @@ func newRateLimitMiddleware(p rateLimiterParams) (func(huma.Context, func(huma.C
 type telemetryParams struct {
 	fx.In
 
-	Meter observe.Meter `optional:"true"`
+	Meter  observe.Meter  `optional:"true"`
+	Tracer observe.Tracer `optional:"true"`
 }
 
-// newTelemetry declares oidc's instruments on the graph's observe.Meter;
-// without one (no telemetry module) nothing is recorded.
+// newTelemetry declares oidc's instruments on the graph's observe.Meter and
+// traces through its observe.Tracer; without them (no telemetry module, or
+// tracing off) nothing is recorded or traced.
 func newTelemetry(p telemetryParams) (*Telemetry, error) {
-	return NewTelemetry(p.Meter)
+	return NewTelemetry(p.Meter, p.Tracer)
 }
 
 // Fx contributes the /authorize, /callback/{connector}, /token, /userinfo,

@@ -19,6 +19,8 @@ import (
 var ErrDuplicateKid = errors.New("sqlite: keypair with this kid already exists")
 
 func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
+	ctx, op := s.ops.Start(ctx, "save_keypair")
+	defer op.End()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO keypairs (kid, alg, private_pem, public_pem, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -29,20 +31,22 @@ func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return fmt.Errorf("%w: %s", ErrDuplicateKid, kp.Kid)
 		}
-		return s.fail("save_keypair", fmt.Errorf("sqlite: save keypair: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: save keypair: %w", err))
 	}
 	s.changes.Publish(keys.Change{Kind: keys.ChangeKeys})
 	return nil
 }
 
 func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
+	ctx, op := s.ops.Start(ctx, "load_keypairs")
+	defer op.End()
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+keypairColumns+`
 		 FROM keypairs
 		 ORDER BY created_at ASC, kid ASC`,
 	)
 	if err != nil {
-		return nil, s.fail("load_keypairs", fmt.Errorf("sqlite: load keypairs: %w", err))
+		return nil, op.Fail(fmt.Errorf("sqlite: load keypairs: %w", err))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -55,7 +59,7 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 		out = append(out, kp)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, s.fail("load_keypairs", fmt.Errorf("sqlite: rows: %w", err))
+		return nil, op.Fail(fmt.Errorf("sqlite: rows: %w", err))
 	}
 	return out, nil
 }
@@ -63,13 +67,15 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 // UpdateKeypairPrivatePEM rewrites one keypair's private half in place, for
 // `tempogate keys encrypt`.
 func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, privatePEM []byte) error {
+	ctx, op := s.ops.Start(ctx, "update_keypair_private_pem")
+	defer op.End()
 	res, err := s.db.ExecContext(ctx, `UPDATE keypairs SET private_pem = ? WHERE kid = ?`, privatePEM, kid)
 	if err != nil {
-		return s.fail("update_keypair_private_pem", fmt.Errorf("sqlite: update keypair: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: update keypair: %w", err))
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return s.fail("update_keypair_private_pem", fmt.Errorf("sqlite: update keypair: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: update keypair: %w", err))
 	}
 	if n == 0 {
 		return fmt.Errorf("sqlite: update keypair: no keypair with kid %s", kid)
@@ -84,6 +90,8 @@ func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, private
 // row changes, a follow-up read says why: unknown kid, already retired
 // (returned unchanged so the original grace window holds), or last active.
 func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (keys.Keypair, error) {
+	ctx, op := s.ops.Start(ctx, "retire_keypair")
+	defer op.End()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE keypairs SET retired_at = ?
 		 WHERE kid = ? AND retired_at IS NULL
@@ -91,11 +99,11 @@ func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (ke
 		at, kid, kid,
 	)
 	if err != nil {
-		return keys.Keypair{}, s.fail("retire_keypair", fmt.Errorf("sqlite: retire keypair: %w", err))
+		return keys.Keypair{}, op.Fail(fmt.Errorf("sqlite: retire keypair: %w", err))
 	}
 	changed, err := res.RowsAffected()
 	if err != nil {
-		return keys.Keypair{}, s.fail("retire_keypair", fmt.Errorf("sqlite: retire keypair: %w", err))
+		return keys.Keypair{}, op.Fail(fmt.Errorf("sqlite: retire keypair: %w", err))
 	}
 	if changed > 0 {
 		s.changes.Publish(keys.Change{Kind: keys.ChangeKeys})

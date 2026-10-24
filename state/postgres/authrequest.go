@@ -16,6 +16,8 @@ import (
 var ErrDuplicateInternalState = errors.New("postgres: auth request with this internal_state already exists")
 
 func (s *Store) SaveAuthRequest(ctx context.Context, ar oidc.AuthRequest) error {
+	ctx, op := s.ops.Start(ctx, "save_auth_request")
+	defer op.End()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO auth_requests
 		   (internal_state, connector_id, client_id, redirect_uri, scope, client_state,
@@ -28,7 +30,7 @@ func (s *Store) SaveAuthRequest(ctx context.Context, ar oidc.AuthRequest) error 
 		return ErrDuplicateInternalState
 	}
 	if err != nil {
-		return s.fail("save_auth_request", fmt.Errorf("postgres: save auth request: %w", err))
+		return op.Fail(fmt.Errorf("postgres: save auth request: %w", err))
 	}
 	return nil
 }
@@ -38,6 +40,8 @@ func (s *Store) SaveAuthRequest(ctx context.Context, ar oidc.AuthRequest) error 
 // takes it and the others, re-checking after its lock, find nothing and get
 // oidc.ErrAuthRequestNotFound; a replayed state finds the row already gone.
 func (s *Store) ConsumeAuthRequest(ctx context.Context, internalState string) (oidc.AuthRequest, error) {
+	ctx, op := s.ops.Start(ctx, "consume_auth_request")
+	defer op.End()
 	var ar oidc.AuthRequest
 	err := s.pool.QueryRow(ctx,
 		`DELETE FROM auth_requests WHERE internal_state = $1
@@ -52,7 +56,7 @@ func (s *Store) ConsumeAuthRequest(ctx context.Context, internalState string) (o
 		return oidc.AuthRequest{}, oidc.ErrAuthRequestNotFound
 	}
 	if err != nil {
-		return oidc.AuthRequest{}, s.fail("consume_auth_request", fmt.Errorf("postgres: consume auth request: %w", err))
+		return oidc.AuthRequest{}, op.Fail(fmt.Errorf("postgres: consume auth request: %w", err))
 	}
 	return ar, nil
 }

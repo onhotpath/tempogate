@@ -126,7 +126,31 @@ Keep it on loopback, or on a cluster-internal address that a NetworkPolicy restr
 The Go runtime (`go_*`) and process (`process_*`) collectors are also exposed.
 tempogate takes every label value from a fixed set: emails, client IDs, tokens and raw request input never become labels.
 
-Tracing (OpenTelemetry) is not implemented yet.
+### Tracing
+
+tempogate can export OpenTelemetry traces over OTLP.
+Tracing is off by default; `OTEL_TRACES_EXPORTER=otlp` turns it on, and the other standard `OTEL_*` variables point it at a collector ([settings](configuration.md#tracing)).
+
+- **One trace per request**, on both listeners.
+  Its root is the request's server span, named after the route template that matched (`POST /token`, `GET /callback/{connector}`), or the method alone when none did.
+  It carries `http.request.method`, `http.route`, `http.response.status_code`, `tempogate.listener` (`public` or `admin`) and `tempogate.request_id`, which is the `X-Request-Id` the response carries and the `request_id` of its [access-log line](#request-logs).
+  A `5xx` marks the span as failed, with `error.type` set to the status code and the error detail the client never sees (the one logged as `request failed`) as its status message.
+- **Child spans** cover the request's own work: `upstream <op>` for each call to Google, and `store <op>` for each state-store operation.
+  `<op>` is the `op` label of the matching metric (`tempogate_upstream_request_duration_seconds`, `tempogate_db_errors_total`).
+  A failed one has `error.type` set to `timeout` or `error` (Google), or `db_error` (store), and records the error's message.
+- **A new trace for every request.** tempogate does not join an incoming `traceparent`: the public listener faces the internet, and a caller could otherwise pick trace IDs and force sampling.
+  It sends no trace context to Google either.
+- **Not traced:** probes and scrapes (`/healthz`, `/readyz`, `/admin/healthz`, `/metrics`), and background work (expired-state reaping, signing-key reloads, the denylist feed).
+  Background work still counts in the metrics.
+- **No secrets or identities in span attributes.** The rule for metric labels applies: no emails, client IDs, tokens or raw request input.
+  Spans carry route templates and operation names, never the URL path, query string, headers, client address or user agent.
+- **Errors keep their text, with secrets and personal data masked.** A failed span records its error's message, because that is what makes a trace worth reading.
+  The message can quote what the failing library saw, such as the client ID in a refused ID token's audience.
+  tempogate masks every value it knows to be sensitive wherever it appears in that message: credentials (client secrets, codes, tokens, session ids, keys, the database password) become `[REDACTED]`, emails become `a***@example.com`, and client IDs of 8 characters or more keep a short prefix (`tempog***`).
+  It can only mask values it handled itself, in the form it handled them (not URL-escaped or re-encoded); give your trace backend the access controls you give your logs.
+- **Export never fails a request.** Spans leave in batches off the request path.
+  If the collector is down, the batch is dropped and logged at `warn` as `opentelemetry error`.
+  `serve` flushes the last batch when it stops, waiting at most 5 seconds for the collector.
 
 ### Request logs
 

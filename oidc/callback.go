@@ -16,6 +16,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/onhotpath/tempogate/internal/clock"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -200,6 +201,7 @@ func (c *Callback) handle(ctx context.Context, in *callbackInput) (*callbackOutp
 func (c *Callback) complete(ctx context.Context, conn Connector, in *callbackInput) (*callbackOutput, string, error) {
 	id := conn.ID()
 	state := in.params.Get(conn.Flow().StateParam)
+	redact.Declare(ctx, redact.Secret, state, in.params.Get("code"), in.Cookie)
 	if state == "" {
 		return nil, reasonMissingState, oauthErr(http.StatusBadRequest, "invalid_request", "missing state")
 	}
@@ -250,6 +252,7 @@ func (c *Callback) complete(ctx context.Context, conn Connector, in *callbackInp
 		return nil, reasonUpstreamError, oauthErr(http.StatusBadGateway, "upstream_error", "could not complete "+conn.DisplayName()+" sign-in")
 	}
 	identity := completion.Identity
+	declareIdentity(ctx, identity.Subject, identity.Email)
 
 	if refused := c.refusal(identity, completion.Refusal); refused != "" {
 		page := forbiddenPage(identity.Email)
@@ -284,6 +287,7 @@ func (c *Callback) complete(ctx context.Context, conn Connector, in *callbackInp
 	if err != nil {
 		return nil, reasonInternal, fmt.Errorf("oidc: generate auth code: %w", err)
 	}
+	redact.Declare(ctx, redact.Secret, code)
 
 	now := c.now()
 	if err := c.store.SaveAuthCode(ctx, AuthCode{
@@ -317,13 +321,15 @@ func (c *Callback) completeUpstream(ctx context.Context, conn Connector, params 
 	id := conn.ID()
 	cctx, cancel := context.WithTimeout(ctx, c.completeTimeout)
 	defer cancel()
-	completion, err := conn.Complete(cctx, CompleteParams{
+	cp := CompleteParams{
 		RedirectURI:  c.issuer + CallbackPath(id),
 		Params:       params,
 		CodeVerifier: c.binding.codeVerifier(id, state),
 		Nonce:        c.binding.nonce(id, state),
 		RequestID:    c.binding.requestID(id, state),
-	})
+	}
+	redact.Declare(ctx, redact.Secret, cp.CodeVerifier, cp.Nonce)
+	completion, err := conn.Complete(cctx, cp)
 	if err == nil && completion.Identity.Subject == "" {
 		err = &UpstreamError{Reason: UpstreamReasonClaims, Err: errors.New("oidc: upstream identity has no subject")}
 	}

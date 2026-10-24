@@ -52,6 +52,8 @@ const schemaVersionDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
 // migration.Check describes. It only reads: a database never migrated reads
 // as schema version 0.
 func (s *Store) IsCurrent(ctx context.Context) error {
+	ctx, op := s.ops.Start(ctx, "is_current")
+	defer op.End()
 	migs, err := s.loadMigrations()
 	if err != nil {
 		return err
@@ -63,7 +65,7 @@ func (s *Store) IsCurrent(ctx context.Context) error {
 		applied, err = map[int]struct{}{}, nil
 	}
 	if err != nil {
-		return s.fail("is_current", err)
+		return op.Fail(err)
 	}
 	return migration.Check(migs, applied)
 }

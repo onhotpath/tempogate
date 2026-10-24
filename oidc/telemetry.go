@@ -10,7 +10,7 @@ import (
 
 // Telemetry is everything oidc and its connectors record: sign-in outcomes,
 // /token outcomes, refresh-family revocations, authorization refusals,
-// rate-limited requests and upstream calls. Every label value comes from a
+// rate-limited requests, and upstream calls, which are also spans. Every label value comes from a
 // fixed set below (never an email, a client ID, a token or raw request
 // input). The zero value records nothing.
 type Telemetry struct {
@@ -22,16 +22,18 @@ type Telemetry struct {
 	rateLimited       observe.Counter[rateLimitLabels]
 	upstreamDuration  observe.Histogram[upstreamLabels]
 	upstreamErrors    observe.Counter[upstreamErrorLabels]
+	tracer            observe.Tracer
 }
 
 // upstreamBuckets are the upstream latency histogram's bounds in seconds:
 // Prometheus' DefBuckets, which the histogram has always had.
 var upstreamBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
 
-// NewTelemetry declares oidc's instruments on m. A nil m records nothing.
-func NewTelemetry(m observe.Meter) (*Telemetry, error) {
+// NewTelemetry declares oidc's instruments on m and traces upstream calls
+// through tr. A nil m records no metrics; a nil tr starts no spans.
+func NewTelemetry(m observe.Meter, tr observe.Tracer) (*Telemetry, error) {
 	var (
-		t    Telemetry
+		t    = Telemetry{tracer: tr}
 		err  error
 		errs []error
 	)
@@ -68,14 +70,22 @@ func NewTelemetry(m observe.Meter) (*Telemetry, error) {
 }
 
 // StartUpstream times one call a connector makes upstream, by operation
-// ("discovery", "code_exchange", "verify_id_token"); the returned func ends
-// it with the call's error, nil on success. A failure is counted as a
-// timeout when it is an *UpstreamError flagged as one, so a stalled upstream
-// is told apart from one that answers with an error. Failed calls are timed
-// too: a slow failure is still latency the user waited through.
-func (t *Telemetry) StartUpstream(ctx context.Context, op string) func(err error) {
+// ("discovery", "code_exchange", "verify_id_token"). The call runs under the
+// returned context, a client span inside a traced request, and the returned
+// func ends it with the call's error, nil on success. A failure is counted
+// as a timeout when it is an *UpstreamError flagged as one, so a stalled
+// upstream is told apart from one that answers with an error. Failed calls
+// are timed too: a slow failure is still latency the user waited through.
+func (t *Telemetry) StartUpstream(ctx context.Context, op string) (context.Context, func(err error)) {
 	start := time.Now()
-	return func(err error) {
+	var span observe.Span = observe.NopSpan{}
+	if t.tracer != nil {
+		ctx, span = t.tracer.Start(ctx, "upstream "+op,
+			observe.WithSpanKind(observe.SpanKindClient),
+			observe.WithAttributes(observe.String("tempogate.upstream.op", op)))
+	}
+	return ctx, func(err error) {
+		defer span.End()
 		t.upstreamDuration.Record(ctx, time.Since(start).Seconds(), upstreamLabels{op: op})
 		if err == nil {
 			return
@@ -86,6 +96,7 @@ func (t *Telemetry) StartUpstream(ctx context.Context, op string) func(err error
 			reason = upstreamReasonTimeout
 		}
 		t.upstreamErrors.Inc(ctx, upstreamErrorLabels{op: op, reason: reason})
+		span.Fail(reason, err)
 	}
 }
 

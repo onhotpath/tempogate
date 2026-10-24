@@ -18,6 +18,8 @@ import (
 var ErrDuplicateAuthCode = errors.New("postgres: auth code with this value already exists")
 
 func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
+	ctx, op := s.ops.Start(ctx, "save_auth_code")
+	defer op.End()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO auth_codes
 		   (code_hash, client_id, redirect_uri, connector_id, subject, email, scope,
@@ -30,7 +32,7 @@ func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 		return ErrDuplicateAuthCode
 	}
 	if err != nil {
-		return s.fail("save_auth_code", fmt.Errorf("postgres: save auth code: %w", err))
+		return op.Fail(fmt.Errorf("postgres: save auth code: %w", err))
 	}
 	return nil
 }
@@ -44,6 +46,8 @@ func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 // redemption's family, with oidc.ErrAuthCodeReused. Expiry is the caller's
 // concern; an expired code is still returned and then rejected.
 func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at time.Time) (oidc.AuthCode, error) {
+	ctx, op := s.ops.Start(ctx, "consume_auth_code")
+	defer op.End()
 	ac := oidc.AuthCode{Code: code}
 	err := s.pool.QueryRow(ctx,
 		`UPDATE auth_codes SET consumed_at = $1, family_id = $2
@@ -59,7 +63,7 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 		return ac, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return oidc.AuthCode{}, s.fail("consume_auth_code", fmt.Errorf("postgres: consume auth code: %w", err))
+		return oidc.AuthCode{}, op.Fail(fmt.Errorf("postgres: consume auth code: %w", err))
 	}
 
 	err = s.pool.QueryRow(ctx,
@@ -71,7 +75,7 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 		return oidc.AuthCode{}, oidc.ErrAuthCodeNotFound
 	}
 	if err != nil {
-		return oidc.AuthCode{}, s.fail("consume_auth_code", fmt.Errorf("postgres: look up consumed auth code: %w", err))
+		return oidc.AuthCode{}, op.Fail(fmt.Errorf("postgres: look up consumed auth code: %w", err))
 	}
 	return ac, oidc.ErrAuthCodeReused
 }

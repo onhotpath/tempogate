@@ -5,23 +5,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/onhotpath/tempogate/admin"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/state/internal/instrument"
 )
 
-type recordingErrorObserver struct{ meter *observetest.Meter }
+// recordingObserver reads back what a store recorded: calls are the operations
+// counted as failed, in order; starts are the operations traced, so one left
+// open or nested in another shows.
+type recordingObserver struct {
+	meter  *observetest.Meter
+	tracer *observetest.Tracer
+}
 
-func newRecordingErrorObserver() *recordingErrorObserver {
-	return &recordingErrorObserver{meter: observetest.NewMeter()}
+func newRecordingObserver() *recordingObserver {
+	return &recordingObserver{meter: observetest.NewMeter(), tracer: observetest.NewTracer()}
 }
 
 // calls is the op label of every failure counted, in order.
-func (r *recordingErrorObserver) calls() []string {
+func (r *recordingObserver) calls() []string {
 	var ops []string
 	for _, m := range r.meter.Measurements("tempogate.db_errors") {
 		ops = append(ops, m.Attrs["op"])
@@ -29,11 +37,35 @@ func (r *recordingErrorObserver) calls() []string {
 	return ops
 }
 
+// traced returns ctx inside a request's span, so the store operations run
+// under it are traced.
+func (r *recordingObserver) traced(ctx context.Context) context.Context {
+	ctx, _ = r.tracer.Start(ctx, "request", observe.AsRoot())
+	return ctx
+}
+
+// starts returns the operations traced so far, and whether each has ended.
+func (r *recordingObserver) starts() ([]string, bool) {
+	var (
+		ops   []string
+		ended = true
+	)
+	for _, sp := range r.tracer.Spans() {
+		op, ok := strings.CutPrefix(sp.Name, "store ")
+		if !ok {
+			continue
+		}
+		ops = append(ops, op)
+		ended = ended && sp.Ended && sp.Parent != nil && sp.Parent.Name == "request"
+	}
+	return ops, ended
+}
+
 // observedStore is a migrated store wired to a fresh recording observer.
-func (s *StoreSuite) observedStore() (*Store, *recordingErrorObserver, string) {
-	obs := newRecordingErrorObserver()
+func (s *StoreSuite) observedStore() (*Store, *recordingObserver, string) {
+	obs := newRecordingObserver()
 	path := filepath.Join(s.T().TempDir(), "observed.db")
-	st, err := New(WithPath(path), WithBusyTimeout(time.Second), WithMeter(obs.meter))
+	st, err := New(WithPath(path), WithBusyTimeout(time.Second), WithMeter(obs.meter), WithTracer(obs.tracer))
 	s.Require().NoError(err)
 	s.Require().NoError(st.Migrate(s.ctx))
 	s.T().Cleanup(func() { _ = st.Close() })
@@ -46,7 +78,7 @@ func (s *StoreSuite) TestDBErrorsAreObservedByOp() {
 	st, obs, _ := s.observedStore()
 	s.Require().NoError(st.Close())
 
-	ctx := s.ctx
+	ctx := obs.traced(s.ctx)
 	now := time.Now()
 	calls := []struct {
 		op string
@@ -91,26 +123,38 @@ func (s *StoreSuite) TestDBErrorsAreObservedByOp() {
 		want = append(want, c.op)
 	}
 	s.Equal(want, obs.calls())
+	// Each call is one operation, begun and ended once: a helper shared by
+	// several methods must not nest a second one.
+	started, ended := obs.starts()
+	s.Equal(want, started)
+	s.True(ended, "every operation ends")
 }
 
 // A miss is a normal protocol outcome (replayed code, unknown token), not a
 // database failure, and must not inflate the error counter.
 func (s *StoreSuite) TestNotFoundIsNotADBError() {
 	st, obs, _ := s.observedStore()
+	ctx := obs.traced(s.ctx)
 
-	_, err := st.ConsumeRefresh(s.ctx, "never-issued", "ui", time.Now())
+	_, err := st.ConsumeRefresh(ctx, "never-issued", "ui", time.Now())
 	s.Require().ErrorIs(err, oidc.ErrRefreshNotFound)
-	_, err = st.ConsumeAuthCode(s.ctx, "never-issued", "family", time.Now())
+	_, err = st.ConsumeAuthCode(ctx, "never-issued", "family", time.Now())
 	s.Require().ErrorIs(err, oidc.ErrAuthCodeNotFound)
 
 	s.Empty(obs.calls())
+	started, ended := obs.starts()
+	s.Equal([]string{"consume_refresh", "consume_auth_code"}, started)
+	s.True(ended, "a miss still ends its operation")
 }
 
 func (s *StoreSuite) TestProbeHealthy() {
 	st, obs, _ := s.observedStore()
 
-	s.Require().NoError(st.Probe(s.ctx))
+	s.Require().NoError(st.Probe(obs.traced(s.ctx)))
 	s.Empty(obs.calls())
+	started, ended := obs.starts()
+	s.Equal([]string{"probe"}, started, "a successful operation is traced too")
+	s.True(ended)
 }
 
 // The serving connection keeps an open descriptor, so it happily reads and
@@ -156,9 +200,9 @@ func (s *StoreSuite) TestProbeHonoursContext() {
 
 // observeSuiteStore attaches a fresh recording observer to the suite's own
 // migrated store, so the suite's seed helpers can set up rows first.
-func (s *StoreSuite) observeSuiteStore() *recordingErrorObserver {
-	obs := newRecordingErrorObserver()
-	ops, err := instrument.New(obs.meter)
+func (s *StoreSuite) observeSuiteStore() *recordingObserver {
+	obs := newRecordingObserver()
+	ops, err := instrument.New(obs.meter, obs.tracer)
 	s.Require().NoError(err)
 	s.store.ops = ops
 	return obs
@@ -181,22 +225,38 @@ func (s *StoreSuite) corrupt(table, column string) {
 	s.Require().NoError(err)
 }
 
-// A revoke whose denylist write fails is counted and rolls back as a whole:
-// the key must not read as revoked while its jti still verifies.
+// failCommit makes every transaction that inserts into table fail at COMMIT,
+// after all its statements succeeded, through a deferred foreign key that is
+// never satisfied.
+func (s *StoreSuite) failCommit(table string) {
+	_, err := s.store.db.ExecContext(s.ctx, fmt.Sprintf(`
+		CREATE TABLE commit_guard_parent (id INTEGER PRIMARY KEY);
+		CREATE TABLE commit_guard (parent INTEGER REFERENCES commit_guard_parent(id) DEFERRABLE INITIALLY DEFERRED);
+		CREATE TRIGGER fail_commit_%[1]s AFTER INSERT ON %[1]s BEGIN INSERT INTO commit_guard VALUES (1); END`,
+		table))
+	s.Require().NoError(err)
+}
+
+// A revoke whose denylist write or commit fails is counted and rolls back as
+// a whole: the key must not read as revoked while its jti still verifies.
 func (s *StoreSuite) TestRevokeFailingMidTransactionIsObservedAndRolledBack() {
-	for _, tc := range []struct{ kind, table string }{
-		{"UPDATE", "integration_keys"},
-		{"INSERT", "jti_denylist"},
+	for _, tc := range []struct {
+		name, err string
+		inject    func()
+	}{
+		{"UPDATE integration_keys", "injected failure", func() { s.failWrites("UPDATE", "integration_keys") }},
+		{"INSERT jti_denylist", "injected failure", func() { s.failWrites("INSERT", "jti_denylist") }},
+		{"COMMIT", "sqlite: commit mark revoked: ", func() { s.failCommit("jti_denylist") }},
 	} {
-		s.Run(tc.kind+" "+tc.table, func() {
+		s.Run(tc.name, func() {
 			s.TearDownTest()
 			s.SetupTest()
 			k := s.seedKey(admin.WithNamespace("default"), admin.WithRole(admin.RoleRead), admin.WithOwner("ops"))
 			obs := s.observeSuiteStore()
-			s.failWrites(tc.kind, tc.table)
+			tc.inject()
 
 			_, err := s.store.MarkIntegrationKeyRevoked(s.ctx, k.ID, time.Now().UTC())
-			s.Require().ErrorContains(err, "injected failure")
+			s.Require().ErrorContains(err, tc.err)
 			s.Equal([]string{"mark_integration_key_revoked"}, obs.calls())
 
 			got, err := s.store.IntegrationKeyByID(s.ctx, k.ID)
@@ -282,4 +342,18 @@ func (s *StoreSuite) TestUnreadableListingsAreObserved() {
 	s.Require().Error(err)
 
 	s.Equal([]string{"list_integration_keys", "list_refresh_sessions"}, obs.calls())
+}
+
+// A schema_migrations that cannot be read fails the version check as a
+// database error, not as a database short of its migrations.
+func (s *StoreSuite) TestUnreadableSchemaVersionIsObserved() {
+	obs := s.observeSuiteStore()
+	// abs() of the smallest int64 overflows, so every read of the view fails.
+	_, err := s.store.db.ExecContext(s.ctx, `
+		DROP TABLE schema_migrations;
+		CREATE VIEW schema_migrations AS SELECT abs(-9223372036854775807 - 1) AS version`)
+	s.Require().NoError(err)
+
+	s.Require().ErrorContains(s.store.IsCurrent(s.ctx), "sqlite: read schema_migrations: ")
+	s.Equal([]string{"is_current"}, obs.calls())
 }

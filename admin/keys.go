@@ -14,6 +14,7 @@ import (
 	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/perms"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -290,6 +291,8 @@ func (h *Keys) create(ctx context.Context, in *createInput) (*createOutput, erro
 }
 
 func (h *Keys) mint(ctx context.Context, k *IntegrationKey) (*createOutput, error) {
+	// The owner is free text an operator chose, often a person's email.
+	redact.Declare(ctx, redact.PII, k.Owner)
 	if err := k.Validate(); errors.Is(err, ErrWorkerRole) {
 		// A well-formed request for a key that would authorize nothing:
 		// 422 tells the caller to change the role, not fix the syntax.
@@ -330,6 +333,7 @@ func (h *Keys) mint(ctx context.Context, k *IntegrationKey) (*createOutput, erro
 	if err != nil {
 		return nil, fmt.Errorf("admin: mint jwt: %w", err)
 	}
+	redact.Declare(ctx, redact.Secret, signed)
 
 	k.ID = id
 	k.JTI = jti

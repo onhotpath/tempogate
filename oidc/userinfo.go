@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwt"
 
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 // bearerPrefix is the case-insensitive scheme RFC 6750 §2.1 mandates on the
@@ -70,7 +71,9 @@ func (u *UserInfo) Register(api huma.API) {
 }
 
 func (u *UserInfo) handle(ctx context.Context, in *userInfoInput) (*userInfoOutput, error) {
+	redact.Declare(ctx, redact.Secret, in.Authorization)
 	raw, ok := bearerToken(in.Authorization)
+	redact.Declare(ctx, redact.Secret, raw)
 	if !ok {
 		return nil, huma.Error401Unauthorized("missing or malformed Authorization: Bearer header")
 	}
@@ -89,6 +92,7 @@ func (u *UserInfo) handle(ctx context.Context, in *userInfoInput) (*userInfoOutp
 	}
 
 	email, idp := stringClaim(tok, emailClaim), stringClaim(tok, idpClaim)
+	declareIdentity(ctx, sub, email)
 
 	return &userInfoOutput{Body: userInfoBody{
 		Sub:   sub,

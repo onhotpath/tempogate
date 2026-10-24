@@ -22,6 +22,8 @@ var ErrDuplicateKid = errors.New("postgres: keypair with this kid already exists
 const keyBootstrapLockID int64 = 0x7467626f6f747374 // "tgbootst"
 
 func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
+	ctx, op := s.ops.Start(ctx, "save_keypair")
+	defer op.End()
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO keypairs (kid, alg, private_pem, public_pem, created_at)
@@ -36,23 +38,25 @@ func (s *Store) SaveKeypair(ctx context.Context, kp keys.Keypair) error {
 		return fmt.Errorf("%w: %s", ErrDuplicateKid, kp.Kid)
 	}
 	if err != nil {
-		return s.fail("save_keypair", fmt.Errorf("postgres: save keypair: %w", err))
+		return op.Fail(fmt.Errorf("postgres: save keypair: %w", err))
 	}
 	return nil
 }
 
 func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
+	ctx, op := s.ops.Start(ctx, "load_keypairs")
+	defer op.End()
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+keypairColumns+`
 		 FROM keypairs
 		 ORDER BY created_at ASC, kid ASC`,
 	)
 	if err != nil {
-		return nil, s.fail("load_keypairs", fmt.Errorf("postgres: load keypairs: %w", err))
+		return nil, op.Fail(fmt.Errorf("postgres: load keypairs: %w", err))
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (keys.Keypair, error) { return scanKeypair(r) })
 	if err != nil {
-		return nil, s.fail("load_keypairs", fmt.Errorf("postgres: load keypairs: %w", err))
+		return nil, op.Fail(fmt.Errorf("postgres: load keypairs: %w", err))
 	}
 	return out, nil
 }
@@ -60,6 +64,8 @@ func (s *Store) LoadKeypairs(ctx context.Context) ([]keys.Keypair, error) {
 // UpdateKeypairPrivatePEM rewrites one keypair's private half in place, for
 // `tempogate keys encrypt`.
 func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, privatePEM []byte) error {
+	ctx, op := s.ops.Start(ctx, "update_keypair_private_pem")
+	defer op.End()
 	errNoKid := fmt.Errorf("postgres: update keypair: no keypair with kid %s", kid)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE keypairs SET private_pem = $1 WHERE kid = $2`, privatePEM, kid)
@@ -75,7 +81,7 @@ func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, private
 		return err
 	}
 	if err != nil {
-		return s.fail("update_keypair_private_pem", fmt.Errorf("postgres: update keypair: %w", err))
+		return op.Fail(fmt.Errorf("postgres: update keypair: %w", err))
 	}
 	return nil
 }
@@ -87,6 +93,8 @@ func (s *Store) UpdateKeypairPrivatePEM(ctx context.Context, kid string, private
 // wraps keys.ErrKeypairNotFound; an already retired one is returned
 // unchanged, so the original grace window holds.
 func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (keys.Keypair, error) {
+	ctx, op := s.ops.Start(ctx, "retire_keypair")
+	defer op.End()
 	var (
 		kp      keys.Keypair
 		changed bool
@@ -116,7 +124,7 @@ func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (ke
 	case errors.Is(err, pgx.ErrNoRows):
 		return keys.Keypair{}, fmt.Errorf("%w: %s", keys.ErrKeypairNotFound, kid)
 	case err != nil:
-		return keys.Keypair{}, s.fail("retire_keypair", fmt.Errorf("postgres: retire keypair: %w", err))
+		return keys.Keypair{}, op.Fail(fmt.Errorf("postgres: retire keypair: %w", err))
 	case !changed && !kp.Retired():
 		return keys.Keypair{}, fmt.Errorf("%w (kid=%s)", keys.ErrLastActiveKeypair, kid)
 	}
@@ -130,6 +138,8 @@ func (s *Store) RetireKeypair(ctx context.Context, kid string, at time.Time) (ke
 // reads and writes through the others, which is why the pool needs at least
 // two connections.
 func (s *Store) LockKeyBootstrap(ctx context.Context, fn func(context.Context) error) error {
+	ctx, op := s.ops.Start(ctx, "lock_key_bootstrap")
+	defer op.End()
 	var fnErr error
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, keyBootstrapLockID); err != nil {
@@ -139,7 +149,7 @@ func (s *Store) LockKeyBootstrap(ctx context.Context, fn func(context.Context) e
 		return nil
 	})
 	if err != nil {
-		return s.fail("lock_key_bootstrap", fmt.Errorf("postgres: lock key bootstrap: %w", err))
+		return op.Fail(fmt.Errorf("postgres: lock key bootstrap: %w", err))
 	}
 	return fnErr
 }

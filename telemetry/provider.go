@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -13,12 +14,18 @@ import (
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/onhotpath/tempogate/observe"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 type providerOptions struct {
 	version, commit string
+	spans           sdktrace.SpanExporter
+	resource        *resource.Resource
+	redaction       *redact.Set
 }
 
 type ProviderOption func(*providerOptions)
@@ -28,20 +35,43 @@ func WithBuildInfo(version, commit string) ProviderOption {
 	return func(o *providerOptions) { o.version, o.commit = version, commit }
 }
 
+// WithSpanExporter turns tracing on, batching spans to exp. Without it no
+// tracer provider exists at all.
+func WithSpanExporter(exp sdktrace.SpanExporter) ProviderOption {
+	return func(o *providerOptions) { o.spans = exp }
+}
+
+// WithRedaction masks the values declared in s in every exported span that
+// has no request's Set to use instead (see redact). A request's Set is a
+// child of s, so it masks these too.
+func WithRedaction(s *redact.Set) ProviderOption {
+	return func(o *providerOptions) { o.redaction = s }
+}
+
+// WithResource describes the process on every exported span. Defaults to the
+// SDK's own default resource.
+func WithResource(r *resource.Resource) ProviderOption {
+	return func(o *providerOptions) { o.resource = r }
+}
+
 // Provider owns the OpenTelemetry SDK: the meter provider every instrument
-// records into, and the Prometheus registry its exporter feeds. The registry
-// is private (not prometheus.DefaultRegisterer) so tests stay isolated and a
-// transitive dependency cannot add series to our scrape.
+// records into with the Prometheus registry its exporter feeds, and, while
+// tracing is on, the tracer provider. The registry is private (not
+// prometheus.DefaultRegisterer) so tests stay isolated and a transitive
+// dependency cannot add series to our scrape.
 type Provider struct {
 	meters *sdkmetric.MeterProvider
 	reg    *prometheus.Registry
+	traces *sdktrace.TracerProvider // nil while tracing is off
+	// redaction is the process's Set, for spans outside a request.
+	redaction *redact.Set
 }
 
 // NewProvider builds the meter provider with a Prometheus exporter as its
 // only reader: a pull exporter, so a scrape of Handler collects on demand and
 // nothing runs in the background.
 func NewProvider(opts ...ProviderOption) (*Provider, error) {
-	o := &providerOptions{version: "dev", commit: "unknown"}
+	o := &providerOptions{version: "dev", commit: "unknown", resource: resource.Default()}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -68,11 +98,20 @@ func NewProvider(opts ...ProviderOption) (*Provider, error) {
 	// them only over a programming error (a duplicate), hence MustRegister.
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	p := &Provider{
-		meters: sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)),
-		reg:    reg,
+		meters:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)),
+		reg:       reg,
+		redaction: o.redaction,
 	}
 	if err := declareBuildInfo(p.meters.Meter(scope), o.version, o.commit); err != nil {
 		return nil, err
+	}
+	if o.spans != nil {
+		// The batcher exports off the request path; the sampler follows
+		// OTEL_TRACES_SAMPLER, defaulting to every trace.
+		p.traces = sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(o.spans),
+			sdktrace.WithResource(o.resource),
+		)
 	}
 	return p, nil
 }
@@ -97,12 +136,26 @@ func declareBuildInfo(m metric.Meter, version, commit string) error {
 // declare their own metrics through.
 func (p *Provider) Meter() observe.Meter { return meter{p.meters.Meter(scope)} }
 
+// Tracer starts spans on the provider; nil while tracing is off, which every
+// consumer reads as "start no spans".
+func (p *Provider) Tracer() observe.Tracer {
+	if p.traces == nil {
+		return nil
+	}
+	return tracer{t: p.traces.Tracer(scope), redaction: p.redaction}
+}
+
 // Handler serves every instrument in the Prometheus exposition format.
 func (p *Provider) Handler() http.Handler {
 	return promhttp.HandlerFor(p.reg, promhttp.HandlerOpts{})
 }
 
-// Shutdown stops the meter provider; instruments record nothing after it.
+// Shutdown flushes the spans still batched and stops both providers;
+// nothing is recorded after it.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	return p.meters.Shutdown(ctx)
+	err := p.meters.Shutdown(ctx)
+	if p.traces != nil {
+		err = errors.Join(err, p.traces.Shutdown(ctx))
+	}
+	return err
 }

@@ -13,6 +13,8 @@ import (
 )
 
 func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) error {
+	ctx, op := s.ops.Start(ctx, "save_integration_key")
+	defer op.End()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO integration_keys
 		   (id, namespace, role, owner, jti, created_at, expires_at, revoked_at)
@@ -20,7 +22,7 @@ func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) 
 		k.ID, k.Namespace, string(k.Role), k.Owner, k.JTI, k.CreatedAt, k.ExpiresAt, k.RevokedAt,
 	)
 	if err != nil {
-		return s.fail("save_integration_key", fmt.Errorf("postgres: save integration key: %w", err))
+		return op.Fail(fmt.Errorf("postgres: save integration key: %w", err))
 	}
 	return nil
 }
@@ -28,13 +30,15 @@ func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) 
 const integrationKeyColumns = `id, namespace, role, owner, jti, created_at, expires_at, revoked_at`
 
 func (s *Store) IntegrationKeyByID(ctx context.Context, id string) (admin.IntegrationKey, error) {
+	ctx, op := s.ops.Start(ctx, "integration_key_by_id")
+	defer op.End()
 	k, err := scanIntegrationKey(s.pool.QueryRow(ctx,
 		`SELECT `+integrationKeyColumns+` FROM integration_keys WHERE id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return admin.IntegrationKey{}, fmt.Errorf("%w: %s", admin.ErrIntegrationKeyNotFound, id)
 	}
 	if err != nil {
-		return admin.IntegrationKey{}, s.fail("integration_key_by_id", fmt.Errorf("postgres: integration key by id: %w", err))
+		return admin.IntegrationKey{}, op.Fail(fmt.Errorf("postgres: integration key by id: %w", err))
 	}
 	return k, nil
 }
@@ -48,6 +52,8 @@ const defaultListLimit = 50
 // column is COLLATE "C", so ordering and the cursor compare bytewise, as in
 // SQLite.
 func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]admin.IntegrationKey, error) {
+	ctx, op := s.ops.Start(ctx, "list_integration_keys")
+	defer op.End()
 	limit := f.Limit
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -64,11 +70,11 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 		f.Owner, f.Namespace, f.Cursor, limit+1,
 	)
 	if err != nil {
-		return nil, s.fail("list_integration_keys", fmt.Errorf("postgres: list integration keys: %w", err))
+		return nil, op.Fail(fmt.Errorf("postgres: list integration keys: %w", err))
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (admin.IntegrationKey, error) { return scanIntegrationKey(r) })
 	if err != nil {
-		return nil, s.fail("list_integration_keys", fmt.Errorf("postgres: list integration keys: %w", err))
+		return nil, op.Fail(fmt.Errorf("postgres: list integration keys: %w", err))
 	}
 	return out, nil
 }
@@ -82,6 +88,8 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 // together: no replica is told of a revocation it cannot read, and none
 // misses one that committed (beyond the feed's best-effort delivery).
 func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at time.Time) (string, error) {
+	ctx, op := s.ops.Start(ctx, "mark_integration_key_revoked")
+	defer op.End()
 	var jti string
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
@@ -105,7 +113,7 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at tim
 		return "", fmt.Errorf("%w: %s", admin.ErrIntegrationKeyNotFound, id)
 	}
 	if err != nil {
-		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("postgres: mark revoked: %w", err))
+		return "", op.Fail(fmt.Errorf("postgres: mark revoked: %w", err))
 	}
 	return jti, nil
 }

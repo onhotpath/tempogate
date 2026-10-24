@@ -6,6 +6,7 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 type params struct {
@@ -21,6 +22,7 @@ type params struct {
 	HostedDomains string `name:"oidc_allowed_hosted_domains"`
 
 	Telemetry *oidc.Telemetry `optional:"true"`
+	Redaction *redact.Set     `optional:"true"`
 }
 
 // newFx builds the Google connector. Without OIDC_ALLOWED_HOSTED_DOMAINS the
@@ -29,6 +31,9 @@ type params struct {
 // Google Workspace) but it is warned about at startup so it is a visible
 // choice rather than a silent default.
 func newFx(p params) (*Connector, error) {
+	// go-oidc quotes the client ID when it refuses an ID token's audience.
+	p.Redaction.Declare(redact.Identifier, p.ClientID)
+	p.Redaction.Declare(redact.Secret, p.ClientSecret)
 	if len(oidc.ParseDomains(p.HostedDomains)) == 0 {
 		p.Logger.Warn("OIDC_ALLOWED_HOSTED_DOMAINS is not set: the Google sign-in gate relies on the email domain only, "+
 			"which consumer Google accounts created for an allowed address also pass; "+

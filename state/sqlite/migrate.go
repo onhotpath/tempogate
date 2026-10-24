@@ -27,8 +27,10 @@ const schemaVersionDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
 // schema_migrations, and otherwise the operator-facing message
 // migration.Check describes.
 func (s *Store) IsCurrent(ctx context.Context) error {
+	ctx, op := s.ops.Start(ctx, "is_current")
+	defer op.End()
 	if _, err := s.db.ExecContext(ctx, schemaVersionDDL); err != nil {
-		return s.fail("is_current", fmt.Errorf("sqlite: ensure schema_migrations: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: ensure schema_migrations: %w", err))
 	}
 
 	migs, err := loadMigrations()
@@ -38,7 +40,7 @@ func (s *Store) IsCurrent(ctx context.Context) error {
 
 	applied, err := loadAppliedVersions(ctx, s.db)
 	if err != nil {
-		return s.fail("is_current", err)
+		return op.Fail(err)
 	}
 	return migration.Check(migs, applied)
 }

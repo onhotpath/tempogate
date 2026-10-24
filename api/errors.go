@@ -41,13 +41,15 @@ func sanitizeServerErrors(logger *zap.Logger) huma.Transformer {
 		id := requestid.FromContext(ctx.Context())
 
 		// The URL path only: the query string can carry codes and tokens.
+		detail := errorDetail(se)
 		logger.Error("request failed",
 			zap.String("request_id", id),
 			zap.Int("status", status),
 			zap.String("method", ctx.Method()),
 			zap.String("path", ctx.URL().Path),
-			zap.String("error", errorDetail(se)),
+			zap.String("error", detail),
 		)
+		recordServerError(ctx.Context(), detail)
 
 		if cs, ok := v.(ClientSafeError); ok && cs.ClientSafe() {
 			return v, nil

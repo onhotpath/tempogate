@@ -179,9 +179,9 @@ func (c *Client) ExchangeAndVerify(ctx context.Context, code, redirectURI, codeV
 }
 
 func (c *Client) exchange(ctx context.Context, code, redirectURI, codeVerifier string) (*oauth2.Token, error) {
+	ctx, done := c.telemetry.StartUpstream(ctx, "code_exchange")
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
-	done := c.telemetry.StartUpstream(ctx, "code_exchange")
 	tok, err := c.oauth.Exchange(callCtx, code,
 		oauth2.SetAuthURLParam("redirect_uri", redirectURI),
 		oauth2.VerifierOption(codeVerifier))
@@ -199,9 +199,9 @@ func (c *Client) exchange(ctx context.Context, code, redirectURI, codeVerifier s
 }
 
 func (c *Client) verify(ctx context.Context, verifier *coreosoidc.IDTokenVerifier, rawID string) (*coreosoidc.IDToken, error) {
+	ctx, done := c.telemetry.StartUpstream(ctx, "verify_id_token")
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
-	done := c.telemetry.StartUpstream(ctx, "verify_id_token")
 	idToken, err := verifier.Verify(callCtx, rawID)
 	if err == nil {
 		done(nil)
@@ -235,11 +235,12 @@ func (c *Client) idVerifier(ctx context.Context) (*coreosoidc.IDTokenVerifier, e
 		return nil, c.lastErr
 	}
 
-	// The provider keeps this context (minus its deadline) for the JWKS
-	// fetches it makes later, so those go through the upstream client too.
+	// The provider keeps the HTTP client this context carries (not the
+	// context itself) for the JWKS fetches it makes later, so those go
+	// through the upstream client too.
+	ctx, done := c.telemetry.StartUpstream(ctx, "discovery")
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
-	done := c.telemetry.StartUpstream(ctx, "discovery")
 	provider, err := coreosoidc.NewProvider(callCtx, c.issuerURL)
 	if err != nil {
 		// A timeout is backed off like any other failure and, like any

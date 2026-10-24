@@ -20,6 +20,8 @@ import (
 var ErrDuplicateAuthCode = errors.New("sqlite: auth code with this value already exists")
 
 func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
+	ctx, op := s.ops.Start(ctx, "save_auth_code")
+	defer op.End()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO auth_codes
 		   (code_hash, client_id, redirect_uri, connector_id, subject, email, scope,
@@ -33,7 +35,7 @@ func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return ErrDuplicateAuthCode
 		}
-		return s.fail("save_auth_code", fmt.Errorf("sqlite: save auth code: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: save auth code: %w", err))
 	}
 	return nil
 }
@@ -48,6 +50,8 @@ func (s *Store) SaveAuthCode(ctx context.Context, ac oidc.AuthCode) error {
 // the first redemption's family, with oidc.ErrAuthCodeReused. Expiry is the
 // caller's concern; an expired code is still returned and then rejected.
 func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at time.Time) (oidc.AuthCode, error) {
+	ctx, op := s.ops.Start(ctx, "consume_auth_code")
+	defer op.End()
 	ac := oidc.AuthCode{Code: code}
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE auth_codes SET consumed_at = ?, family_id = ?
@@ -63,7 +67,7 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 		return ac, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return oidc.AuthCode{}, s.fail("consume_auth_code", fmt.Errorf("sqlite: consume auth code: %w", err))
+		return oidc.AuthCode{}, op.Fail(fmt.Errorf("sqlite: consume auth code: %w", err))
 	}
 
 	err = s.db.QueryRowContext(ctx,
@@ -75,7 +79,7 @@ func (s *Store) ConsumeAuthCode(ctx context.Context, code, familyID string, at t
 		return oidc.AuthCode{}, oidc.ErrAuthCodeNotFound
 	}
 	if err != nil {
-		return oidc.AuthCode{}, s.fail("consume_auth_code", fmt.Errorf("sqlite: look up consumed auth code: %w", err))
+		return oidc.AuthCode{}, op.Fail(fmt.Errorf("sqlite: look up consumed auth code: %w", err))
 	}
 	return ac, oidc.ErrAuthCodeReused
 }

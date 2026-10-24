@@ -16,6 +16,7 @@ import (
 	"github.com/onhotpath/tempogate/keys"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/connector/google"
+	"github.com/onhotpath/tempogate/redact"
 	"github.com/onhotpath/tempogate/telemetry"
 )
 
@@ -90,6 +91,9 @@ func keysModules(g graph) []fx.Option {
 func serverModules(g graph) []fx.Option {
 	return []fx.Option{
 		fx.Invoke(checkIssuer),
+		// The process's redact.Set: each package declares the secrets it
+		// is configured with, and every exported span masks them.
+		fx.Provide(redact.NewSet),
 		telemetry.Fx(),
 		g.state,
 		keys.Fx(),

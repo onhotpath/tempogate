@@ -67,6 +67,18 @@ func TestMeterRefusesAConflictingRedeclaration(t *testing.T) {
 	}
 }
 
+// Labels are compared as text, so an int label reads as its decimal form.
+func TestMeterRecordsAnIntLabelAsText(t *testing.T) {
+	m := observetest.NewMeter()
+	c, err := m.Int64Counter("test.responses")
+	require.NoError(t, err)
+	c.Add(context.Background(), 1, observe.Int("status", 503))
+
+	assert.Equal(t, []observetest.Measurement{
+		{Name: "test.responses", Value: 1, Attrs: map[string]string{"status": "503"}},
+	}, m.Measurements("test.responses"))
+}
+
 func TestFailingMeterRefusesEveryDeclaration(t *testing.T) {
 	boom := errors.New("boom")
 	m := observetest.FailingMeter(boom)

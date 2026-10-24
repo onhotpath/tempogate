@@ -80,6 +80,9 @@ Dev tool versions live in [`tools.mk`](tools.mk); golangci-lint and actionlint a
 - **Top-level imports only.** No inline imports inside functions.
 - **Tests live in the same issue as the production code.** Don't split test PRs from feature PRs.
 - **Comment the *why*, not the *what*.** Well-named identifiers carry the *what*.
+- **Declare sensitive values.** Where code first holds a credential, an identity or raw client input, declare it: `redact.Declare(ctx, redact.Secret, token)` (or `redact.PII`, `redact.Identifier`) in a request, or on the process `*redact.Set` for configuration.
+  Exported spans mask declared values in their error text, even text a library formatted.
+  Span names and attributes are never masked, so keep them to constants and route templates.
 - **Imports are grouped** standard / default / `prefix(github.com/onhotpath/tempogate)` — `make imports` does this for you.
 
 ## Releasing

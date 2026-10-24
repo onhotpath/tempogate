@@ -83,6 +83,7 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 | `KEYS_PUBLISH_DELAY` | No | `5m` | How long a new signing key is published before it signs; must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`. See the [rotation runbook](operations.md#rotation-runbook) |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
 | `LOG_REQUESTS` | No | `true` | One access-log line per HTTP request (no query strings, headers or bodies) |
+| `OTEL_TRACES_EXPORTER` | No | _(unset: off)_ | `otlp` exports OpenTelemetry traces; the other standard `OTEL_*` variables configure the exporter. See [Tracing](#tracing) |
 | `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
 | `TEMPOGATE_LOGIN_MODE` | No | _(empty)_ | **Client-side**. `device` makes `tempogate login` use the device flow, as `--device` does; an explicit `--device` or `--device=false` wins |
 
@@ -94,6 +95,23 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 | --- | --- | --- |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `LOG_REQUESTS` | `true` | One structured access-log line per HTTP request on both listeners; see [Request logs](operations.md#request-logs). `false` turns it off, e.g. when an ingress or mesh already logs every request. |
+
+### Tracing
+
+tempogate exports OpenTelemetry traces over OTLP when you ask it to; see [Tracing](operations.md#tracing) for what a trace contains.
+It reads the standard OpenTelemetry environment variables, from the environment only (not from a config file).
+With the Helm chart, set them through `extraEnv`.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `OTEL_TRACES_EXPORTER` | _(unset)_ | `otlp` turns tracing on. Unset or `none` leaves it off, and tempogate then builds no exporter and adds no per-request work. Unlike the OpenTelemetry default (`otlp`), tracing is off until you set it. Any other value, or a list, refuses to start. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://localhost:4318` | The collector. An `http://` endpoint sends in clear; use `https://` across a network you do not trust. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf` | `http/protobuf` or `grpc` (the gRPC default endpoint is `localhost:4317`). `http/json` is not supported. |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_COMPRESSION`, `OTEL_EXPORTER_OTLP_CERTIFICATE`, ... | per the specification | The rest of the exporter's settings, and their `_TRACES_` forms, as the OpenTelemetry specification defines them. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | `tempogate` | Resource attributes on every span. `service.version` is the running build. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Which traces to keep. Each request starts its own trace, so a `parentbased_*` sampler acts as its root sampler; `traceidratio` with an argument of `0.1` keeps one trace in ten. |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BSP_EXPORT_TIMEOUT` | `5000`, `2048`, `512`, `30000` | Batching. Spans leave in batches off the request path; a full queue drops spans, never requests. |
+| `OTEL_SDK_DISABLED` | `false` | `true` turns tracing off whatever else is set. |
 
 ### HTTP listener
 

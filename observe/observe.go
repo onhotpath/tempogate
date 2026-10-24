@@ -1,12 +1,12 @@
 // Package observe is tempogate's own telemetry contract: the generic
-// interfaces every package records its metrics through, and typed
+// interfaces every package records its metrics and spans through, and typed
 // instruments on top of them. It imports only the standard library.
 //
 // A package that wants a metric declares it itself, next to the code that
 // records it, from an injected Meter: nothing central changes when a metric
-// is added. The telemetry package implements Meter over OpenTelemetry and
-// fx injects it; a nil Meter records nothing, so a package works unchanged
-// without one.
+// is added. The telemetry package implements Meter and Tracer over
+// OpenTelemetry and fx injects them; a nil Meter records nothing and a nil
+// Tracer starts no spans, so a package works unchanged without either.
 //
 // A metric is declared once with its label set as a type:
 //
@@ -29,13 +29,27 @@ package observe
 
 import "context"
 
-// Attr is one label (or attribute) of a measurement.
+// Attr is one label of a measurement or attribute of a span: a string or an
+// int, built with String or Int. The set is closed so every implementation
+// can map each kind exactly; a new kind needs telemetry's mapping too.
 type Attr struct {
 	Key   string
-	Value string
+	str   string
+	num   int
+	isInt bool
 }
 
-func String(key, value string) Attr { return Attr{Key: key, Value: value} }
+func String(key, value string) Attr { return Attr{Key: key, str: value} }
+
+func Int(key string, value int) Attr { return Attr{Key: key, num: value, isInt: true} }
+
+// Value is the string or int the Attr was built with.
+func (a Attr) Value() any {
+	if a.isInt {
+		return a.num
+	}
+	return a.str
+}
 
 // Meter declares instruments. Names are dotted OpenTelemetry names
 // ("tempogate.logins"); the exposition format decides how they are spelled
