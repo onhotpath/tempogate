@@ -196,11 +196,11 @@ A rejected request logs `admin request rejected` at warn level, with a `reason`.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STATE_DRIVER` | `sqlite` | `sqlite` (one replica, a file on a volume) or `postgres` (one or more replicas on a shared PostgreSQL database). Every subcommand that opens the store (`serve`, `migrate`, `keys`, `sessions`) uses this setting. |
+| `STATE_DRIVER` | `sqlite` | `sqlite` (one replica, a file on a volume) or `postgres` (one or more replicas on a shared PostgreSQL database). Every subcommand that opens the store (`serve`, `migrate`, `keys`, `sessions`) uses this setting; `state copy` reads `STATE_SQLITE_PATH` and writes to `STATE_POSTGRES_*` whatever it says. |
 | `STATE_REAPER_INTERVAL` | `5m` | Go duration; how often `serve` deletes expired state (see below). `0` disables the reaper. |
 
 Both backends hold the same data with the same guarantees (the contract in `state/doc.go`, checked against both by the `state/storetest` suite), and `tempogate migrate` creates or upgrades either schema.
-You cannot yet move an installation from one backend to the other.
+`tempogate state copy` moves an installation from SQLite to PostgreSQL ([runbook](operations.md#switching-from-sqlite-to-postgresql)).
 
 **Secrets at rest.**
 Refresh tokens (consumed ones included), authorization codes, device codes and verification-page session ids are stored only as their SHA-256, so a database copy (a backup, a volume snapshot) holds nothing a client can present.

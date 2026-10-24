@@ -1,6 +1,6 @@
 # Operations
 
-How to run tempogate day to day: manage sessions, revoke access, rotate signing keys, and watch the server.
+How to run tempogate day to day: manage sessions, revoke access, rotate signing keys, move to PostgreSQL, and watch the server.
 For the settings, see the [configuration reference](configuration.md).
 
 ## Refresh-token sessions
@@ -98,6 +98,74 @@ The default `5m` covers Temporal's default `1m` refresh and the default `30s` re
 Retire right after step 1 with `tempogate keys retire --force <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
 The new key then signs at once, so Temporal rejects new tokens until its next JWKS refresh (at most `refreshInterval`); that is the cost of an immediate stop of the leaked key.
 The grace still applies: if 4 h is too long, lower `KEYS_RETIREMENT_GRACE` before you retire (`serve` reads it at start).
+
+## Switching from SQLite to PostgreSQL
+
+`tempogate state copy` copies a SQLite state store into PostgreSQL, so you can move to [`STATE_DRIVER=postgres`](configuration.md#postgresql) and run several replicas without rotating signing keys, minting integration keys again or signing anyone out.
+It copies every table: signing keys, integration keys and their revocations, refresh-token sessions, and pending sign-ins and device codes.
+
+1. **Stop tempogate** (scale to 0), so nothing writes to the SQLite file during or after the copy: such a write would be lost.
+2. **Copy**, with the new release's binary, from somewhere that can read the SQLite file and reach the database, e.g. a one-off pod that mounts the state volume:
+
+   ```bash
+   STATE_SQLITE_PATH=/var/lib/tempogate/state.db \
+   STATE_POSTGRES_DSN='postgres://tempogate@db.example.com:5432/tempogate?sslmode=verify-full&require_auth=scram-sha-256' \
+   tempogate state copy
+   ```
+
+   `--from <path>` overrides `STATE_SQLITE_PATH`, and the target takes the same `STATE_POSTGRES_*` settings, TLS policy included, as `serve`.
+   The source must be migrated by this release (if it is not, run `tempogate migrate` against it with `STATE_DRIVER=sqlite`); the copy migrates the target itself.
+   It runs in one transaction and prints the rows copied per table, so it writes everything or nothing.
+3. **Start tempogate** with `STATE_DRIVER=postgres` and the same `STATE_POSTGRES_*` settings.
+   Keep the SQLite file until you are satisfied: switching back to it loses only what happened after the copy.
+
+The copy refuses a database that already holds state (a `serve` that booted against it has generated a signing key, for example).
+`--force` replaces that state instead, deleting it in the same transaction.
+Both stores must be at the same schema version, and the copy refuses any table or column that exists on only one side rather than drop it.
+
+### With the Helm chart
+
+With `state.driver=postgres` the chart no longer renders the state PVC, so the upgrade that switches drivers deletes a chart-managed claim, and with it the SQLite file under the usual `Delete` reclaim policy.
+Keep it first, then copy from a one-off pod that mounts it:
+
+1. Keep the claim and stop tempogate in one upgrade:
+
+   ```bash
+   helm upgrade tempogate oci://ghcr.io/onhotpath/charts/tempogate --reuse-values \
+     --set replicaCount=0 \
+     --set-string 'persistence.annotations.helm\.sh/resource-policy=keep'
+   ```
+
+2. Copy, with the PVC (`<fullname>-state`, so `tempogate-state` for a release named `tempogate`, or your `persistence.existingClaim`) and the DSN Secret the chart will use; mount the CA bundle too if the DSN names `sslrootcert`:
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: tempogate-state-copy
+   spec:
+     restartPolicy: Never
+     securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532 }
+     containers:
+       - name: copy
+         image: ghcr.io/onhotpath/tempogate:<new release>
+         args: ["state", "copy", "--from", "/var/lib/tempogate/state.db"]
+         env:
+           - name: STATE_POSTGRES_DSN_FILE
+             value: /etc/tempogate/postgres/dsn
+         volumeMounts:
+           - { name: state, mountPath: /var/lib/tempogate }
+           - { name: dsn, mountPath: /etc/tempogate/postgres, readOnly: true }
+     volumes:
+       - name: state
+         persistentVolumeClaim: { claimName: tempogate-state }
+       - name: dsn
+         secret: { secretName: tempogate-postgres, items: [{ key: dsn, path: dsn }] }
+   ```
+
+   `kubectl logs tempogate-state-copy` shows the rows copied per table; delete the pod once it has completed.
+3. Switch: `helm upgrade` with `state.driver=postgres`, `state.postgres.dsnSecretRef` and the replica count you want ([chart README](../charts/tempogate/README.md#ha-mode-on-postgresql)).
+   The PVC stays behind, now outside the release; delete it with `kubectl delete pvc` once you no longer need to switch back.
 
 ## Observability
 
