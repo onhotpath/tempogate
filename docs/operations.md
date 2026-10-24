@@ -123,6 +123,50 @@ The copy refuses a database that already holds state (a `serve` that booted agai
 `--force` replaces that state instead, deleting it in the same transaction.
 Both stores must be at the same schema version, and the copy refuses any table or column that exists on only one side rather than drop it.
 
+### With the Helm chart
+
+With `state.driver=postgres` the chart no longer renders the state PVC, so the upgrade that switches drivers deletes a chart-managed claim, and with it the SQLite file under the usual `Delete` reclaim policy.
+Keep it first, then copy from a one-off pod that mounts it:
+
+1. Keep the claim and stop tempogate in one upgrade:
+
+   ```bash
+   helm upgrade tempogate oci://ghcr.io/onhotpath/charts/tempogate --reuse-values \
+     --set replicaCount=0 \
+     --set-string 'persistence.annotations.helm\.sh/resource-policy=keep'
+   ```
+
+2. Copy, with the PVC (`<fullname>-state`, so `tempogate-state` for a release named `tempogate`, or your `persistence.existingClaim`) and the DSN Secret the chart will use; mount the CA bundle too if the DSN names `sslrootcert`:
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: tempogate-state-copy
+   spec:
+     restartPolicy: Never
+     securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532 }
+     containers:
+       - name: copy
+         image: ghcr.io/onhotpath/tempogate:<new release>
+         args: ["state", "copy", "--from", "/var/lib/tempogate/state.db"]
+         env:
+           - name: STATE_POSTGRES_DSN_FILE
+             value: /etc/tempogate/postgres/dsn
+         volumeMounts:
+           - { name: state, mountPath: /var/lib/tempogate }
+           - { name: dsn, mountPath: /etc/tempogate/postgres, readOnly: true }
+     volumes:
+       - name: state
+         persistentVolumeClaim: { claimName: tempogate-state }
+       - name: dsn
+         secret: { secretName: tempogate-postgres, items: [{ key: dsn, path: dsn }] }
+   ```
+
+   `kubectl logs tempogate-state-copy` shows the rows copied per table; delete the pod once it has completed.
+3. Switch: `helm upgrade` with `state.driver=postgres`, `state.postgres.dsnSecretRef` and the replica count you want ([chart README](../charts/tempogate/README.md#ha-mode-on-postgresql)).
+   The PVC stays behind, now outside the release; delete it with `kubectl delete pvc` once you no longer need to switch back.
+
 ## Observability
 
 ### Metrics

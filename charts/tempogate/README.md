@@ -145,6 +145,13 @@ podDisruptionBudget:
   any release whose migrations are not. Upgrade to such a release with
   `updateStrategy: {type: Recreate}`.
 
+- **Moving an existing release from SQLite.** Copy its state with
+  `tempogate state copy` before switching `state.driver`, and annotate the
+  PVC with `helm.sh/resource-policy: keep` first: with Postgres the chart
+  no longer renders the claim, so the switching upgrade would delete it.
+  [docs/operations.md](../../docs/operations.md#with-the-helm-chart) has
+  the steps.
+
 See [docs/configuration.md](../../docs/configuration.md#postgresql) for the
 connection-string rules, PgBouncer and change notifications.
 
