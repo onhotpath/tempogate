@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/oidc"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -127,6 +129,7 @@ func (h *Sessions) Register(api huma.API) {
 }
 
 func (h *Sessions) list(ctx context.Context, in *sessionListInput) (*sessionListOutput, error) {
+	redact.Declare(ctx, redact.PII, in.Email, strings.ToLower(in.Email), in.Subject)
 	f := SessionFilter{Email: in.Email}
 	if in.Subject != "" {
 		var err error
@@ -141,6 +144,7 @@ func (h *Sessions) list(ctx context.Context, in *sessionListInput) (*sessionList
 	out := &sessionListOutput{}
 	out.Body.Items = make([]sessionView, 0, len(rows))
 	for _, r := range rows {
+		redact.Declare(ctx, redact.PII, r.Email, strings.ToLower(r.Email), r.Subject)
 		out.Body.Items = append(out.Body.Items, sessionView{
 			FamilyID:       r.FamilyID,
 			ClientID:       r.ClientID,
@@ -174,6 +178,7 @@ func (h *Sessions) revoke(ctx context.Context, in *sessionRevokeInput) (*session
 }
 
 func (h *Sessions) revokeBy(ctx context.Context, b sessionRevokeBody) (int, error) {
+	redact.Declare(ctx, redact.PII, b.Email, strings.ToLower(b.Email), b.Subject)
 	set := 0
 	for _, v := range []string{b.Email, b.Subject, b.FamilyID} {
 		if v != "" {

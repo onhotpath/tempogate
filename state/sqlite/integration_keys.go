@@ -12,6 +12,8 @@ import (
 )
 
 func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) error {
+	ctx, op := s.ops.Start(ctx, "save_integration_key")
+	defer op.End()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO integration_keys
 		   (id, namespace, role, owner, jti, created_at, expires_at, revoked_at)
@@ -19,12 +21,14 @@ func (s *Store) SaveIntegrationKey(ctx context.Context, k admin.IntegrationKey) 
 		k.ID, k.Namespace, string(k.Role), k.Owner, k.JTI, k.CreatedAt, k.ExpiresAt, k.RevokedAt,
 	)
 	if err != nil {
-		return s.fail("save_integration_key", fmt.Errorf("sqlite: save integration key: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: save integration key: %w", err))
 	}
 	return nil
 }
 
 func (s *Store) IntegrationKeyByID(ctx context.Context, id string) (admin.IntegrationKey, error) {
+	ctx, op := s.ops.Start(ctx, "integration_key_by_id")
+	defer op.End()
 	var (
 		k       admin.IntegrationKey
 		roleStr string
@@ -41,7 +45,7 @@ func (s *Store) IntegrationKeyByID(ctx context.Context, id string) (admin.Integr
 		return admin.IntegrationKey{}, fmt.Errorf("%w: %s", admin.ErrIntegrationKeyNotFound, id)
 	}
 	if err != nil {
-		return admin.IntegrationKey{}, s.fail("integration_key_by_id", fmt.Errorf("sqlite: integration key by id: %w", err))
+		return admin.IntegrationKey{}, op.Fail(fmt.Errorf("sqlite: integration key by id: %w", err))
 	}
 	k.Role = admin.Role(roleStr)
 	if expires.Valid {
@@ -75,6 +79,8 @@ const defaultListLimit = 50
 // function boundary so a caller that bypasses the handler's clamp cannot
 // turn Limit=-1 into LIMIT 0 (a silent "no results" that masks a bug).
 func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]admin.IntegrationKey, error) {
+	ctx, op := s.ops.Start(ctx, "list_integration_keys")
+	defer op.End()
 	limit := f.Limit
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -94,7 +100,7 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 		limit+1,
 	)
 	if err != nil {
-		return nil, s.fail("list_integration_keys", fmt.Errorf("sqlite: list integration keys: %w", err))
+		return nil, op.Fail(fmt.Errorf("sqlite: list integration keys: %w", err))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -107,7 +113,7 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 			revoked sql.NullTime
 		)
 		if err := rows.Scan(&k.ID, &k.Namespace, &roleStr, &k.Owner, &k.JTI, &k.CreatedAt, &expires, &revoked); err != nil {
-			return nil, s.fail("list_integration_keys", fmt.Errorf("sqlite: scan integration key: %w", err))
+			return nil, op.Fail(fmt.Errorf("sqlite: scan integration key: %w", err))
 		}
 		k.Role = admin.Role(roleStr)
 		if expires.Valid {
@@ -121,7 +127,7 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, s.fail("list_integration_keys", fmt.Errorf("sqlite: rows: %w", err))
+		return nil, op.Fail(fmt.Errorf("sqlite: rows: %w", err))
 	}
 	return out, nil
 }
@@ -139,9 +145,11 @@ func (s *Store) ListIntegrationKeys(ctx context.Context, f admin.ListFilter) ([]
 // accepting a token whose integration-key row says revoked, or rejecting a
 // token whose row says active.
 func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at time.Time) (string, error) {
+	ctx, op := s.ops.Start(ctx, "mark_integration_key_revoked")
+	defer op.End()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: begin tx for mark revoked: %w", err))
+		return "", op.Fail(fmt.Errorf("sqlite: begin tx for mark revoked: %w", err))
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -153,7 +161,7 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at tim
 		return "", fmt.Errorf("%w: %s", admin.ErrIntegrationKeyNotFound, id)
 	}
 	if err != nil {
-		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: mark revoked: %w", err))
+		return "", op.Fail(fmt.Errorf("sqlite: mark revoked: %w", err))
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -162,7 +170,7 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at tim
 		 WHERE id = ? AND revoked_at IS NULL`,
 		at, id,
 	); err != nil {
-		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: mark revoked update: %w", err))
+		return "", op.Fail(fmt.Errorf("sqlite: mark revoked update: %w", err))
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -170,11 +178,11 @@ func (s *Store) MarkIntegrationKeyRevoked(ctx context.Context, id string, at tim
 		 VALUES (?, ?)`,
 		jti, at,
 	); err != nil {
-		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: mark revoked denylist insert: %w", err))
+		return "", op.Fail(fmt.Errorf("sqlite: mark revoked denylist insert: %w", err))
 	}
 
 	if err := tx.Commit(); err != nil {
-		return "", s.fail("mark_integration_key_revoked", fmt.Errorf("sqlite: commit mark revoked: %w", err))
+		return "", op.Fail(fmt.Errorf("sqlite: commit mark revoked: %w", err))
 	}
 	s.changes.Publish(keys.Change{Kind: keys.ChangeJTIRevoked, JTI: jti})
 	return jti, nil

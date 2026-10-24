@@ -1,11 +1,14 @@
 package keys
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
 
 	"go.uber.org/fx"
+
+	"github.com/onhotpath/tempogate/redact"
 )
 
 type fxParams struct {
@@ -19,6 +22,8 @@ type fxParams struct {
 
 	EncryptionKey     string `name:"keys_encryption_key" optional:"true"`
 	EncryptionKeyFile string `name:"keys_encryption_key_file" optional:"true"`
+
+	Redaction *redact.Set `optional:"true"`
 }
 
 // newFx fails graph construction on a malformed KEK, or a negative grace or
@@ -32,6 +37,12 @@ func newFx(p fxParams) (*Keys, error) {
 		return nil, fmt.Errorf("keys: KEYS_PUBLISH_DELAY must not be negative, got %s", p.PublishDelay)
 	}
 	kek, err := LoadEncryptionKey(p.EncryptionKey, p.EncryptionKeyFile)
+	if kek != nil {
+		// Every alphabet LoadEncryptionKey accepts.
+		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+			p.Redaction.Declare(redact.Secret, enc.EncodeToString(kek))
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

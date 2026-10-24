@@ -21,7 +21,7 @@ func TestExpositionIsUnchanged(t *testing.T) {
 	p, err := telemetry.NewProvider(telemetry.WithBuildInfo("v1", "c1"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	tm, err := NewTelemetry(p.Meter())
+	tm, err := NewTelemetry(p.Meter(), nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()

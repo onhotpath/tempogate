@@ -39,6 +39,8 @@ const emailMatches = `lower(email COLLATE "C") = lower($1::text COLLATE "C")`
 // oidc.ErrRefreshFamilyRevoked, or waits for the rotation to commit and then
 // revokes the new child with the rest of the family.
 func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
+	ctx, op := s.ops.Start(ctx, "save_refresh")
+	defer op.End()
 	errRevoked := fmt.Errorf("%w: %s", oidc.ErrRefreshFamilyRevoked, r.FamilyID)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		revoked, err := lockFamily(ctx, tx, r.FamilyID)
@@ -62,7 +64,7 @@ func (s *Store) SaveRefresh(ctx context.Context, r oidc.Refresh) error {
 	case isUniqueViolation(err):
 		return ErrDuplicateRefreshToken
 	default:
-		return s.fail("save_refresh", fmt.Errorf("postgres: save refresh token: %w", err))
+		return op.Fail(fmt.Errorf("postgres: save refresh token: %w", err))
 	}
 }
 
@@ -96,6 +98,8 @@ func lockFamily(ctx context.Context, tx pgx.Tx, familyID string) (bool, error) {
 // §4.14.2). The client_id predicate means a token presented by another
 // client, live or consumed, is reported missing and left intact.
 func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at time.Time) (oidc.Refresh, error) {
+	ctx, op := s.ops.Start(ctx, "consume_refresh")
+	defer op.End()
 	hash := secret.Hash(token)
 	r, err := scanRefresh(token, s.pool.QueryRow(ctx,
 		`UPDATE refresh_tokens SET consumed_at = $1
@@ -107,7 +111,7 @@ func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at t
 		return r, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return oidc.Refresh{}, s.fail("consume_refresh", fmt.Errorf("postgres: consume refresh token: %w", err))
+		return oidc.Refresh{}, op.Fail(fmt.Errorf("postgres: consume refresh token: %w", err))
 	}
 
 	r, err = scanRefresh(token, s.pool.QueryRow(ctx,
@@ -119,7 +123,7 @@ func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at t
 		return oidc.Refresh{}, oidc.ErrRefreshNotFound
 	}
 	if err != nil {
-		return oidc.Refresh{}, s.fail("consume_refresh", fmt.Errorf("postgres: look up consumed refresh token: %w", err))
+		return oidc.Refresh{}, op.Fail(fmt.Errorf("postgres: look up consumed refresh token: %w", err))
 	}
 	return r, oidc.ErrRefreshReused
 }
@@ -130,6 +134,8 @@ func (s *Store) ConsumeRefresh(ctx context.Context, token, clientID string, at t
 // mistyped id is not reported as a successful revoke; an already-revoked
 // family keeps its first revoked_at and is a zero count.
 func (s *Store) RevokeRefreshFamily(ctx context.Context, familyID string, at time.Time) (int, error) {
+	ctx, op := s.ops.Start(ctx, "revoke_refresh")
+	defer op.End()
 	errUnknown := fmt.Errorf("%w: %s", admin.ErrSessionNotFound, familyID)
 	var live int
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
@@ -150,7 +156,7 @@ func (s *Store) RevokeRefreshFamily(ctx context.Context, familyID string, at tim
 		return 0, err
 	}
 	if err != nil {
-		return 0, s.fail("revoke_refresh", fmt.Errorf("postgres: revoke refresh tokens: %w", err))
+		return 0, op.Fail(fmt.Errorf("postgres: revoke refresh tokens: %w", err))
 	}
 	return live, nil
 }
@@ -174,6 +180,8 @@ func (s *Store) RevokeRefreshBySubject(ctx context.Context, connectorID, subject
 // refresh_families rows in family_id order, so two revocations over
 // overlapping families cannot deadlock, then revokes their tokens.
 func (s *Store) revokeFamiliesWhere(ctx context.Context, where string, at time.Time, args ...any) (int, error) {
+	ctx, op := s.ops.Start(ctx, "revoke_refresh")
+	defer op.End()
 	var live int
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		// #nosec G202 -- where is one of the constant predicates above, never input.
@@ -200,7 +208,7 @@ func (s *Store) revokeFamiliesWhere(ctx context.Context, where string, at time.T
 		return err
 	})
 	if err != nil {
-		return 0, s.fail("revoke_refresh", fmt.Errorf("postgres: revoke refresh tokens: %w", err))
+		return 0, op.Fail(fmt.Errorf("postgres: revoke refresh tokens: %w", err))
 	}
 	return live, nil
 }
@@ -225,6 +233,8 @@ func revokeTokens(ctx context.Context, tx pgx.Tx, families []string, at time.Tim
 // unconsumed, unrevoked, unexpired token) matching f, by email (bytewise,
 // like SQLite) then auth_time.
 func (s *Store) ListRefreshSessions(ctx context.Context, f admin.SessionFilter, now time.Time) ([]admin.Session, error) {
+	ctx, op := s.ops.Start(ctx, "list_refresh_sessions")
+	defer op.End()
 	rows, err := s.pool.Query(ctx,
 		`SELECT family_id, client_id, connector_id, subject, email, auth_time, created_at, expires_at
 		 FROM refresh_tokens
@@ -236,7 +246,7 @@ func (s *Store) ListRefreshSessions(ctx context.Context, f admin.SessionFilter, 
 		f.Email, f.ConnectorID, f.Subject, now,
 	)
 	if err != nil {
-		return nil, s.fail("list_refresh_sessions", fmt.Errorf("postgres: list refresh sessions: %w", err))
+		return nil, op.Fail(fmt.Errorf("postgres: list refresh sessions: %w", err))
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (admin.Session, error) {
 		var rs admin.Session
@@ -244,7 +254,7 @@ func (s *Store) ListRefreshSessions(ctx context.Context, f admin.SessionFilter, 
 		return rs, err
 	})
 	if err != nil {
-		return nil, s.fail("list_refresh_sessions", fmt.Errorf("postgres: list refresh sessions: %w", err))
+		return nil, op.Fail(fmt.Errorf("postgres: list refresh sessions: %w", err))
 	}
 	return out, nil
 }

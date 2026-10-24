@@ -8,6 +8,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/observe"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 type serversParams struct {
@@ -46,6 +48,14 @@ type serversParams struct {
 	// GET /metrics on the admin surface outside /admin/*, so a scraper needs
 	// no admin token. Optional: graphs without metrics serve no /metrics.
 	Metrics http.Handler `name:"metrics_handler" optional:"true"`
+
+	// Tracer makes every request a trace (telemetry.Fx, while tracing is
+	// on). Optional: without it no request middleware is installed.
+	Tracer observe.Tracer `optional:"true"`
+
+	// Redaction is the process's redact.Set, parent of every traced
+	// request's own.
+	Redaction *redact.Set `optional:"true"`
 }
 
 type readinessParams struct {
@@ -70,6 +80,8 @@ func newServers(p serversParams) *Servers {
 		WithBasePath(p.OIDCBasePath),
 		WithDocs(p.DocsEnabled),
 		WithWellKnown(p.Keys, p.OIDCIssuer),
+		WithTracer(p.Tracer),
+		WithRedaction(p.Redaction),
 	}
 	if p.Logger != nil {
 		opts = append(opts, WithLogger(p.Logger.Named("http")))

@@ -76,6 +76,9 @@ type faults struct {
 	// TokenHang leaves token requests unanswered until the client hangs
 	// up, as a stalled Google would.
 	TokenHang bool
+	// WrongAudience signs id_tokens for another client, which go-oidc
+	// refuses with an error quoting the client ID it expected.
+	WrongAudience bool
 }
 
 type server struct {
@@ -271,6 +274,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	g, ok := s.codes[code]
 	delete(s.codes, code)
 	wrongNonce := s.faults.WrongNonce
+	if s.faults.WrongAudience {
+		clientID = "another-google-client"
+	}
 	s.mu.Unlock()
 	if !ok {
 		oauthError(w, "invalid_grant", "unknown or used code")
@@ -372,6 +378,7 @@ func (s *server) setFaults(w http.ResponseWriter, r *http.Request) {
 		DiscoveryDown: r.Form.Get("discovery_down") == "true",
 		WrongNonce:    r.Form.Get("wrong_nonce") == "true",
 		TokenHang:     r.Form.Get("token_hang") == "true",
+		WrongAudience: r.Form.Get("wrong_audience") == "true",
 	}
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)

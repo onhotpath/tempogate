@@ -12,6 +12,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/zap"
+
+	"github.com/onhotpath/tempogate/redact"
 )
 
 // SecurityScheme is the OpenAPI security scheme name the admin operations
@@ -126,7 +128,9 @@ func (g *Guard) middleware(api huma.API) func(huma.Context, func(huma.Context)) 
 			g.reject(api, ctx, http.StatusMisdirectedRequest, "host_not_allowed", "host not allowed")
 			return
 		}
+		redact.Declare(ctx.Context(), redact.Secret, ctx.Header("Authorization"))
 		token, ok := bearerToken(ctx.Header("Authorization"))
+		redact.Declare(ctx.Context(), redact.Secret, token)
 		switch {
 		case len(g.digests) == 0:
 			g.reject(api, ctx, http.StatusUnauthorized, "locked", "admin API is locked: no ADMIN_TOKEN_SHA256 configured")

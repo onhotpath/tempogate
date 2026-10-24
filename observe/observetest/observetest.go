@@ -1,10 +1,11 @@
-// Package observetest is an in-memory observe.Meter for asserting what a
-// package declares and records.
+// Package observetest is an in-memory observe.Meter and observe.Tracer for
+// asserting what a package declares, records and traces.
 package observetest
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -104,7 +105,7 @@ func (m *Meter) Measurements(names ...string) []Measurement {
 func (m *Meter) record(name string, v float64, attrs []observe.Attr) {
 	labels := make(map[string]string, len(attrs))
 	for _, a := range attrs {
-		labels[a.Key] = a.Value
+		labels[a.Key] = fmt.Sprint(a.Value())
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

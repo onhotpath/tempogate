@@ -14,6 +14,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/onhotpath/tempogate/internal/clock"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -176,6 +177,7 @@ func (h *DeviceAuthorization) handle(ctx context.Context, in *deviceAuthorizatio
 	}
 
 	clientID := form.Get("client_id")
+	redact.Declare(ctx, redact.Identifier, clientID)
 	if clientID == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "client_id is required")
 	}
@@ -226,6 +228,7 @@ func (h *DeviceAuthorization) mint(ctx context.Context, clientID, scope string) 
 		if err != nil {
 			return DeviceCode{}, fmt.Errorf("oidc: generate user code: %w", err)
 		}
+		redact.Declare(ctx, redact.Secret, deviceCode, userCode, formatUserCode(userCode))
 
 		dc := DeviceCode{
 			Code:            deviceCode,

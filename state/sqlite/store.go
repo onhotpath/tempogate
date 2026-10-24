@@ -34,6 +34,7 @@ type options struct {
 	busyTimeout time.Duration
 	logger      *zap.Logger
 	meter       observe.Meter
+	tracer      observe.Tracer
 }
 
 type Option func(*options)
@@ -51,6 +52,10 @@ func WithBusyTimeout(d time.Duration) Option { return func(o *options) { o.busyT
 // WithMeter declares the store's metrics (failed operations, by op) on m.
 // Nil records nothing.
 func WithMeter(m observe.Meter) Option { return func(o *options) { o.meter = m } }
+
+// WithTracer makes every operation run inside a traced request a span of its
+// own. Nil starts no spans.
+func WithTracer(t observe.Tracer) Option { return func(o *options) { o.tracer = t } }
 
 func defaultOptions() *options {
 	return &options{
@@ -76,7 +81,7 @@ func New(opts ...Option) (*Store, error) {
 	if o.path == "" {
 		return nil, fmt.Errorf("sqlite: empty path")
 	}
-	ops, err := instrument.New(o.meter)
+	ops, err := instrument.New(o.meter, o.tracer)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: %w", err)
 	}
@@ -174,20 +179,16 @@ func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 // the configured path names now, read-only, and reads the migrations table
 // from it.
 func (s *Store) Probe(ctx context.Context) error {
+	ctx, op := s.ops.Start(ctx, "probe")
+	defer op.End()
 	if err := s.db.PingContext(ctx); err != nil {
-		return s.fail("probe", fmt.Errorf("sqlite: ping: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: ping: %w", err))
 	}
 	var one int
 	if err := s.probe.QueryRowContext(ctx, `SELECT 1 FROM schema_migrations LIMIT 1`).Scan(&one); err != nil {
-		return s.fail("probe", fmt.Errorf("sqlite: probe: %w", err))
+		return op.Fail(fmt.Errorf("sqlite: probe: %w", err))
 	}
 	return nil
-}
-
-// fail counts a failed operation and returns err unchanged, so call sites
-// keep their own error context.
-func (s *Store) fail(op string, err error) error {
-	return s.ops.Fail(context.Background(), op, err)
 }
 
 func (s *Store) Close() error {

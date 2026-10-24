@@ -142,8 +142,10 @@ After `KEYS_RETIREMENT_GRACE` its `kid` leaves the JWKS, and no token it signed 
 A new key is published at once but signs only after `KEYS_PUBLISH_DELAY`, because Temporal does not fetch the JWKS again for an unknown `kid` ([revocation](operations.md#revocation-and-signing-key-retirement)).
 
 **Observable without leaking.** Prometheus metrics (logins, tokens by grant, OAuth2 error codes, Google latency, state-store errors) are only on the private admin listener.
-Each feature package declares its own metrics through the small `observe` interfaces, with every metric's label set fixed by a type.
-The `telemetry` package implements `observe` with OpenTelemetry and exports the Prometheus format, so only the server build links OpenTelemetry.
+Optional OpenTelemetry traces follow the same rule for attributes: one trace per request, with route templates and operation names but no identities or tokens.
+Each feature package declares its own metrics and spans through the small `observe` interfaces, with every metric's label set fixed by a type.
+The `telemetry` package implements `observe` with OpenTelemetry, exporting metrics in the Prometheus format and traces over OTLP, so only the server build links OpenTelemetry.
+Code that handles a secret or personal value declares it with `redact`, saying how it may be shown; the tracer masks every declared value in the error text it exports, including text from libraries that quote it.
 Each request logs one line from an allowlist of fields: the path without its query, and no headers or bodies.
 `/readyz` checks the state store on every call; `/healthz` is only a liveness probe ([observability](operations.md#observability)).
 

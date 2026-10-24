@@ -33,9 +33,18 @@ import (
 type observabilityStack struct {
 	*cliStack
 	tempogate testcontainers.Container
+	// collector is the OpenTelemetry collector receiving tempogate's spans;
+	// nil unless the stack was set up with tracing.
+	collector testcontainers.Container
 	stateVol  string
 	publicURL string
 	adminURL  string
+}
+
+type observabilityOptions struct {
+	// tracing starts an OpenTelemetry collector on the stack's network and
+	// turns tempogate's OTLP trace export on, pointed at it.
+	tracing bool
 }
 
 func TestObservability(t *testing.T) {
@@ -44,31 +53,11 @@ func TestObservability(t *testing.T) {
 	}
 	t.Parallel()
 	ctx := context.Background()
-	st := setupObservabilityStack(ctx, t)
+	st := setupObservabilityStack(ctx, t, observabilityOptions{})
 
-	// --- a real CLI login (authorization_code) ...
-	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, allowedIdentity())
-	loginDone := make(chan loginResult, 1)
-	go func() {
-		code, _, err := st.client.Exec(ctx,
-			[]string{"tempogate", "login", insecureFlag, "--issuer", tempogateIssuer, "--client-id", cliClientID, "--token-file", cliTokenFile},
-			tcexec.Multiplexed(),
-		)
-		loginDone <- loginResult{code: code, err: err}
-	}()
-	st.driveConsent(ctx, t, st.waitAuthURL(ctx, t))
-	select {
-	case r := <-loginDone:
-		require.NoError(t, r.err)
-		require.Equal(t, 0, r.code, "tempogate login must exit 0")
-	case <-time.After(2 * time.Minute):
-		t.Fatal("e2e: tempogate login did not complete after consent")
-	}
-
-	// --- ... then a refresh (refresh_token) ...
-	tok := st.readToken(ctx, t)
-	st.writeToken(ctx, t, cli.Token{AccessToken: tok.AccessToken, RefreshToken: tok.RefreshToken, ExpiresAt: time.Now().Add(-time.Minute)})
-	require.NotEqual(t, tok.AccessToken, st.runToken(ctx, t), "an expired token must be refreshed")
+	// --- a real CLI login (authorization_code), then a refresh
+	// (refresh_token) ...
+	st.loginAndRefresh(ctx, t)
 
 	// --- ... and a login denied by the domain allowlist.
 	(&stack{mockBaseURL: st.mockBaseURL}).setIdentity(t, mockIdentity{Sub: "google-sub-intruder-0001", Email: deniedEmail, Verified: true, HD: "evil.test"})
@@ -125,6 +114,35 @@ func TestObservability(t *testing.T) {
 	}, 30*time.Second, 500*time.Millisecond, "/readyz must report 503 once the database file is gone")
 	require.Equal(t, http.StatusOK, httpGet(t, st.publicURL+"/healthz").status)
 	require.Contains(t, httpGet(t, st.adminURL+"/metrics").body, `tempogate_db_errors_total{op="probe"}`)
+}
+
+// loginAndRefresh runs a real `tempogate login` as allowedIdentity through
+// the browser consent, then expires the stored token so `tempogate token`
+// refreshes it. It returns both token sets, the second from the refresh.
+func (s *observabilityStack) loginAndRefresh(ctx context.Context, t *testing.T) (login, refreshed cli.Token) {
+	t.Helper()
+	(&stack{mockBaseURL: s.mockBaseURL}).setIdentity(t, allowedIdentity())
+	loginDone := make(chan loginResult, 1)
+	go func() {
+		code, _, err := s.client.Exec(ctx,
+			[]string{"tempogate", "login", insecureFlag, "--issuer", tempogateIssuer, "--client-id", cliClientID, "--token-file", cliTokenFile},
+			tcexec.Multiplexed(),
+		)
+		loginDone <- loginResult{code: code, err: err}
+	}()
+	s.driveConsent(ctx, t, s.waitAuthURL(ctx, t))
+	select {
+	case r := <-loginDone:
+		require.NoError(t, r.err)
+		require.Equal(t, 0, r.code, "tempogate login must exit 0")
+	case <-time.After(2 * time.Minute):
+		t.Fatal("e2e: tempogate login did not complete after consent")
+	}
+
+	login = s.readToken(ctx, t)
+	s.writeToken(ctx, t, cli.Token{AccessToken: login.AccessToken, RefreshToken: login.RefreshToken, ExpiresAt: time.Now().Add(-time.Minute)})
+	require.NotEqual(t, login.AccessToken, s.runToken(ctx, t), "an expired token must be refreshed")
+	return login, s.readToken(ctx, t)
 }
 
 // driveDeniedLogin starts a fresh authorization request as the CLI client and
@@ -218,7 +236,7 @@ func containsAny(lines []string, sub string) bool {
 	return false
 }
 
-func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilityStack {
+func setupObservabilityStack(ctx context.Context, t *testing.T, opts observabilityOptions) *observabilityStack {
 	t.Helper()
 	root := repoRoot(t)
 
@@ -261,6 +279,15 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 		"OIDC_GOOGLE_ISSUER_URL":      mockIssuer,
 	}
 	addDeviceUIServerEnv(env, tempogateIssuer)
+	var collector testcontainers.Container
+	if opts.tracing {
+		collector = startCollector(ctx, t, nw.Name)
+		env["OTEL_TRACES_EXPORTER"] = "otlp"
+		env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://" + collectorAlias + ":4318"
+		// Export within a fraction of a second rather than the 5 s default,
+		// so the test reads each request's spans soon after it.
+		env["OTEL_BSP_SCHEDULE_DELAY"] = "100"
+	}
 	stateVol := stateVolume(t, "tempogate-observability-e2e-state")
 	tgImg, tgFrom := builtImageSource("E2E_TEMPOGATE_IMAGE", "Dockerfile", root)
 
@@ -319,6 +346,7 @@ func setupObservabilityStack(ctx context.Context, t *testing.T) *observabilitySt
 			chromeWS:    devtoolsWS(ctx, t, clientC),
 		},
 		tempogate: tempogate,
+		collector: collector,
 		stateVol:  stateVol,
 		publicURL: mappedHTTP(ctx, t, tempogate, "8000"),
 		adminURL:  mappedHTTP(ctx, t, tempogate, "8081"),

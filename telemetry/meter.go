@@ -51,7 +51,12 @@ func (h histogram) Record(ctx context.Context, v float64, attrs ...observe.Attr)
 func otelAttrs(attrs []observe.Attr) []attribute.KeyValue {
 	kvs := make([]attribute.KeyValue, len(attrs))
 	for i, a := range attrs {
-		kvs[i] = attribute.String(a.Key, a.Value)
+		switch v := a.Value().(type) {
+		case int:
+			kvs[i] = attribute.Int(a.Key, v)
+		default:
+			kvs[i] = attribute.String(a.Key, v.(string))
+		}
 	}
 	return kvs
 }

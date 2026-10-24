@@ -19,6 +19,7 @@ import (
 
 	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -363,6 +364,14 @@ func (t *Token) grant(ctx context.Context, in *tokenInput) (*tokenOutput, error)
 }
 
 func (t *Token) dispatch(ctx context.Context, form url.Values, authorization string) (*tokenOutput, error) {
+	redact.Declare(ctx, redact.Secret, authorization, form.Get("code"), form.Get("code_verifier"),
+		form.Get("refresh_token"), form.Get("device_code"), form.Get("client_secret"))
+	redact.Declare(ctx, redact.Identifier, form.Get("client_id"))
+	if id, secret, ok := parseBasicAuth(authorization); ok {
+		_, encoded, _ := strings.Cut(authorization, " ")
+		redact.Declare(ctx, redact.Secret, secret, encoded)
+		redact.Declare(ctx, redact.Identifier, id)
+	}
 	if err := checkParamLengths(
 		paramCap{"client_id", form.Get("client_id"), maxClientIDLen},
 		paramCap{"redirect_uri", form.Get("redirect_uri"), maxRedirectURILen},
@@ -423,6 +432,8 @@ type AuthCodeRedemption struct {
 // handler can propagate them verbatim; in-process callers can inspect
 // errors.Is(..., huma.StatusError) or just surface the message.
 func (t *Token) RedeemAuthorizationCode(ctx context.Context, in AuthCodeRedemptionRequest) (*AuthCodeRedemption, error) {
+	// The device-flow UI calls this in process, without passing /token.
+	redact.Declare(ctx, redact.Secret, in.Code, in.CodeVerifier, in.ClientSecret)
 	if in.Code == "" {
 		return nil, oauthErr(http.StatusBadRequest, "invalid_request", "code is required")
 	}
@@ -715,6 +726,7 @@ type lineage struct {
 // apart. It returns errNoPermissions, with nothing minted or persisted, when
 // the resolver grants id nothing.
 func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, l lineage) (*tokenOutput, error) {
+	declareIdentity(ctx, id.Subject, id.Email)
 	grant, ok, err := permitted(ctx, t.authorizer, id.Email)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: resolve permissions: %w", err)
@@ -767,6 +779,7 @@ func (t *Token) issue(ctx context.Context, id Identity, clientID, nonce string, 
 	if err != nil {
 		return nil, fmt.Errorf("oidc: generate refresh token: %w", err)
 	}
+	redact.Declare(ctx, redact.Secret, signed, idToken, refreshTok)
 
 	// Rotation renews the idle window but never past the session's
 	// absolute end.

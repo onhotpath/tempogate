@@ -16,6 +16,8 @@ import (
 // unknown jti returns (false, nil) so callers can branch without inspecting
 // the error.
 func (s *Store) IsRevoked(ctx context.Context, jti string) (bool, error) {
+	ctx, op := s.ops.Start(ctx, "is_revoked")
+	defer op.End()
 	var one int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT 1 FROM jti_denylist WHERE jti = ?`, jti,
@@ -24,7 +26,7 @@ func (s *Store) IsRevoked(ctx context.Context, jti string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, s.fail("is_revoked", fmt.Errorf("sqlite: is jti revoked: %w", err))
+		return false, op.Fail(fmt.Errorf("sqlite: is jti revoked: %w", err))
 	}
 	return true, nil
 }

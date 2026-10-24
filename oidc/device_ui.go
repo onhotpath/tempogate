@@ -25,6 +25,7 @@ import (
 	"github.com/onhotpath/tempogate/api/requestid"
 	"github.com/onhotpath/tempogate/internal/clock"
 	"github.com/onhotpath/tempogate/ratelimit"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 const (
@@ -651,6 +652,7 @@ func (u *DeviceUI) handleEnterPost(ctx context.Context, in *deviceEnterPostInput
 
 	raw := form.Get("user_code")
 	canonical := canonicalUserCode(raw)
+	declareUserCode(ctx, raw)
 	if canonical == "" {
 		return u.errorPage("Enter the code shown on your device."), nil
 	}
@@ -707,6 +709,7 @@ func (u *DeviceUI) handleEnterPost(ctx context.Context, in *deviceEnterPostInput
 // recovered user_code in the query string. The Set-Cookie travels with the
 // 303 so the browser's next GET to /confirm presents the session.
 func (u *DeviceUI) handleSSOCallback(ctx context.Context, in *deviceSSOCallbackInput) (*deviceRedirectOrPage, error) {
+	redact.Declare(ctx, redact.Secret, in.Code, in.State)
 	if in.Error == "access_denied" && in.State != "" {
 		return u.handleSSODenied(ctx, in.State)
 	}
@@ -727,6 +730,7 @@ func (u *DeviceUI) handleSSOCallback(ctx context.Context, in *deviceSSOCallbackI
 	}
 
 	userCode, err := u.verifyBounceState(in.State)
+	declareUserCode(ctx, userCode)
 	if err != nil {
 		// Warn: the most common cause is a slow user round-trip that
 		// crossed the 10-minute state TTL, or a rolling restart that
@@ -832,6 +836,7 @@ func (u *DeviceUI) refuseIfNoAccess(ctx context.Context, bs BrowserSession, cano
 // no-op so an honest mistake still gives feedback.
 func (u *DeviceUI) handleConfirm(ctx context.Context, in *deviceConfirmInput) (*deviceRedirectOrPage, error) {
 	canonical := canonicalUserCode(in.UserCode)
+	declareUserCode(ctx, in.UserCode)
 	if canonical == "" {
 		return u.errorPage("That sign-in could not be completed. Restart the sign-in from your device."), nil
 	}
@@ -906,6 +911,7 @@ func (u *DeviceUI) handleDecision(ctx context.Context, in *deviceDecisionInput, 
 	}
 
 	canonical := canonicalUserCode(form.Get("user_code"))
+	declareUserCode(ctx, form.Get("user_code"))
 	if canonical == "" {
 		return u.errorHTMLPage("That submission was missing the device code. Restart the sign-in from your device."), nil
 	}

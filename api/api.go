@@ -24,6 +24,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/api/requestid"
+	"github.com/onhotpath/tempogate/observe"
+	"github.com/onhotpath/tempogate/redact"
 )
 
 type apiConfig struct {
@@ -51,6 +53,12 @@ type apiConfig struct {
 	docs          bool
 	// logger receives the detail of every 5xx the sanitizer hides from clients.
 	logger *zap.Logger
+	// tracer makes every request on either surface a trace; nil installs
+	// nothing.
+	tracer observe.Tracer
+	// redaction is the process's redact.Set; each traced request gets a
+	// child of it for the values its handlers declare.
+	redaction *redact.Set
 }
 
 type adminHandler struct {
@@ -119,6 +127,19 @@ func WithLogger(l *zap.Logger) Option {
 	return func(c *apiConfig) { c.logger = l }
 }
 
+// WithTracer makes every request on both surfaces a trace rooted at its
+// server span. Nil keeps the default: nothing installed.
+func WithTracer(t observe.Tracer) Option {
+	return func(c *apiConfig) { c.tracer = t }
+}
+
+// WithRedaction sets the process's redact.Set. Each traced request carries a
+// child of it in its context, which the request's handlers declare their
+// sensitive values into and which masks them in every span of the request.
+func WithRedaction(s *redact.Set) Option {
+	return func(c *apiConfig) { c.redaction = s }
+}
+
 // Surface is one structurally isolated handler tree: a Huma API for OpenAPI
 // generation and the http.Handler that actually serves it. Prefix is the
 // URL prefix the API's routes are mounted under (empty unless basePath is
@@ -164,7 +185,7 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 		for _, fn := range cfg.registrars {
 			fn(a)
 		}
-		return &Surface{API: a, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: ""}
+		return &Surface{API: a, Handler: cfg.wrap(surfacePublic, mux), Prefix: ""}
 	}
 
 	// Base-path mode: a minimal health adapter at the root (no OpenAPI/docs
@@ -182,7 +203,7 @@ func newPublic(readiness *Readiness, cfg *apiConfig) *Surface {
 		fn(oidcAPI)
 	}
 
-	return &Surface{API: oidcAPI, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: cfg.basePath}
+	return &Surface{API: oidcAPI, Handler: cfg.wrap(surfacePublic, mux), Prefix: cfg.basePath}
 }
 
 func newAdmin(cfg *apiConfig) *Surface {
@@ -207,7 +228,28 @@ func newAdmin(cfg *apiConfig) *Surface {
 	for _, h := range cfg.adminHandlers {
 		mux.Handle(h.pattern, h.handler)
 	}
-	return &Surface{API: a, Handler: requestid.Middleware(withSecurityHeaders(mux)), Prefix: ""}
+	return &Surface{API: a, Handler: cfg.wrap(surfaceAdmin, mux), Prefix: ""}
+}
+
+// wrap applies the listener-wide middleware every surface shares. The
+// request id is assigned outermost, so the request's span and every handler
+// see the id the response carries.
+func (c *apiConfig) wrap(surface string, mux *http.ServeMux) http.Handler {
+	var h http.Handler = mux
+	if c.tracer != nil {
+		// Only spans read the request's Set today, so only a traced request
+		// pays for one. A log scrubber would install it unconditionally.
+		h = withRequestRedaction(c.redaction, traceRequests(c.tracer, surface, mux))
+	}
+	return requestid.Middleware(withSecurityHeaders(h))
+}
+
+// withRequestRedaction gives every request a child of process to declare its
+// sensitive values into (redact.Declare).
+func withRequestRedaction(process *redact.Set, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(redact.NewContext(r.Context(), process.Child())))
+	})
 }
 
 func (c *apiConfig) humaConfig(title string) huma.Config {

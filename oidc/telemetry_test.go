@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/onhotpath/tempogate/observe"
 	"github.com/onhotpath/tempogate/observe/observetest"
 	"github.com/onhotpath/tempogate/oidc"
 )
@@ -28,7 +29,7 @@ type recordingObserver struct {
 
 func newRecordingObserver() *recordingObserver {
 	m := observetest.NewMeter()
-	t, err := oidc.NewTelemetry(m)
+	t, err := oidc.NewTelemetry(m, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -271,7 +272,7 @@ func (s *TokenSuite) TestTokenServerErrorIsObserved() {
 // always had (docs/operations.md).
 func TestTelemetryDeclaresItsInstruments(t *testing.T) {
 	m := observetest.NewMeter()
-	_, err := oidc.NewTelemetry(m)
+	_, err := oidc.NewTelemetry(m, nil)
 	require.NoError(t, err)
 
 	for _, name := range []string{
@@ -291,7 +292,7 @@ func TestTelemetryDeclaresItsInstruments(t *testing.T) {
 
 func TestTelemetryDeclarationFailureIsReturned(t *testing.T) {
 	boom := errors.New("boom")
-	_, err := oidc.NewTelemetry(observetest.FailingMeter(boom))
+	_, err := oidc.NewTelemetry(observetest.FailingMeter(boom), nil)
 	require.ErrorIs(t, err, boom)
 }
 
@@ -300,13 +301,44 @@ func TestTelemetryDeclarationFailureIsReturned(t *testing.T) {
 func TestUpstreamTimeoutsCountedApart(t *testing.T) {
 	obs := newRecordingObserver()
 	ctx := context.Background()
-	obs.StartUpstream(ctx, "discovery")(&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Timeout: true, Err: errors.New("deadline")})
-	obs.StartUpstream(ctx, "discovery")(&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("503")})
-	obs.StartUpstream(ctx, "code_exchange")(errors.New("not an UpstreamError"))
-	obs.StartUpstream(ctx, "verify_id_token")(nil)
+	end(obs.StartUpstream(ctx, "discovery"))(&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Timeout: true, Err: errors.New("deadline")})
+	end(obs.StartUpstream(ctx, "discovery"))(&oidc.UpstreamError{Reason: oidc.UpstreamReasonDiscovery, Err: errors.New("503")})
+	end(obs.StartUpstream(ctx, "code_exchange"))(errors.New("not an UpstreamError"))
+	end(obs.StartUpstream(ctx, "verify_id_token"))(nil)
 
 	assert.Equal(t, []string{"discovery/timeout", "discovery/error", "code_exchange/error"},
 		obs.labels([]string{"tempogate.upstream_errors"}, "op", "reason"))
 	assert.Equal(t, []string{"discovery", "discovery", "code_exchange", "verify_id_token"},
 		obs.labels([]string{"tempogate.upstream_request.duration"}, "op"), "failed calls are timed too")
+}
+
+// end is the func half of StartUpstream.
+func end(_ context.Context, done func(error)) func(error) { return done }
+
+// Inside a traced request an upstream call is a client span, failed with its
+// reason and the error's message; outside one it is timed but not traced.
+func TestUpstreamCallIsAClientSpan(t *testing.T) {
+	tr := observetest.NewTracer()
+	tm, err := oidc.NewTelemetry(nil, tr)
+	require.NoError(t, err)
+
+	ctx, root := tr.Start(context.Background(), "request", observe.AsRoot())
+	callCtx, done := tm.StartUpstream(ctx, "verify_id_token")
+	assert.NotEqual(t, ctx, callCtx, "the call runs under its own span")
+	cause := &oidc.UpstreamError{Reason: oidc.UpstreamReasonIDToken, Timeout: true, Err: errors.New("context deadline exceeded")}
+	done(cause)
+	root.End()
+	_, done = tm.StartUpstream(context.Background(), "discovery")
+	done(nil)
+
+	spans := tr.Spans()
+	require.Len(t, spans, 2, "only the request and its call")
+	sp := spans[1]
+	assert.Equal(t, "upstream verify_id_token", sp.Name)
+	assert.Equal(t, observe.SpanKindClient, sp.Kind)
+	assert.Equal(t, "request", sp.Parent.Name)
+	assert.Equal(t, map[string]any{"tempogate.upstream.op": "verify_id_token"}, sp.Attrs)
+	assert.Equal(t, "timeout", sp.ErrorType)
+	assert.Same(t, cause, sp.Err)
+	assert.True(t, sp.Ended)
 }
