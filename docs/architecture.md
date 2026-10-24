@@ -56,12 +56,13 @@ tempogate fills the gap that the Temporal documentation already describes: point
 
 ## Design decisions
 
-**Single binary, subcommands.** One distroless binary has `serve`, `login`, `token`, `keys`, `sessions`, `authz`, `migrate` and `version`.
+**Single binary, subcommands.** One distroless binary has `serve`, `login`, `token`, `keys`, `sessions`, `state`, `authz`, `migrate` and `version`.
 Operators run `serve`, the same binary is the laptop CLI, and `migrate` applies the embedded migrations.
 Each subcommand builds only what it uses, when it runs:
 
 - `serve` and `gen-oas` need the full OIDC configuration;
 - `migrate`, `keys` and `sessions` need only the state store, plus `KEYS_ENCRYPTION_KEY` for `keys` when the signing keys are encrypted;
+- `state copy` needs the SQLite file and the PostgreSQL settings;
 - `version` needs nothing.
 
 **Pluggable state, SQLite by default.** The state store (signing keypair, authorization codes, refresh tokens) is an interface with two backends, selected by `STATE_DRIVER`.
@@ -74,6 +75,7 @@ Each subcommand builds only what it uses, when it runs:
   - migrations and first-boot key generation take transaction-level advisory locks;
   - every replica reaps in `FOR UPDATE SKIP LOCKED` batches;
   - `LISTEN/NOTIFY` sends key changes and integration-key revocations to every replica, with the periodic reloads as the backstop.
+- `tempogate state copy` moves an installation from SQLite to PostgreSQL in one transaction, refusing any table or column the two schemas do not share.
 
   The chart's HA mode (`state.driver=postgres`) runs any number of replicas, rolls updates, and can autoscale.
 

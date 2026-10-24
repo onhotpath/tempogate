@@ -1,6 +1,6 @@
 # Operations
 
-How to run tempogate day to day: manage sessions, revoke access, rotate signing keys, and watch the server.
+How to run tempogate day to day: manage sessions, revoke access, rotate signing keys, move to PostgreSQL, and watch the server.
 For the settings, see the [configuration reference](configuration.md).
 
 ## Refresh-token sessions
@@ -98,6 +98,30 @@ The default `5m` covers Temporal's default `1m` refresh and the default `30s` re
 Retire right after step 1 with `tempogate keys retire --force <old-kid>` or `POST /admin/signing-keys/<old-kid>/retire?force=true`.
 The new key then signs at once, so Temporal rejects new tokens until its next JWKS refresh (at most `refreshInterval`); that is the cost of an immediate stop of the leaked key.
 The grace still applies: if 4 h is too long, lower `KEYS_RETIREMENT_GRACE` before you retire (`serve` reads it at start).
+
+## Switching from SQLite to PostgreSQL
+
+`tempogate state copy` copies a SQLite state store into PostgreSQL, so you can move to [`STATE_DRIVER=postgres`](configuration.md#postgresql) and run several replicas without rotating signing keys, minting integration keys again or signing anyone out.
+It copies every table: signing keys, integration keys and their revocations, refresh-token sessions, and pending sign-ins and device codes.
+
+1. **Stop tempogate** (scale to 0), so nothing writes to the SQLite file during or after the copy: such a write would be lost.
+2. **Copy**, with the new release's binary, from somewhere that can read the SQLite file and reach the database, e.g. a one-off pod that mounts the state volume:
+
+   ```bash
+   STATE_SQLITE_PATH=/var/lib/tempogate/state.db \
+   STATE_POSTGRES_DSN='postgres://tempogate@db.example.com:5432/tempogate?sslmode=verify-full&require_auth=scram-sha-256' \
+   tempogate state copy
+   ```
+
+   `--from <path>` overrides `STATE_SQLITE_PATH`, and the target takes the same `STATE_POSTGRES_*` settings, TLS policy included, as `serve`.
+   The source must be migrated by this release (if it is not, run `tempogate migrate` against it with `STATE_DRIVER=sqlite`); the copy migrates the target itself.
+   It runs in one transaction and prints the rows copied per table, so it writes everything or nothing.
+3. **Start tempogate** with `STATE_DRIVER=postgres` and the same `STATE_POSTGRES_*` settings.
+   Keep the SQLite file until you are satisfied: switching back to it loses only what happened after the copy.
+
+The copy refuses a database that already holds state (a `serve` that booted against it has generated a signing key, for example).
+`--force` replaces that state instead, deleting it in the same transaction.
+Both stores must be at the same schema version, and the copy refuses any table or column that exists on only one side rather than drop it.
 
 ## Observability
 

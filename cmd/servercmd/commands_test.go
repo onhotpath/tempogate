@@ -16,14 +16,14 @@ import (
 )
 
 // TestFxWiresServerSubcommands proves Fx() (via asCommand) contributes serve,
-// migrate, keys, sessions and gen-oas into the "commands" value group the root
+// migrate, keys, sessions, state and gen-oas into the "commands" value group the root
 // dispatcher collects - the integration the full app assembly relies on, and
 // the reason none of these subcommands appear in the lean build. The root
 // graph supplies only configuration and loggers: Fx() must not need anything
 // from the server stack to register its commands.
 func TestFxWiresServerSubcommands(t *testing.T) {
 	cmds := fxCommands(t)
-	for _, want := range []string{"serve", "migrate", "keys", "sessions", "gen-oas"} {
+	for _, want := range []string{"serve", "migrate", "keys", "sessions", "state", "gen-oas"} {
 		require.NotNilf(t, cmds[want], "Fx() must contribute %q into the commands group", want)
 	}
 }

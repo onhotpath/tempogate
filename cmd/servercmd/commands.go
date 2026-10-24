@@ -16,7 +16,7 @@ func asCommand(constructor any) any {
 }
 
 // Fx contributes the server-bound subcommands (serve, migrate, keys,
-// sessions, gen-oas, authz) into the cobra command group. Wired only by the full app
+// sessions, state, gen-oas, authz) into the cobra command group. Wired only by the full app
 // assembly; absent from the lean CLI build.
 //
 // The commands themselves depend only on the shared graph base; each builds
@@ -36,6 +36,9 @@ func Fx() fx.Option {
 			}),
 			asCommand(func(g graph) *cobra.Command {
 				return newSessionsCmd(lazy[sessionsParams](g, storeModules(g)...))
+			}),
+			asCommand(func(g graph) *cobra.Command {
+				return newStateCmd(lazy[stateCopyParams](g, copyModules()...))
 			}),
 			asCommand(func(g graph) *cobra.Command {
 				return newGenOASCmd(lazy[genOASParams](g, serverModules(g)...))

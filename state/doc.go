@@ -38,6 +38,11 @@
 // store concern at all: it belongs to whatever implements it, decoupled
 // from state.
 //
+// `tempogate state copy` moves an installation from SQLite to Postgres
+// below the contract too: sqlite.Store.DumpTables reads every row in one
+// snapshot and postgres.Store.Import writes them in one transaction,
+// refusing any table or column the two schemas do not share.
+//
 // The method docs on each interface state its behaviour; the rules below
 // apply to all of them.
 //
