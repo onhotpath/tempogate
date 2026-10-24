@@ -155,6 +155,7 @@ jobs:
 
       # Images are pre-built (and cached) above; this only runs the tests,
       # picking them up via the E2E_*_IMAGE defaults the Makefile passes.
+      # Includes TestMultiReplica: two replicas on one PostgreSQL.
       - name: Run SSO + CLI loopback + device-flow e2e
         run: make test-e2e-go
 

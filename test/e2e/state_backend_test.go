@@ -21,7 +21,9 @@ import (
 // stack that calls withStateBackend a PostgreSQL of its own on the test
 // network instead: `make test-e2e-postgres-go` runs the CLI login, device
 // login, refresh lifecycle and integration-key tests that way, one replica
-// each, unchanged otherwise.
+// each, unchanged otherwise. TestMultiReplica runs two replicas on one
+// PostgreSQL whatever this says (withPostgresState), so it is part of the
+// default run.
 const stateDriverEnv = "E2E_STATE_DRIVER"
 
 var statePostgresImage = imageOr("E2E_STATE_POSTGRES_IMAGE", "postgres:18-alpine@sha256:83148c0bc09eac4d598b70a61e1404d0212b76c95c504bfd6c81a4c59ec91792")
@@ -41,14 +43,22 @@ func skipOnPostgres(t *testing.T) {
 var stateDBs sync.Map
 
 // withStateBackend points env at the state store E2E_STATE_DRIVER selects.
-// For postgres it starts the network's database on first use, owned by
-// owner, as alias tempogate-db; the plain-connection opt-in is needed
-// because the database is a container on the private test network.
+// For postgres it starts the network's database on first use (see
+// withPostgresState).
 func withStateBackend(ctx context.Context, owner *testing.T, netName string, env map[string]string) {
 	owner.Helper()
-	if !onPostgres() {
-		return
+	if onPostgres() {
+		withPostgresState(ctx, owner, netName, env)
 	}
+}
+
+// withPostgresState points env at the network's PostgreSQL state database,
+// whatever E2E_STATE_DRIVER says, starting it on first use, owned by owner,
+// as alias tempogate-db. Every tempogate on netName that calls it shares the
+// one database. The plain-connection opt-in is needed because the database
+// is a container on the private test network.
+func withPostgresState(ctx context.Context, owner *testing.T, netName string, env map[string]string) {
+	owner.Helper()
 	if _, started := stateDBs.Load(netName); !started {
 		db, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
