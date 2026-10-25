@@ -18,9 +18,11 @@ stop_forward() {
 cleanup() { stop_forward; rm -rf "$work"; }
 trap cleanup EXIT
 k() { kubectl --context "$CONTEXT" "$@"; }
+# Launch kubectl directly: backgrounding k() tracks a shell wrapper whose
+# termination leaves kubectl running and holding the local port.
 start_forward() {
   stop_forward
-  k port-forward "service/$release" 18000:8000 >"$work/public-forward.log" 2>&1 &
+  kubectl --context "$CONTEXT" port-forward "service/$release" 18000:8000 >"$work/public-forward.log" 2>&1 &
   forward_pid=$!
   curl --retry 30 --retry-delay 1 --retry-all-errors --max-time 2 -fsS \
     http://127.0.0.1:18000/readyz > /dev/null 2>"$work/ready.log" || {
@@ -32,7 +34,7 @@ start_forward() {
 # admin port. Avoid printing credentials or the minted JWT into CI logs.
 admin_request() {
   local method="$1" path="$2"; shift 2
-  k port-forward "service/$release-admin" 18081:8081 >"$work/admin-forward.log" 2>&1 &
+  kubectl --context "$CONTEXT" port-forward "service/$release-admin" 18081:8081 >"$work/admin-forward.log" 2>&1 &
   local admin_pid=$!
   # Wait for the listener without retrying POST, which could mint twice.
   local ready=0
