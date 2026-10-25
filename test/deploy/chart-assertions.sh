@@ -218,7 +218,7 @@ echo "==> Helm runtime tests"
 expect_eq "test hook cleans up successful pods" "before-hook-creation,hook-succeeded" \
   "$(q Pod '.metadata.annotations."helm.sh/hook-delete-policy"')"
 expect_eq "runtime test respects issuer sub-paths" 'prefix="/idp"' \
-  "$(render --set oidc.issuer=https://example.com/idp/ | yq 'select(.kind == "Pod") | .spec.containers[0].args[0]' | rg '^prefix=')"
+  "$(render --set oidc.issuer=https://example.com/idp/ | yq 'select(.kind == "Pod") | .spec.containers[0].args[0]' | grep '^prefix=')"
 
 if [ "$failures" -ne 0 ]; then
   echo "FAIL: $failures chart assertion(s) failed" >&2

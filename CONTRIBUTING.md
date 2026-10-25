@@ -48,7 +48,7 @@ make test-deploy-compose  # docker compose config, then migrate and boot the com
 CI downloads the newest stable chart release no newer than the candidate and installs it with its published default image.
 It seeds an integration key, upgrades to the candidate chart and image, and verifies that signing keys, integration-key metadata, the SQLite PVC, and the session-signing Secret survive.
 PostgreSQL upgrades run when the baseline chart supports PostgreSQL; fresh PostgreSQL install and rolling-update tests always run.
-The baseline download requires an authenticated `gh` CLI and `jq`; cluster tests also use `curl`, `openssl`, `python3`, and `rg`.
+The baseline download requires an authenticated `gh` CLI and `jq`; cluster tests also use `curl`, `openssl`, and `python3`.
 `helm test` checks health, database readiness, OIDC discovery, and nonempty JWKS, including issuer sub-paths.
 
 ### Bumping Go

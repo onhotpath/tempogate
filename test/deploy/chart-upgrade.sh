@@ -37,7 +37,7 @@ admin_request() {
   # Wait for the listener without retrying POST, which could mint twice.
   local ready=0
   for _ in $(seq 1 50); do
-    if rg -q 'Forwarding from 127.0.0.1:' "$work/admin-forward.log"; then ready=1; break; fi
+    if grep -Fq 'Forwarding from 127.0.0.1:' "$work/admin-forward.log"; then ready=1; break; fi
     if ! kill -0 "$admin_pid" 2>/dev/null; then break; fi
     sleep 0.1
   done
