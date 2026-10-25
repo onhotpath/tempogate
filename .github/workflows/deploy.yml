@@ -1,7 +1,7 @@
 name: deploy
 
 # Deployment artifacts, checked on every change so they cannot drift from the
-# binary between releases (chart-release.yml only lints at publish time):
+# binary between releases, and reused as the chart-release publication gate:
 #   chart:   helm lint --strict + kubeconform -strict on the rendered chart
 #            for several value sets, and the static chart assertions;
 #   kind:    install the chart into a kind cluster with an image built from
@@ -18,6 +18,12 @@ name: deploy
 # helm and kubectl are downloaded below and verified against pinned SHA-256s.
 
 on:
+  workflow_call:
+    inputs:
+      test-published-default:
+        description: Test the chart's published default image instead of a source build
+        type: boolean
+        default: false
   push:
     branches: [main]
     # Same as ci.yml: the generated Homebrew cask PR touches only Casks/**.
@@ -30,7 +36,7 @@ permissions:
 # Same as ci.yml: a new push to a PR supersedes its previous run; pushes to
 # main each get their own group (run_id), so every main commit runs in full.
 concurrency:
-  group: deploy-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-deploy-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Caches are restored on every run but written only from pushes to main, so
@@ -96,7 +102,7 @@ jobs:
   kind:
     name: kind install + upgrade + helm test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -132,6 +138,7 @@ jobs:
       # the compose job, which builds the same image; only this job exports
       # it, and only on main.
       - name: Build tempogate image
+        if: ${{ !inputs.test-published-default }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -141,7 +148,21 @@ jobs:
           cache-from: type=gha,scope=deploy-tempogate
           cache-to: ${{ env.SAVE_CACHE == 'true' && 'type=gha,mode=max,scope=deploy-tempogate' || '' }}
 
-      - name: kind smoke (install, migrate, Ready, upgrade, helm test; SQLite and HA on Postgres)
+      - name: Use the chart's published default image for release validation
+        if: inputs.test-published-default
+        run: |
+          image="$(.bin/yq -r '.image.repository' charts/tempogate/values.yaml):$(.bin/yq -r '.appVersion' charts/tempogate/Chart.yaml)"
+          docker pull "$image"
+          docker tag "$image" "$DEPLOY_IMAGE"
+
+      - name: Download latest published chart baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PATH="$PWD/.bin:$PATH" test/deploy/released-chart.sh .chart-baseline
+
+      - name: kind smoke (fresh installs and released-chart upgrades)
+        env:
+          BASELINE_CHART: ${{ github.workspace }}/.chart-baseline/tempogate
         run: make test-deploy-kind SKIP_BUILD=1 DEPLOY_IMAGE="$DEPLOY_IMAGE"
 
   compose:

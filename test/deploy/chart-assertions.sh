@@ -179,6 +179,47 @@ expect_eq "authz.defaultPermissions renders as OIDC_AUTHZ_DEFAULT_PERMISSIONS" "
 expect_eq "no OIDC_AUTHZ_* key is rendered by default" "0" \
   "$(yq 'select(.kind == "ConfigMap") | .data | keys | map(select(test("^OIDC_AUTHZ_"))) | length' <<<"$manifests")"
 
+echo "==> public routing and admin isolation"
+expect_render_error "admin Service requires a token Secret" "admin.tokenSha256SecretRef" --set service.admin.enabled=true
+expect_eq "admin Service is absent by default" "tempogate" "$(q Service .metadata.name)"
+expect_eq "admin listener is not exposed by default" "null" "$(q ConfigMap .data.ADMIN_LISTENER)"
+routed=$(render --namespace routing-test --set fullnameOverride=custom-gate --set service.port=9000 \
+  --set service.admin.enabled=true --set service.admin.port=9001 \
+  --set admin.tokenSha256SecretRef.name=admin --set admin.tokenSha256SecretRef.key=hash \
+  --set ingress.enabled=true --set httpRoute.enabled=true)
+rq() { yq "select(.kind == \"$1\")" <<<"$routed" | yq "$2"; }
+expect_eq "public Service exposes only the public port" "9000:http" \
+  "$(rq Service 'select(.metadata.name == "custom-gate") | .spec.ports[] | (.port | tostring) + ":" + .targetPort')"
+expect_eq "admin Service is separate and internal" "ClusterIP:9001:admin" \
+  "$(rq Service 'select(.metadata.name == "custom-gate-admin") | .spec.type + ":" + (.spec.ports[0].port | tostring) + ":" + .spec.ports[0].targetPort')"
+expect_eq "Ingress routes only to the public Service" "custom-gate:9000" \
+  "$(rq Ingress '.spec.rules[].http.paths[].backend.service | .name + ":" + (.port.number | tostring)')"
+expect_eq "HTTPRoute routes only to the public Service" "custom-gate:9000" \
+  "$(rq HTTPRoute '.spec.rules[].backendRefs[] | .name + ":" + (.port | tostring)')"
+expect_eq "admin listener binds the configured port" "0.0.0.0:9001" "$(rq ConfigMap .data.ADMIN_LISTENER)"
+expect_eq "admin allowed hosts follow the Service name and namespace" \
+  "custom-gate-admin:9001,custom-gate-admin.routing-test:9001,custom-gate-admin.routing-test.svc:9001,custom-gate-admin.routing-test.svc.cluster.local:9001,127.0.0.1,localhost,[::1]" \
+  "$(rq ConfigMap .data.ADMIN_ALLOWED_HOSTS)"
+
+echo "==> configuration changes trigger rollouts"
+checksum=$(q Deployment '.spec.template.metadata.annotations."checksum/config"')
+changed=$(render --set log.level=debug | yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations."checksum/config"')
+if [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] && [ "$checksum" != "$changed" ]; then
+  pass "ConfigMap change updates the pod checksum"
+else
+  fail "ConfigMap change must update the pod checksum"
+fi
+expect_eq "unchanged configuration has a stable checksum" "$checksum" \
+  "$(render | yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations."checksum/config"')"
+expect_eq "non-config values leave the checksum stable" "$checksum" \
+  "$(render --set podLabels.test=value | yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations."checksum/config"')"
+
+echo "==> Helm runtime tests"
+expect_eq "test hook cleans up successful pods" "before-hook-creation,hook-succeeded" \
+  "$(q Pod '.metadata.annotations."helm.sh/hook-delete-policy"')"
+expect_eq "runtime test respects issuer sub-paths" 'prefix="/idp"' \
+  "$(render --set oidc.issuer=https://example.com/idp/ | yq 'select(.kind == "Pod") | .spec.containers[0].args[0]' | grep '^prefix=')"
+
 if [ "$failures" -ne 0 ]; then
   echo "FAIL: $failures chart assertion(s) failed" >&2
   exit 1

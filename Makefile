@@ -182,7 +182,7 @@ lint-chart: kubeconform ## helm lint --strict + kubeconform -strict on the rende
 test-chart: yq ## static assertions on the rendered Helm chart (helm + yq, no cluster)
 	$(DEPLOY_PATH) test/deploy/chart-assertions.sh
 
-test-deploy-kind: kind ## helm template + install into a throwaway kind cluster
+test-deploy-kind: kind yq ## helm template + install into a throwaway kind cluster
 	$(DEPLOY_PATH) IMAGE=$(DEPLOY_IMAGE) CLUSTER=$(KIND_CLUSTER) test/deploy/kind-smoke.sh
 
 test-deploy-compose: ## docker-compose example: config renders, migrate exits 0, tempogate boots

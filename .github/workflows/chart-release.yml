@@ -42,7 +42,16 @@ env:
   OCI_REPO: oci://ghcr.io/onhotpath/charts
 
 jobs:
+  validate:
+    name: deployment release gate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      test-published-default: true
+
   publish:
+    needs: validate
     name: package + push (GHCR OCI) + GitHub Release
     runs-on: ubuntu-latest
     steps:

@@ -16,6 +16,8 @@
 #   KIND_CONFIG optional kind cluster config, e.g. one enabling the
 #               KubeletInUserNamespace feature gate when Docker itself runs
 #               in an unprivileged container (no /dev/kmsg)
+#   BASELINE_CHART optional unpacked released chart; enables state-preserving
+#                  release-to-candidate upgrades after the fresh installs
 set -euo pipefail
 
 IMAGE="${IMAGE:-tempogate:smoke}"
@@ -59,7 +61,7 @@ cleanup() {
   if [ "$status" -ne 0 ]; then
     echo "==> diagnostics" >&2
     kubectl --context "$kubectx" get all,pvc -o wide >&2 || true
-    for r in "$RELEASE" "$PG_RELEASE"; do
+    for r in "$RELEASE" "$PG_RELEASE" tempogate-upgrade-sqlite tempogate-upgrade-postgres; do
       kubectl --context "$kubectx" describe pod -l "app.kubernetes.io/instance=$r" >&2 || true
       kubectl --context "$kubectx" logs -l "app.kubernetes.io/instance=$r" -c migrate --prefix --tail=50 >&2 || true
       kubectl --context "$kubectx" logs -l "app.kubernetes.io/instance=$r" -c tempogate --prefix --tail=50 >&2 || true
@@ -141,6 +143,14 @@ fi
 echo "==> helm test"
 helm test "$RELEASE" --kube-context "$kubectx" --timeout "$TIMEOUT" --logs
 
+echo "==> Helm runtime tests with an issuer sub-path"
+helm upgrade "$RELEASE" "$CHART" --kube-context "$kubectx" \
+  --values "$VALUES" "${set_image[@]}" \
+  --set oidc.issuer=http://127.0.0.1:8000/idp \
+  --set auth.clients=tempogate-device-ui:http://127.0.0.1/idp/device/sso-callback \
+  --wait --timeout "$TIMEOUT"
+helm test "$RELEASE" --kube-context "$kubectx" --timeout "$TIMEOUT" --logs
+
 echo "==> HA mode: uninstall the SQLite release and start Postgres"
 helm uninstall "$RELEASE" --kube-context "$kubectx" --wait --timeout "$TIMEOUT"
 # Demo-only credentials. sslmode=disable needs the chart's dev-only
@@ -187,5 +197,9 @@ fi
 
 echo "==> helm test (HA mode)"
 helm test "$PG_RELEASE" --kube-context "$kubectx" --timeout "$TIMEOUT" --logs
+
+if [ -n "${BASELINE_CHART:-}" ]; then
+  CONTEXT="$kubectx" IMAGE="$IMAGE" "$ROOT/test/deploy/chart-upgrade.sh"
+fi
 
 echo "PASS: chart installs, upgrades and passes helm test in kind, on SQLite and on Postgres with two replicas"
