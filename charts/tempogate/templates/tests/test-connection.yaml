@@ -6,6 +6,7 @@ metadata:
     {{- include "tempogate.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   automountServiceAccountToken: false
   securityContext:
@@ -25,9 +26,17 @@ spec:
         capabilities:
           drop:
             - ALL
-      command: ['wget']
+      command: ['/bin/sh', '-ec']
       args:
-        - '-q'
-        - '-O-'
-        - 'http://{{ include "tempogate.fullname" . }}:{{ .Values.service.port }}/healthz'
+        - |
+          base={{ printf "http://%s:%v" (include "tempogate.fullname" .) .Values.service.port | quote }}
+          prefix={{ (urlParse .Values.oidc.issuer).path | default "" | trimSuffix "/" | quote }}
+          wget -q -O- "$base/healthz"
+          wget -q -O- "$base/readyz"
+          discovery=$(wget -q -O- "$base$prefix/.well-known/openid-configuration")
+          printf '%s' "$discovery" | grep -q '"issuer"'
+          printf '%s' "$discovery" | grep -q '"jwks_uri"'
+          jwks=$(wget -q -O- "$base$prefix/.well-known/jwks.json")
+          printf '%s' "$jwks" | grep -q '"kid"'
+          printf '%s' "$jwks" | grep -q '"n"'
   restartPolicy: Never

@@ -171,6 +171,15 @@ workflow is
   `chart-v<version>` Release already exists. Fix a bad chart release by
   bumping to the next patch, exactly as for the binary.
 
+### Automated chart release gate
+
+Both release triggers run the reusable `deploy` workflow before publication.
+Lint, Kubernetes schema validation, render assertions, fresh installs, upgrades from the newest eligible published chart, Helm runtime tests, and compose checks must all pass for the exact release commit.
+A failed baseline download or upgrade blocks publication.
+The baseline uses its published default application image.
+PR checks upgrade to an image built from the candidate commit; the release gate instead uses the candidate chart's published `appVersion` image, matching what users install.
+Publish the intended application image and set `appVersion` before releasing a chart that needs new binary features.
+
 ### One-time registry setup
 
 The first push creates `ghcr.io/onhotpath/charts/tempogate` as a **private**
