@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -47,6 +48,44 @@ func (e verboseError) Format(s fmt.State, _ rune) {
 type panicError struct{}
 
 func (*panicError) Error() string { panic("boom") }
+
+type valuePanicError struct{}
+
+func (valuePanicError) Error() string { panic("boom") }
+
+// nilPointerError is the usual typed nil: a value-receiver Error on a nil
+// pointer.
+type nilPointerError struct{ msg string }
+
+func (e nilPointerError) Error() string { return e.msg }
+
+// loopError's Unwrap returns next, or itself when next is nil.
+type loopError struct {
+	msg  string
+	next error
+}
+
+func (e *loopError) Error() string { return e.msg }
+func (e *loopError) Unwrap() error {
+	if e.next == nil {
+		return e
+	}
+	return e.next
+}
+
+// joinLoop is a join whose Unwrap reaches back to itself; its Error does not
+// follow the loop, as errors.Join's would.
+type joinLoop struct{ errs []error }
+
+func (e *joinLoop) Error() string   { return "a\nb" }
+func (e *joinLoop) Unwrap() []error { return e.errs }
+
+// sliceError has a slice as its dynamic type, so == on it panics; its Unwrap
+// returns itself, which only the visit budget can stop.
+type sliceError []string
+
+func (e sliceError) Error() string { return strings.Join(e, ",") }
+func (e sliceError) Unwrap() error { return e }
 
 // multiError has go.uber.org/multierr's shape.
 type multiError []error
@@ -168,10 +207,139 @@ func TestPretty_InlineFields(t *testing.T) {
 }
 
 func TestPretty_PanickingErrorIsRecovered(t *testing.T) {
+	for name, err := range map[string]error{
+		"pointer receiver": &panicError{},
+		"value receiver":   valuePanicError{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			z, buf := prettyLogger(false)
+			z.Error("stop", zap.Error(err))
+			assert.Equal(t, "15:04:05.006 ERROR stop\n  error: PANIC=boom\n", buf.String())
+		})
+	}
+}
+
+// A typed nil reads as <nil>, as in zap's JSON.
+func TestPretty_TypedNilError(t *testing.T) {
+	for name, err := range map[string]error{
+		"value receiver":   (*nilPointerError)(nil),
+		"pointer receiver": (*panicError)(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			z, buf := prettyLogger(false)
+			z.Error("stop", zap.Error(err))
+			assert.Equal(t, "15:04:05.006 ERROR stop\n  error: <nil>\n", buf.String())
+		})
+	}
+}
+
+func TestPretty_CyclicErrors(t *testing.T) {
+	self := &loopError{msg: "loop"}
+	a := &loopError{msg: "a: b"}
+	b := &loopError{msg: "b", next: a}
+	a.next = b
+	join := &joinLoop{}
+	join.errs = []error{errors.New("a"), &loopError{msg: "b", next: join}}
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"self":    {self, "  error: loop\n    ↳ … (cycle)\n"},
+		"2-node":  {a, "  error: a\n    ↳ b\n      ↳ … (cycle)\n"},
+		"join":    {join, "  error:\n    ↳ a\n    ↳ b\n      ↳ … (cycle)\n"},
+		"slice":   {sliceError{"x"}, ""},
+		"wrapped": {fmt.Errorf("ctx: %w", sliceError{"x"}), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			z, buf := prettyLogger(false)
+			z.Error("stop", zap.Error(tc.err))
+			if tc.want != "" {
+				assert.Equal(t, "15:04:05.006 ERROR stop\n"+tc.want, buf.String())
+			}
+			assert.LessOrEqual(t, strings.Count(buf.String(), "\n"), maxErrorNodes+2)
+		})
+	}
+}
+
+// A chain deeper than the visit budget ends in a marker.
+func TestPretty_DeepChainIsTruncated(t *testing.T) {
+	err := errors.New("bottom")
+	for i := range 10000 {
+		err = fmt.Errorf("level %d: %w", i, err)
+	}
 	z, buf := prettyLogger(false)
-	var err *panicError
 	z.Error("stop", zap.Error(err))
-	assert.Equal(t, "15:04:05.006 ERROR stop\n  error: PANIC=boom\n", buf.String())
+
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	require.Len(t, lines, maxErrorNodes+2)
+	assert.Equal(t, "  error: level 9999", lines[1])
+	assert.Equal(t, strings.Repeat("  ", maxErrorNodes+1)+"↳ … (truncated)", lines[len(lines)-1])
+	assert.NotContains(t, buf.String(), "bottom")
+}
+
+// Only the separator before a cause's text is trimmed; an error's own text is
+// never otherwise changed.
+func TestPretty_OwnTextIsKept(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Error("stop", zap.Error(errors.New("--config is required:"))) //nolint:revive // the text under test
+	z.Error("stop", zap.Error(fmt.Errorf("- ctx -; %w", errors.New("-cause-"))))
+	assert.Equal(t, "15:04:05.006 ERROR stop\n  error: --config is required:\n"+
+		"15:04:05.006 ERROR stop\n  error: - ctx -\n    ↳ -cause-\n", buf.String())
+}
+
+// Nothing a logged value carries reaches the terminal as a control
+// character, and no newline outside a block starts a line of its own.
+func TestPretty_EscapesControlCharacters(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Named("n\x1b[2J").Error("msg\x1b[2J\nfake 15:04:05.006 INFO line\r\x7f\u009b",
+		zap.String("k\x1b\n", "v\x1b[2J\x9b"),
+		zap.Strings("list", []string{"\x1b[2J\x7f\u009b"}),
+		zap.Error(errors.New("bad\x1b[2J\nsecond\tline")),
+		zap.String("block", "one\x1b[2J\ntwo\x07"),
+	)
+	out := buf.String()
+	assert.Equal(t, `15:04:05.006 ERROR [n\x1b[2J] msg\x1b[2J\nfake 15:04:05.006 INFO line\r\x7f\x9b `+
+		`k\x1b\n="v\x1b[2J\x9b" list=["\u001b[2J\u007f\u009b"]`+"\n"+
+		"  error: bad\\x1b[2J\n    second\tline\n"+
+		"  block:\n    one\\x1b[2J\n    two\\x07\n", out)
+	for _, r := range out {
+		assert.False(t, r != '\n' && r != '\t' && isControl(r, false), "control %U in %q", r, out)
+	}
+}
+
+func TestPretty_ErrorsList(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Error("stop", zap.Errors("errors", []error{
+		verboseError{cause: errors.New("permission denied")},
+		nil,
+		errors.New("c"),
+	}))
+	assert.Equal(t, "15:04:05.006 ERROR stop\n"+
+		"  errors:\n"+
+		"    [0] could not build\n"+
+		"      ↳ permission denied\n"+
+		"    [2] c\n", buf.String())
+}
+
+type withError struct{ err error }
+
+func (o withError) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddString("op", "x")
+	return enc.AddArray("errs", zapcore.ArrayMarshalerFunc(func(arr zapcore.ArrayEncoder) error {
+		return arr.AppendObject(zapcore.ObjectMarshalerFunc(func(enc zapcore.ObjectEncoder) error {
+			zap.Error(o.err).AddTo(enc)
+			return nil
+		}))
+	}))
+}
+
+// An error nested in an object shows its plain text, with no errorVerbose.
+func TestPretty_NestedErrorHasNoVerbose(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Error("stop", zap.Object("obj", withError{verboseError{cause: errors.New("denied")}}))
+	assert.Equal(t, `15:04:05.006 ERROR stop obj={"errs":[{"error":"could not build: denied"}],"op":"x"}`+"\n",
+		buf.String())
 }
 
 func TestPretty_Color(t *testing.T) {
@@ -202,4 +370,31 @@ func TestColorEnabled(t *testing.T) {
 
 	t.Setenv("NO_COLOR", "1")
 	assert.False(t, colorEnabled(true))
+}
+
+// A raw byte that is not UTF-8 (such as an 8-bit CSI) is escaped too.
+func TestPretty_EscapesInvalidUTF8(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Error("a\x9b2J", zap.String("k", "v\x9b"), zap.Error(errors.New("e\x9b")))
+	assert.Equal(t, `15:04:05.006 ERROR a\x9b2J k="v\x9b"`+"\n"+`  error: e\x9b`+"\n", buf.String())
+}
+
+// panicUnwrapError's Unwrap panics; its text is still shown.
+type panicUnwrapError struct{}
+
+func (panicUnwrapError) Error() string { return "outer" }
+func (panicUnwrapError) Unwrap() error { panic("boom") }
+
+// customError wraps a cause it does not quote.
+type customError struct{ cause error }
+
+func (customError) Error() string   { return "request failed" }
+func (e customError) Unwrap() error { return e.cause }
+
+func TestPretty_UnusualWrappers(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Error("stop", zap.Error(panicUnwrapError{}))
+	z.Error("stop", zap.Error(customError{cause: errors.New("timeout")}))
+	assert.Equal(t, "15:04:05.006 ERROR stop\n  error: outer\n"+
+		"15:04:05.006 ERROR stop\n  error: request failed\n    ↳ timeout\n", buf.String())
 }

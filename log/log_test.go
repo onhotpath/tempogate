@@ -61,15 +61,36 @@ func TestNew_RejectsBadFormat(t *testing.T) {
 }
 
 func TestParseFormat(t *testing.T) {
-	for _, s := range []string{"auto", "json", "pretty"} {
-		f, err := ParseFormat(s)
-		require.NoError(t, err)
-		assert.Equal(t, Format(s), f)
+	for _, tc := range []struct {
+		in   string
+		want Format
+	}{
+		{"auto", FormatAuto}, {"json", FormatJSON}, {"pretty", FormatPretty},
+		{"", FormatAuto}, {"JSON", FormatJSON}, {" Pretty\n", FormatPretty},
+	} {
+		f, err := ParseFormat(tc.in)
+		require.NoError(t, err, tc.in)
+		assert.Equal(t, tc.want, f, tc.in)
 	}
-	for _, s := range []string{"", "console", "JSON", " json"} {
+	for _, s := range []string{"console", "js on"} {
 		_, err := ParseFormat(s)
 		assert.Error(t, err, s)
 	}
+}
+
+func TestParseLevel(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Level
+	}{
+		{"debug", "debug"}, {"INFO", "info"}, {" Warn ", "warn"}, {"", "info"},
+	} {
+		l, err := ParseLevel(tc.in)
+		require.NoError(t, err, tc.in)
+		assert.Equal(t, tc.want, l, tc.in)
+	}
+	_, err := ParseLevel("bogus")
+	assert.EqualError(t, err, `LOG_LEVEL must be "debug", "info", "warn" or "error", got "bogus"`)
 }
 
 func TestNew_JSONShape(t *testing.T) {

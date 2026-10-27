@@ -752,13 +752,41 @@ func (s *ConfigSuite) TestNew() {
 	}
 }
 
-// TestRejectsUnknownLogFormat: a typo in LOG_FORMAT fails the load rather
-// than silently picking a format.
-func (s *ConfigSuite) TestRejectsUnknownLogFormat() {
-	s.T().Setenv("LOG_FORMAT", "console")
+// TestRejectsInvalidLogConfig: a typo in LOG_LEVEL or LOG_FORMAT fails the
+// load with a message naming the valid values, rather than silently picking
+// one.
+func (s *ConfigSuite) TestRejectsInvalidLogConfig() {
+	for env, want := range map[string]string{
+		"LOG_FORMAT": `invalid config: LOG_FORMAT must be "auto", "json" or "pretty", got "console"`,
+		"LOG_LEVEL":  `invalid config: LOG_LEVEL must be "debug", "info", "warn" or "error", got "console"`,
+	} {
+		s.Run(env, func() {
+			s.T().Setenv(env, "console")
+			_, err := New(Params{})
+			s.Require().EqualError(err, want)
+		})
+	}
+}
 
-	_, err := New(Params{})
-	s.Require().ErrorContains(err, `LOG_FORMAT must be "auto", "json" or "pretty", got "console"`)
+// TestNormalizesLogConfig: the level and format are read as zap reads
+// LOG_LEVEL, ignoring case and surrounding space, and empty is the default.
+func (s *ConfigSuite) TestNormalizesLogConfig() {
+	for _, tc := range []struct {
+		level, format string
+		want          LogConfig
+	}{
+		{"", "", LogConfig{Level: "info", Format: log.FormatAuto, Requests: true}},
+		{" DEBUG ", "JSON", LogConfig{Level: "debug", Format: log.FormatJSON, Requests: true}},
+		{"Warn", " Pretty\t", LogConfig{Level: "warn", Format: log.FormatPretty, Requests: true}},
+	} {
+		s.Run(tc.level+"/"+tc.format, func() {
+			s.T().Setenv("LOG_LEVEL", tc.level)
+			s.T().Setenv("LOG_FORMAT", tc.format)
+			got, err := New(Params{})
+			s.Require().NoError(err)
+			s.Equal(tc.want, got.Config.Log)
+		})
+	}
 }
 
 func (s *ConfigSuite) TestKeysEncryptionKeyFromEnv() {

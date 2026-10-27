@@ -56,12 +56,27 @@ func New(p Params) (Loaded, error) {
 	if err != nil {
 		return Loaded{}, err
 	}
-	// Checked here rather than left to the logger: ferry's own refusal of a
-	// text value never quotes it or names the valid ones.
-	if _, err := log.ParseFormat(string(c.Log.Format)); err != nil {
-		return Loaded{}, err
+	if err := c.Log.normalize(); err != nil {
+		return Loaded{}, fmt.Errorf("invalid config: %w", err)
 	}
 	return Loaded{Config: c, Source: src}, nil
+}
+
+// normalize checks the level and format and stores their canonical names.
+// It runs here rather than in the logger so the message reads as a config
+// error, and rather than in a TextUnmarshaler because ferry's own refusal of
+// a text value never quotes it or names the valid ones.
+func (l *LogConfig) normalize() error {
+	level, err := log.ParseLevel(l.Level)
+	if err != nil {
+		return err
+	}
+	format, err := log.ParseFormat(string(l.Format))
+	if err != nil {
+		return err
+	}
+	l.Level, l.Format = string(level), format
+	return nil
 }
 
 type logSourceParams struct {

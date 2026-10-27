@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/mattn/go-isatty"
 	"go.uber.org/fx"
@@ -32,14 +33,35 @@ const (
 	FormatPretty Format = "pretty"
 )
 
-// ParseFormat returns the Format s names, or an error naming the valid ones.
+// ParseFormat returns the Format s names, ignoring case and surrounding
+// space, or an error naming the valid ones. Empty is FormatAuto.
 func ParseFormat(s string) (Format, error) {
-	switch f := Format(s); f {
+	switch f := Format(strings.ToLower(strings.TrimSpace(s))); f {
+	case "":
+		return FormatAuto, nil
 	case FormatAuto, FormatJSON, FormatPretty:
 		return f, nil
 	default:
 		return "", fmt.Errorf("LOG_FORMAT must be %q, %q or %q, got %q", FormatAuto, FormatJSON, FormatPretty, s)
 	}
+}
+
+// ParseLevel returns the Level s names, ignoring case and surrounding space,
+// or an error naming the valid ones. Empty is info, as in zap.
+func ParseLevel(s string) (Level, error) {
+	lvl, err := parseLevel(s)
+	if err != nil {
+		return "", err
+	}
+	return Level(lvl.String()), nil
+}
+
+func parseLevel(s string) (zapcore.Level, error) {
+	lvl, err := zapcore.ParseLevel(strings.ToLower(strings.TrimSpace(s)))
+	if err != nil {
+		return lvl, fmt.Errorf("LOG_LEVEL must be %q, %q, %q or %q, got %q", "debug", "info", "warn", "error", s)
+	}
+	return lvl, nil
 }
 
 type Params struct {
@@ -59,15 +81,13 @@ type Result struct {
 }
 
 func New(p Params) (Result, error) {
-	lvl, err := zapcore.ParseLevel(string(p.Level))
+	lvl, err := parseLevel(string(p.Level))
 	if err != nil {
 		return Result{}, err
 	}
-	format := FormatAuto
-	if p.Format != "" {
-		if format, err = ParseFormat(string(p.Format)); err != nil {
-			return Result{}, err
-		}
+	format, err := ParseFormat(string(p.Format))
+	if err != nil {
+		return Result{}, err
 	}
 
 	sink := p.Sink

@@ -5,11 +5,11 @@
 package app
 
 import (
+	"os"
 	"time"
 
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
-	"go.uber.org/zap"
 
 	"github.com/onhotpath/tempogate/cmd"
 	"github.com/onhotpath/tempogate/config"
@@ -36,6 +36,7 @@ func New(opts ...Option) fx.Option {
 	for _, o := range opts {
 		o(cfg)
 	}
+	boot := log.NewBootLogger(os.Stderr, "tempogate")
 	base := []fx.Option{
 		fx.Supply(config.ProcessPath()),
 		// The HTTP servers bound their own drain with SERVER_SHUTDOWN_TIMEOUT
@@ -45,7 +46,9 @@ func New(opts ...Option) fx.Option {
 		fx.StopTimeout(stopTimeout),
 		config.Fx(),
 		log.Fx(),
-		fx.WithLogger(func(l *zap.Logger) fxevent.Logger { return log.FxLogger(l) }),
+		// The fx logger must not depend on the graph: see log.BootLogger.
+		fx.WithLogger(func() fxevent.Logger { return boot }),
+		fx.Invoke(boot.Use),
 		cmd.Fx(),
 		cmd.CLICommandsFx(),
 	}

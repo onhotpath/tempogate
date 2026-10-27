@@ -94,8 +94,8 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. A command that fails, such as `serve` at startup, logs one `command failed` line with the root cause; `debug` adds the full error chain. |
-| `LOG_FORMAT` | `auto` | `json` \| `pretty` \| `auto`. `json` writes one JSON object per line (`time` in ISO 8601, `level`, `msg`, `caller` where known, then the fields), for log collectors. `pretty` is for a person at a terminal: one short line per entry, with each error, stack trace and multi-line field rendered as an indented block under it; the level is coloured unless `NO_COLOR` is set. `auto` picks `pretty` when stdout is a terminal and `json` otherwise, so containers and pipes get JSON. Any other value stops the process at startup. |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`, in any case. A command that fails, such as `serve` at startup, logs one `command failed` line: `error` is the root cause, after any context the command added, and `in` names what was being built when it failed (such as `servercmd.stateStore > *sqlite.Store`); `debug` adds the full error chain as `errorChain`. |
+| `LOG_FORMAT` | `auto` | `json` \| `pretty` \| `auto`. `json` writes one JSON object per line (`time` in ISO 8601, `level`, `msg`, `caller` where known, then the fields), for log collectors. `pretty` is for a person at a terminal: one short line per entry, with each error, stack trace and multi-line field rendered as an indented block under it; the level is coloured unless `NO_COLOR` is set. `auto` picks `pretty` when stdout is a terminal and `json` otherwise, so containers and pipes get JSON. Case is ignored and empty means `auto`. Any other value, like an invalid `LOG_LEVEL`, stops the process at startup with one line on stderr. |
 | `LOG_REQUESTS` | `true` | One structured access-log line per HTTP request on both listeners; see [Request logs](operations.md#request-logs). `false` turns it off, e.g. when an ingress or mesh already logs every request. |
 
 ### Tracing

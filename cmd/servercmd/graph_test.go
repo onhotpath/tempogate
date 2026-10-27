@@ -67,5 +67,5 @@ func TestFailedSubgraphLoggedOnce(t *testing.T) {
 
 	require.Equal(t, 1, logs.Len(), "logged once: %v", logs.All())
 	assert.Equal(t, "command failed", logs.All()[0].Message)
-	assert.Equal(t, map[string]any{"error": cause.Error()}, logs.All()[0].ContextMap())
+	assert.Equal(t, map[string]any{"error": cause.Error(), "in": "int"}, logs.All()[0].ContextMap())
 }

@@ -1,6 +1,13 @@
 package log
 
 import (
+	"fmt"
+	"io"
+	"reflect"
+	"regexp"
+	"strings"
+	"sync"
+
 	"go.uber.org/dig"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
@@ -11,16 +18,89 @@ func Fx() fx.Option {
 	return fx.Provide(New)
 }
 
-// Failure logs err at error level led by its root cause: a dig error's text
-// is every constructor and parameter on the path to the one that failed,
-// which buries the cause. At debug the whole chain follows as errorChain.
+// Failure logs err at error level as its summary (see summarize): a dig
+// error's text is every constructor and parameter on the path to the one that
+// failed, with file paths, which buries the cause. At debug the whole chain
+// follows as errorChain.
 func Failure(z *zap.Logger, msg string, err error) {
-	root := dig.RootCause(err)
-	fields := []zap.Field{zap.Error(root)}
-	if root != err && z.Core().Enabled(zap.DebugLevel) {
+	s := summarize(err)
+	fields := []zap.Field{zap.Error(s.err)}
+	if s.in != "" {
+		fields = append(fields, zap.String("in", s.in))
+	}
+	if s.dig && z.Core().Enabled(zap.DebugLevel) {
 		fields = append(fields, zap.NamedError("errorChain", err))
 	}
 	z.Error(msg, fields...)
+}
+
+type summary struct {
+	// err is the root cause, behind whatever err added above dig.
+	err error
+	// in is the path of types dig was building when it failed, or the
+	// function it could not call.
+	in string
+	// dig is set when err held a dig error, so err is not the whole chain.
+	dig bool
+}
+
+var digFunc = regexp.MustCompile(`function "(?:[^"]*/)?([^"/]*)"\.(\S+)`)
+
+// summarize shortens a dig error to its root cause (dig.RootCause), keeps the
+// text err adds above dig (as in fmt.Errorf("migrate: %w", err)), and names
+// where dig failed: the types it was building, outermost first, or for a
+// missing dependency of an invoked function, that function. Any other error
+// is returned as it is. The walk is bounded, so a cyclic chain cannot hang it.
+func summarize(err error) summary {
+	d := findDig(err)
+	if d == nil {
+		return summary{err: err}
+	}
+	var path []string
+	fn := ""
+	var e error = d
+	for range maxErrorNodes {
+		own, causes := unwrap(e)
+		switch {
+		case strings.HasPrefix(own, "failed to build "):
+			path = append(path, strings.TrimPrefix(own, "failed to build "))
+		case strings.HasPrefix(own, "could not build value group "):
+			path = append(path, strings.TrimPrefix(own, "could not build value group "))
+		case strings.HasPrefix(own, "missing dependencies for function "):
+			if m := digFunc.FindStringSubmatch(own); m != nil {
+				fn = m[1] + "." + m[2]
+			}
+		}
+		if len(causes) != 1 {
+			break
+		}
+		e = causes[0]
+		if _, ok := e.(dig.Error); !ok {
+			break
+		}
+	}
+	s := summary{err: e, in: strings.Join(path, " > "), dig: true}
+	if s.in == "" {
+		s.in = fn
+	}
+	if top, inner := errorText(err), errorText(d); top != inner && strings.HasSuffix(top, inner) {
+		s.err = fmt.Errorf("%s%w", strings.TrimSuffix(top, inner), e)
+	}
+	return s
+}
+
+// findDig returns the outermost dig.Error in err's tree, visiting at most
+// maxErrorNodes errors.
+func findDig(err error) dig.Error {
+	queue := []error{err}
+	for i := 0; i < len(queue) && i < maxErrorNodes; i++ {
+		if d, ok := queue[i].(dig.Error); ok {
+			return d
+		}
+		_, causes := unwrap(queue[i])
+		queue = append(queue, causes...)
+	}
+	return nil
 }
 
 // FxLoggerOption configures FxLogger.
@@ -81,34 +161,67 @@ func (l *fxLogger) LogEvent(event fxevent.Event) {
 	l.events.LogEvent(event)
 }
 
-// failed reports whether event records an error. Every such error also
-// reaches app.Err, Start or Stop, so it is logged there.
+var errorType = reflect.TypeFor[error]()
+
+// failed reports whether event records an error, in any field of type error
+// (Err on most events, StartErr on RollingBack), so an event type added to fx
+// later is covered too. Every such error also reaches app.Err, Start or Stop,
+// so it is logged there.
 func failed(event fxevent.Event) bool {
-	switch e := event.(type) {
-	case *fxevent.Supplied:
-		return e.Err != nil
-	case *fxevent.Provided:
-		return e.Err != nil
-	case *fxevent.Replaced:
-		return e.Err != nil
-	case *fxevent.Decorated:
-		return e.Err != nil
-	case *fxevent.Run:
-		return e.Err != nil
-	case *fxevent.Invoked:
-		return e.Err != nil
-	case *fxevent.OnStartExecuted:
-		return e.Err != nil
-	case *fxevent.OnStopExecuted:
-		return e.Err != nil
-	case *fxevent.RollingBack:
-		return true
-	case *fxevent.RolledBack:
-		return e.Err != nil
-	case *fxevent.Started:
-		return e.Err != nil
-	case *fxevent.Stopped:
-		return e.Err != nil
+	v := reflect.Indirect(reflect.ValueOf(event))
+	if v.Kind() != reflect.Struct {
+		return false
+	}
+	for i := range v.NumField() {
+		if f := v.Field(i); f.Type() == errorType && !f.IsNil() {
+			return true
+		}
 	}
 	return false
+}
+
+// BootLogger is the root graph's fx event logger. When the constructor given
+// to fx.WithLogger fails, fx falls back to its own console logger, which
+// prints every provide and the whole dig chain; FxLogger needs the zap logger,
+// and so a valid LOG_LEVEL and LOG_FORMAT. BootLogger depends on nothing: it
+// holds fx's events until Use hands it the zap logger, then passes them on to
+// FxLogger. If the graph fails before that, it writes only the failure, as one
+// line, to w.
+type BootLogger struct {
+	w    io.Writer
+	name string
+
+	mu   sync.Mutex
+	next fxevent.Logger
+	held []fxevent.Event
+}
+
+// NewBootLogger returns a BootLogger that prefixes its one line with name.
+func NewBootLogger(w io.Writer, name string) *BootLogger {
+	return &BootLogger{w: w, name: name}
+}
+
+// Use passes the held events, and every later one, to FxLogger(z).
+func (b *BootLogger) Use(z *zap.Logger) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.next = FxLogger(z)
+	for _, e := range b.held {
+		b.next.LogEvent(e)
+	}
+	b.held = nil
+}
+
+func (b *BootLogger) LogEvent(event fxevent.Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.next != nil {
+		b.next.LogEvent(event)
+		return
+	}
+	if e, ok := event.(*fxevent.Started); ok && e.Err != nil {
+		_, _ = fmt.Fprintf(b.w, "%s: %s\n", b.name, escapeControls(errorText(summarize(e.Err).err), false))
+		return
+	}
+	b.held = append(b.held, event)
 }
