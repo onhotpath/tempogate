@@ -47,7 +47,7 @@ scenarios=(
 failures=0
 for args in "${scenarios[@]}"; do
   label="${args:-defaults}"
-  label="${label//$ROOT\//}"
+  label="${label//"$ROOT/"/}"
   # shellcheck disable=SC2086 # word splitting of $args is intended
   if out=$(helm lint --strict "$CHART" $args 2>&1); then
     echo "ok   helm lint --strict ($label)"
