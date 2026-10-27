@@ -1,13 +1,20 @@
 package servercmd
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/onhotpath/tempogate/config"
+	"github.com/onhotpath/tempogate/log"
 )
 
 func TestCheckIssuer(t *testing.T) {
@@ -42,4 +49,23 @@ func TestCheckIssuer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFailedSubgraphLoggedOnce: a constructor failing in a subcommand's graph
+// reaches the operator as one line naming the cause. fx's own events about it
+// stay at debug, since lazy returns the error to cobra, which logs it.
+func TestFailedSubgraphLoggedOnce(t *testing.T) {
+	cause := fmt.Errorf("sqlite: create state directory: %w", os.ErrPermission)
+	core, logs := observer.New(zap.InfoLevel)
+	z := zap.New(core)
+	g := newGraph(graphParams{Config: &config.Config{}, Zap: z, Slog: slog.New(slog.DiscardHandler)})
+
+	load := lazy[int](g, fx.Provide(func() (int, error) { return 0, cause }))
+	err := load(context.Background(), func(int) error { return nil })
+	require.Error(t, err)
+	log.Failure(z, "command failed", err) // as cmd.Run does
+
+	require.Equal(t, 1, logs.Len(), "logged once: %v", logs.All())
+	assert.Equal(t, "command failed", logs.All()[0].Message)
+	assert.Equal(t, map[string]any{"error": cause.Error()}, logs.All()[0].ContextMap())
 }

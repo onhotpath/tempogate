@@ -259,6 +259,7 @@ See [docs/configuration.md](../../docs/configuration.md#admin-api).
 | `state.postgres.connMaxIdleTime` | `""` | `STATE_POSTGRES_CONN_MAX_IDLE_TIME`; empty keeps the binary default (30m). |
 | `state.postgres.allowInsecureSslMode` | `false` | `STATE_POSTGRES_ALLOW_INSECURE_SSLMODE` - development only. |
 | `log.level` | `info` | `LOG_LEVEL` (`debug`/`info`/`warn`/`error`). |
+| `log.format` | `json` | `LOG_FORMAT` (`json`/`pretty`/`auto`). |
 | `keys.encryptionKeySecretRef` | `{name,key}` empty | Secret holding `KEYS_ENCRYPTION_KEY` (base64 32-byte key that encrypts the stored signing key). Recommended in production; once set, tempogate needs it to boot. See [docs/hardening.md](../../docs/hardening.md#signing-key-encryption). |
 | `oidc.issuer` | `""` | `OIDC_ISSUER` — externally reachable base URL. |
 | `oidc.allowInsecureIssuer` | `false` | `OIDC_ALLOW_INSECURE_ISSUER` - development only. `serve` refuses a plain-http issuer on a non-loopback host unless this is `true`. |

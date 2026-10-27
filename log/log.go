@@ -3,10 +3,12 @@
 package log
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 
+	"github.com/mattn/go-isatty"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/exp/zapslog"
@@ -17,11 +19,36 @@ import (
 // Defined here so config can expose it without importing zap.
 type Level string
 
+// Format is the line format (LOG_FORMAT).
+type Format string
+
+const (
+	// FormatAuto is FormatPretty on a terminal and FormatJSON otherwise.
+	FormatAuto Format = "auto"
+	// FormatJSON is one JSON object per line, for log collectors.
+	FormatJSON Format = "json"
+	// FormatPretty is a human-readable line per entry, with errors and
+	// stacks rendered as indented blocks under it.
+	FormatPretty Format = "pretty"
+)
+
+// ParseFormat returns the Format s names, or an error naming the valid ones.
+func ParseFormat(s string) (Format, error) {
+	switch f := Format(s); f {
+	case FormatAuto, FormatJSON, FormatPretty:
+		return f, nil
+	default:
+		return "", fmt.Errorf("LOG_FORMAT must be %q, %q or %q, got %q", FormatAuto, FormatJSON, FormatPretty, s)
+	}
+}
+
 type Params struct {
 	fx.In
 
 	Level Level
-	Sink  io.Writer `optional:"true"`
+	// Format is the line format; empty means FormatAuto.
+	Format Format    `optional:"true"`
+	Sink   io.Writer `optional:"true"`
 }
 
 type Result struct {
@@ -36,17 +63,70 @@ func New(p Params) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	format := FormatAuto
+	if p.Format != "" {
+		if format, err = ParseFormat(string(p.Format)); err != nil {
+			return Result{}, err
+		}
+	}
 
 	sink := p.Sink
 	if sink == nil {
 		sink = os.Stdout
 	}
+	tty := isTerminal(sink)
 
-	enc := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
-	core := zapcore.NewCore(enc, zapcore.Lock(zapcore.AddSync(sink)), lvl)
+	core := newCore(resolve(format, tty), colorEnabled(tty), zapcore.Lock(zapcore.AddSync(sink)), lvl)
 
 	return Result{
 		Zap:  zap.New(core),
 		Slog: slog.New(zapslog.NewHandler(core, zapslog.WithCaller(true))),
 	}, nil
+}
+
+func newCore(format Format, color bool, out zapcore.WriteSyncer, lvl zapcore.LevelEnabler) zapcore.Core {
+	if format == FormatPretty {
+		return &prettyCore{Core: zapcore.NewCore(newPrettyEncoder(color), out, lvl)}
+	}
+	return zapcore.NewCore(zapcore.NewJSONEncoder(jsonEncoderConfig()), out, lvl)
+}
+
+func jsonEncoderConfig() zapcore.EncoderConfig {
+	return zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		FunctionKey:    zapcore.OmitKey,
+		MessageKey:     "msg",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+}
+
+func resolve(f Format, tty bool) Format {
+	if f != FormatAuto {
+		return f
+	}
+	if tty {
+		return FormatPretty
+	}
+	return FormatJSON
+}
+
+// isTerminal reports whether w is a terminal. Anything but an *os.File (an
+// injected buffer in tests) is not.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
+}
+
+// colorEnabled follows https://no-color.org: a non-empty NO_COLOR turns
+// colour off even on a terminal.
+func colorEnabled(tty bool) bool {
+	return tty && os.Getenv("NO_COLOR") == ""
 }

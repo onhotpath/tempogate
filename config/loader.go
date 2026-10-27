@@ -12,6 +12,8 @@ import (
 	"github.com/onhotpath/ferry/driver/env"
 	"github.com/onhotpath/ferry/driver/yaml"
 	"go.uber.org/fx"
+
+	"github.com/onhotpath/tempogate/log"
 )
 
 // implicitFile is the config file looked up in the working directory when no
@@ -52,6 +54,11 @@ func New(p Params) (Loaded, error) {
 	c := defaultConfig()
 	src, err := Load(c, string(p.Path))
 	if err != nil {
+		return Loaded{}, err
+	}
+	// Checked here rather than left to the logger: ferry's own refusal of a
+	// text value never quotes it or names the valid ones.
+	if _, err := log.ParseFormat(string(c.Log.Format)); err != nil {
 		return Loaded{}, err
 	}
 	return Loaded{Config: c, Source: src}, nil

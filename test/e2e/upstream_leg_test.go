@@ -169,7 +169,7 @@ func TestUpstreamLegHardening(t *testing.T) {
 		require.GreaterOrEqual(t, took, 9*time.Second, "the call is given its full budget before failing")
 
 		logs := waitForLogs(ctx, t, tg.serve, "code_exchange_failed")
-		require.Regexp(t, `"timeout": ?true`, logs, "the log must say the call timed out")
+		require.Regexp(t, `"timeout":true`, logs, "the log must say the call timed out")
 	})
 
 	t.Run("mock Google refuses an authorize request without PKCE", func(t *testing.T) {

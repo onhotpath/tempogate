@@ -45,9 +45,7 @@ func New(opts ...Option) fx.Option {
 		fx.StopTimeout(stopTimeout),
 		config.Fx(),
 		log.Fx(),
-		fx.WithLogger(func(l *zap.Logger) fxevent.Logger {
-			return &fxevent.ZapLogger{Logger: l.WithOptions(zap.IncreaseLevel(zap.WarnLevel))}
-		}),
+		fx.WithLogger(func(l *zap.Logger) fxevent.Logger { return log.FxLogger(l) }),
 		cmd.Fx(),
 		cmd.CLICommandsFx(),
 	}

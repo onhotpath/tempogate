@@ -227,6 +227,9 @@ state:
 
 log:
   level: info
+  # LOG_FORMAT: json (one JSON object per line, for log collectors), pretty
+  # (for a person reading a terminal) or auto (pretty only on a terminal).
+  format: json
 
 keys:
   # KEYS_ENCRYPTION_KEY - base64-encoded 32-byte key-encryption key. When

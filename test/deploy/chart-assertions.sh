@@ -53,6 +53,7 @@ expect_eq "no HorizontalPodAutoscaler is rendered" "" "$(yq 'select(.kind == "Ho
 expect_eq "no PodDisruptionBudget is rendered" "" "$(yq 'select(.kind == "PodDisruptionBudget")' <<<"$manifests")"
 expect_eq "SQLite Deployment uses Recreate" "Recreate" "$(q Deployment .spec.strategy.type)"
 expect_eq "STATE_DRIVER defaults to sqlite" "sqlite" "$(q ConfigMap .data.STATE_DRIVER)"
+expect_eq "LOG_FORMAT defaults to json" "json" "$(q ConfigMap .data.LOG_FORMAT)"
 expect_render_error "an unknown state.driver is rejected" "state.driver" --set state.driver=mysql
 
 echo "==> HA mode on Postgres"

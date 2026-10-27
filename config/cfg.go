@@ -2,6 +2,8 @@ package config
 
 import (
 	"time"
+
+	"github.com/onhotpath/tempogate/log"
 )
 
 type Config struct {
@@ -17,6 +19,10 @@ type Config struct {
 
 type LogConfig struct {
 	Level string `ferry:"level"`
+
+	// Format (LOG_FORMAT) is json, pretty, or auto: pretty when stdout is a
+	// terminal, json otherwise. New refuses any other value.
+	Format log.Format `ferry:"format"`
 
 	// Requests emits one structured line per HTTP request on both listeners
 	// (method, path without query, status, duration, bytes, remote address,
