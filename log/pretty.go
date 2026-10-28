@@ -17,13 +17,14 @@ import (
 // escapes, which buries the cause a failed startup is about.
 //
 // It is for development, so it favours readable output and code over
-// allocation (objects and reflected values go through a map encoder and
-// encoding/json, and each error in a chain costs its Error() string); json is
-// the format for production.
+// allocation: scalars and plain arrays are written directly, but objects and
+// reflected values go through a map encoder and encoding/json, and each error
+// in a chain costs its Error() string. json is the format for production.
 //
 // Everything it writes that is not its own colour codes goes through
-// escapeControls or strconv.Quote, so a logged value cannot move the cursor,
-// clear the screen or start a line that looks like another entry.
+// appendEscaped, strconv.Quote or encoding/json, or is printable ASCII, so a
+// logged value cannot move the cursor, clear the screen or start a line that
+// looks like another entry.
 
 const (
 	blockIndent = "  "
@@ -195,23 +196,23 @@ func appendBlock(buf *buffer.Buffer, f zapcore.Field) {
 	buf.AppendString(blockIndent)
 	appendEscaped(buf, f.Key, false)
 	buf.AppendByte(':')
-	w := &errorWriter{buf: buf, base: blockIndent, budget: maxErrorNodes}
 	switch {
 	case f.Type == zapcore.ErrorType:
 		if err, ok := f.Interface.(error); ok {
-			w.write(err, 0)
+			newErrorWriter(buf, blockIndent).write(link{err, errorText(err)}, 0)
 		}
 	case isErrorList(f):
-		w.base = blockIndent + blockIndent
+		w := newErrorWriter(buf, blockIndent+blockIndent)
 		for i, err := range errorList(f) {
-			if err != nil {
-				buf.AppendString(zapcore.DefaultLineEnding)
-				buf.AppendString(w.base)
-				buf.AppendByte('[')
-				buf.AppendInt(int64(i))
-				buf.AppendByte(']')
-				w.write(err, 0)
+			if err == nil {
+				continue
 			}
+			buf.AppendString(zapcore.DefaultLineEnding)
+			buf.AppendString(w.base)
+			buf.AppendByte('[')
+			buf.AppendInt(int64(i))
+			buf.AppendByte(']')
+			w.write(link{err, errorText(err)}, 0)
 		}
 	default:
 		appendText(buf, f.String)
@@ -261,12 +262,29 @@ type errorWriter struct {
 	// path holds the comparable errors from the top of the chain down to the
 	// one being written, to spot a cycle.
 	path []error
+	// links holds the causes of each error on the path, each level's after
+	// its parent's, so a level needs no slice of its own.
+	links []link
 }
 
-// write writes err at level. Level 0 continues the current line; deeper
-// levels each start a line, indented under the level above. An error with no
-// text of its own (a join) puts its causes at its level, as siblings.
-func (w *errorWriter) write(err error, level int) {
+// newErrorWriter returns an errorWriter with room for a chain a few levels
+// deep without growing.
+func newErrorWriter(buf *buffer.Buffer, base string) *errorWriter {
+	return &errorWriter{buf: buf, base: base, budget: maxErrorNodes,
+		path: make([]error, 0, 8), links: make([]link, 0, 8)}
+}
+
+// A link is an error in a chain and its text. An error's text holds its
+// causes', so it is computed once and handed down rather than per level.
+type link struct {
+	err  error
+	text string
+}
+
+// write writes e at level. Level 0 continues the current line; deeper levels
+// each start a line, indented under the level above. An error with no text of
+// its own (a join) puts its causes at its level, as siblings.
+func (w *errorWriter) write(e link, level int) {
 	if w.budget <= 0 {
 		if w.budget == 0 {
 			w.marker(level, "truncated")
@@ -275,8 +293,11 @@ func (w *errorWriter) write(err error, level int) {
 		return
 	}
 	w.budget--
-	causes, cycle := w.notOnPath(causesOf(err))
-	own, causes := splitOwn(errorText(err), causes)
+	start := len(w.links)
+	cycle := w.addCauses(e.err)
+	// The causes stay below w.links[start:] while they are written: each
+	// child adds its own after them.
+	own, causes := splitOwn(e.text, w.links[start:])
 	next := level
 	switch {
 	case own != "":
@@ -286,61 +307,93 @@ func (w *errorWriter) write(err error, level int) {
 			w.newline(level, causeMarker)
 		}
 		// A multi-line message continues under its first line.
-		w.buf.AppendString(strings.ReplaceAll(escapeControls(own, true), "\n",
-			zapcore.DefaultLineEnding+w.base+strings.Repeat(blockIndent, level+1)))
+		for {
+			line, rest, more := strings.Cut(own, "\n")
+			appendEscaped(w.buf, line, true)
+			if !more {
+				break
+			}
+			w.newline(level+1, "")
+			own = rest
+		}
 		next = level + 1
-	case level == 0 && len(causes)+len(cycle) > 1:
+	case level == 0 && len(causes)+cycle > 1:
 		next = 1
 	}
-	if isComparable(err) {
-		w.path = append(w.path, err)
+	if isComparable(e.err) {
+		w.path = append(w.path, e.err)
 		defer func() { w.path = w.path[:len(w.path)-1] }()
 	}
 	for _, c := range causes {
 		w.write(c, next)
 	}
-	if len(cycle) > 0 {
+	w.links = w.links[:start]
+	if cycle > 0 {
 		w.marker(next, "cycle")
 	}
 }
 
+// addCauses adds the errors err wraps to w.links, leaving out those already
+// on the path down to err, which would loop, and returns how many it left
+// out.
+func (w *errorWriter) addCauses(err error) (cycle int) {
+	var one [1]error
+	for _, c := range causesOf(err, &one) {
+		if isComparable(c) && slices.Contains(w.path, c) {
+			cycle++
+		} else {
+			w.links = append(w.links, link{c, errorText(c)})
+		}
+	}
+	return cycle
+}
+
 func (w *errorWriter) newline(level int, marker string) {
-	w.buf.AppendString(zapcore.DefaultLineEnding + w.base + strings.Repeat(blockIndent, level) + marker)
+	w.buf.AppendString(zapcore.DefaultLineEnding)
+	w.buf.AppendString(w.base)
+	for range level {
+		w.buf.AppendString(blockIndent)
+	}
+	w.buf.AppendString(marker)
 }
 
 func (w *errorWriter) marker(level int, what string) {
-	w.newline(max(level, 1), causeMarker+"… ("+what+")")
-}
-
-// notOnPath splits causes into those not already on the path down to them
-// and those that are, which would loop.
-func (w *errorWriter) notOnPath(causes []error) (fresh, cycle []error) {
-	for _, c := range causes {
-		if isComparable(c) && slices.Contains(w.path, c) {
-			cycle = append(cycle, c)
-		} else {
-			fresh = append(fresh, c)
-		}
-	}
-	return fresh, cycle
+	w.newline(max(level, 1), causeMarker)
+	w.buf.AppendString("… (")
+	w.buf.AppendString(what)
+	w.buf.AppendByte(')')
 }
 
 // isComparable reports whether err can be compared with ==, which panics for
 // an error whose dynamic type is (or holds) a slice, map or func.
 func isComparable(err error) bool {
+	// A pointer, as most errors are, always is; Value.Comparable allocates.
+	if t := reflect.TypeOf(err); t != nil && t.Kind() == reflect.Pointer {
+		return true
+	}
 	return reflect.ValueOf(err).Comparable()
 }
 
 // unwrap returns err's own message, without the text of the causes it wraps,
 // and those causes.
 func unwrap(err error) (own string, causes []error) {
-	return splitOwn(errorText(err), causesOf(err))
+	var one [1]error
+	var links []link
+	for _, c := range causesOf(err, &one) {
+		links = append(links, link{c, errorText(c)})
+	}
+	own, shown := splitOwn(errorText(err), links)
+	for _, c := range shown {
+		causes = append(causes, c.err)
+	}
+	return own, causes
 }
 
-// causesOf returns the errors err wraps. It never formats err with %+v: that
-// is what produces errorVerbose, and some errors (dig's) put file paths and
-// stacks there.
-func causesOf(err error) (causes []error) {
+// causesOf returns the non-nil errors err wraps. A single cause is returned
+// in one, so the usual chain needs no slice. It never formats err with %+v:
+// that is what produces errorVerbose, and some errors (dig's) put file paths
+// and stacks there.
+func causesOf(err error, one *[1]error) (causes []error) {
 	defer func() {
 		if recover() != nil {
 			causes = nil
@@ -352,26 +405,30 @@ func causesOf(err error) (causes []error) {
 	case interface{ Unwrap() []error }: // errors.Join, fmt.Errorf with several %w
 		causes = e.Unwrap()
 	case interface{ Unwrap() error }:
-		causes = []error{e.Unwrap()}
+		one[0] = e.Unwrap()
+		causes = one[:]
 	}
-	return slices.DeleteFunc(slices.Clone(causes), func(c error) bool { return c == nil })
+	if slices.Contains(causes, nil) {
+		causes = slices.DeleteFunc(slices.Clone(causes), func(c error) bool { return c == nil })
+	}
+	return causes
 }
 
-// splitOwn returns the part of msg that is err's own, and the causes to show
-// under it. Only the separator left after cutting a cause's text is trimmed;
-// an error's own text is never otherwise changed.
-func splitOwn(msg string, causes []error) (own string, shown []error) {
+// splitOwn returns the part of msg that is its error's own, and the causes to
+// show under it. Only the separator left after cutting a cause's text is
+// trimmed; an error's own text is never otherwise changed.
+func splitOwn(msg string, causes []link) (own string, shown []link) {
 	// The usual wrapper is "context: cause".
 	if len(causes) == 1 {
-		if cm := errorText(causes[0]); cm != "" && strings.HasSuffix(msg, cm) {
+		if cm := causes[0].text; cm != "" && strings.HasSuffix(msg, cm) {
 			return trimSeparator(strings.TrimSuffix(msg, cm)), causes
 		}
 	}
 	rest := msg
-	var unquoted []error
+	var unquoted []link
 	for _, c := range causes {
-		if cm := errorText(c); cm != "" && strings.Contains(rest, cm) {
-			rest = strings.Replace(rest, cm, "", 1)
+		if c.text != "" && strings.Contains(rest, c.text) {
+			rest = strings.Replace(rest, c.text, "", 1)
 		} else {
 			unquoted = append(unquoted, c)
 		}
