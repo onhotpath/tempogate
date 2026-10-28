@@ -518,3 +518,25 @@ func TestPretty_WithClonesConcurrently(t *testing.T) {
 		assert.Equal(t, lines[i][len("15:04:05.006 INFO m p=1 i="):][:1], lines[i][len(lines[i])-1:])
 	}
 }
+
+// A nil among an error's causes is skipped, and the list it came from is
+// left as it was.
+func TestPretty_NilCauseIsSkipped(t *testing.T) {
+	err := multiError{errors.New("a"), nil, errors.New("b")}
+	z, buf := prettyLogger(false)
+	z.Error("stop", zap.Error(err))
+	assert.Equal(t, "15:04:05.006 ERROR stop\n  error:\n    ↳ a\n    ↳ b\n", buf.String())
+	assert.Nil(t, err[1])
+}
+
+// A clone renders as the encoder it came from.
+func TestPretty_Clone(t *testing.T) {
+	enc := newPrettyEncoder(false).with([]zapcore.Field{zap.String("a", "1")})
+	ent := zapcore.Entry{Time: fixedClock{}.Now(), Message: "m"}
+	want, err := enc.EncodeEntry(ent, nil)
+	require.NoError(t, err)
+	got, err := enc.Clone().EncodeEntry(ent, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "15:04:05.006 INFO m a=1\n", got.String())
+	assert.Equal(t, want.String(), got.String())
+}
