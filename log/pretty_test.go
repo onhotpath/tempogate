@@ -206,6 +206,28 @@ func TestPretty_InlineFields(t *testing.T) {
 		`duration=1.5s ok=true list=["a","b"] ns.inner=1`+"\n", buf.String())
 }
 
+func TestPretty_TimeAndUnmarshalableFields(t *testing.T) {
+	z, buf := prettyLogger(false)
+	z.Info("tick",
+		zap.Time("at", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+		zap.Any("ch", make(chan int)),
+	)
+	assert.Regexp(t, `^15:04:05\.006 INFO tick at=2026-01-02T03:04:05Z ch=0x[0-9a-f]+\n$`, buf.String())
+}
+
+// A tee asks every core to Check, so a pretty core below the entry's level
+// must decline even when its sibling accepts.
+func TestPretty_DisabledLevelWritesNothing(t *testing.T) {
+	var pretty, debug bytes.Buffer
+	z := zap.New(zapcore.NewTee(
+		newCore(FormatPretty, false, zapcore.AddSync(&pretty), zapcore.InfoLevel),
+		newCore(FormatJSON, false, zapcore.AddSync(&debug), zapcore.DebugLevel),
+	))
+	z.With(zap.Error(errors.New("held"))).Debug("hidden")
+	assert.Empty(t, pretty.String())
+	assert.Contains(t, debug.String(), `"msg":"hidden"`)
+}
+
 func TestPretty_PanickingErrorIsRecovered(t *testing.T) {
 	for name, err := range map[string]error{
 		"pointer receiver": &panicError{},
