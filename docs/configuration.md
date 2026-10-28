@@ -82,6 +82,7 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 | `KEYS_RELOAD_INTERVAL` | No | `30s` | How often `serve` re-reads signing keys from the state store |
 | `KEYS_PUBLISH_DELAY` | No | `5m` | How long a new signing key is published before it signs; must exceed Temporal's JWKS refresh interval plus `KEYS_RELOAD_INTERVAL`. See the [rotation runbook](operations.md#rotation-runbook) |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_FORMAT` | No | `auto` | `json` / `pretty` / `auto` (pretty on a terminal, JSON otherwise). See [Logging](#logging) |
 | `LOG_REQUESTS` | No | `true` | One access-log line per HTTP request (no query strings, headers or bodies) |
 | `OTEL_TRACES_EXPORTER` | No | _(unset: off)_ | `otlp` exports OpenTelemetry traces; the other standard `OTEL_*` variables configure the exporter. See [Tracing](#tracing) |
 | `TEMPOGATE_ISSUER` | No | _(empty)_ | **Client-side**, read by `tempogate login` (not the server). Equivalent to `--issuer` |
@@ -93,7 +94,8 @@ If your users are in Google Workspace, also set `OIDC_ALLOWED_HOSTED_DOMAINS`.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`, in any case. A command that fails, such as `serve` at startup, logs one `command failed` line: `error` is the root cause, after any context the command added, and `in` names what was being built when it failed (such as `servercmd.stateStore > *sqlite.Store`); `debug` adds the full error chain as `errorChain`. |
+| `LOG_FORMAT` | `auto` | `json` \| `pretty` \| `auto`. `json` writes one JSON object per line (`time` in ISO 8601, `level`, `msg`, `caller` where known, then the fields), for log collectors. `pretty` is for a person at a terminal: one short line per entry, with each error, stack trace and multi-line field rendered as an indented block under it; the level is coloured unless `NO_COLOR` is set. `auto` picks `pretty` when stdout is a terminal and `json` otherwise, so containers and pipes get JSON. Case is ignored and empty means `auto`. Any other value, like an invalid `LOG_LEVEL`, stops the process at startup with one line on stderr. |
 | `LOG_REQUESTS` | `true` | One structured access-log line per HTTP request on both listeners; see [Request logs](operations.md#request-logs). `false` turns it off, e.g. when an ingress or mesh already logs every request. |
 
 ### Tracing

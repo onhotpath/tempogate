@@ -68,5 +68,5 @@ func logsThrough(ctx context.Context, t *testing.T, c testcontainers.Container, 
 	resp, err := http.Get(base + path)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
-	return waitForLogs(ctx, t, c, `"path": "`+path+`"`)
+	return waitForLogs(ctx, t, c, `"path":"`+path+`"`)
 }

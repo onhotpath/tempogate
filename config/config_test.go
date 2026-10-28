@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/fx"
+
+	"github.com/onhotpath/tempogate/log"
 )
 
 type ConfigSuite struct {
@@ -43,7 +45,7 @@ func (s *ConfigSuite) TestNew() {
 		{
 			name: "defaults",
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -93,11 +95,12 @@ func (s *ConfigSuite) TestNew() {
 			name: "log, request logging and http overridden by env",
 			env: map[string]string{
 				"LOG_LEVEL":     "debug",
+				"LOG_FORMAT":    "json",
 				"LOG_REQUESTS":  "false",
 				"HTTP_LISTENER": "0.0.0.0:9000",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "debug"},
+				Log: LogConfig{Level: "debug", Format: log.FormatJSON},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(0, 0, 0, 0),
@@ -152,7 +155,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_REFRESH_MAX_LIFETIME":  "336h",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -252,7 +255,7 @@ func (s *ConfigSuite) TestNew() {
 				"ADMIN_LISTENER": "127.0.0.1:9091",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -306,7 +309,7 @@ func (s *ConfigSuite) TestNew() {
 				"STATE_SQLITE_BUSY_TIMEOUT": "2s",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -363,7 +366,7 @@ func (s *ConfigSuite) TestNew() {
 				"STATE_POSTGRES_ALLOW_INSECURE_SSLMODE": "true",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -421,7 +424,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_ISSUER": "https://tempogate.internal.example.com",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -475,7 +478,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_GOOGLE_AUTH_ENDPOINT": "http://127.0.0.1:9999/mock/auth",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -529,7 +532,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_ALLOW_INSECURE_REDIRECT_URIS": "true",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -586,7 +589,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_GOOGLE_ISSUER_URL":      "http://127.0.0.1:9999",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -642,7 +645,7 @@ func (s *ConfigSuite) TestNew() {
 				"OIDC_SESSION_SIGNING_KEY": "ZXhhbXBsZS1zaWduaW5nLWtleS1mb3ItdGVzdGluZw",
 			},
 			want: &Config{
-				Log: LogConfig{Level: "info", Requests: true},
+				Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 				HTTP: HTTPConfig{
 					Listener: Listener{
 						IP:   net.IPv4(127, 0, 0, 1),
@@ -745,6 +748,43 @@ func (s *ConfigSuite) TestNew() {
 			got, err := New(Params{})
 			s.Require().NoError(err)
 			s.Equal(tc.want, got.Config)
+		})
+	}
+}
+
+// TestRejectsInvalidLogConfig: a typo in LOG_LEVEL or LOG_FORMAT fails the
+// load with a message naming the valid values, rather than silently picking
+// one.
+func (s *ConfigSuite) TestRejectsInvalidLogConfig() {
+	for env, want := range map[string]string{
+		"LOG_FORMAT": `invalid config: LOG_FORMAT must be "auto", "json" or "pretty", got "console"`,
+		"LOG_LEVEL":  `invalid config: LOG_LEVEL must be "debug", "info", "warn" or "error", got "console"`,
+	} {
+		s.Run(env, func() {
+			s.T().Setenv(env, "console")
+			_, err := New(Params{})
+			s.Require().EqualError(err, want)
+		})
+	}
+}
+
+// TestNormalizesLogConfig: the level and format are read as zap reads
+// LOG_LEVEL, ignoring case and surrounding space, and empty is the default.
+func (s *ConfigSuite) TestNormalizesLogConfig() {
+	for _, tc := range []struct {
+		level, format string
+		want          LogConfig
+	}{
+		{"", "", LogConfig{Level: "info", Format: log.FormatAuto, Requests: true}},
+		{" DEBUG ", "JSON", LogConfig{Level: "debug", Format: log.FormatJSON, Requests: true}},
+		{"Warn", " Pretty\t", LogConfig{Level: "warn", Format: log.FormatPretty, Requests: true}},
+	} {
+		s.Run(tc.level+"/"+tc.format, func() {
+			s.T().Setenv("LOG_LEVEL", tc.level)
+			s.T().Setenv("LOG_FORMAT", tc.format)
+			got, err := New(Params{})
+			s.Require().NoError(err)
+			s.Equal(tc.want, got.Config.Log)
 		})
 	}
 }

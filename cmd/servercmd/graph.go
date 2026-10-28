@@ -14,6 +14,7 @@ import (
 	"github.com/onhotpath/tempogate/authz"
 	"github.com/onhotpath/tempogate/config"
 	"github.com/onhotpath/tempogate/keys"
+	"github.com/onhotpath/tempogate/log"
 	"github.com/onhotpath/tempogate/oidc"
 	"github.com/onhotpath/tempogate/oidc/connector/google"
 	"github.com/onhotpath/tempogate/redact"
@@ -51,9 +52,8 @@ func newGraph(p graphParams) graph {
 		base: fx.Options(
 			config.Supply(p.Config),
 			fx.Supply(p.Zap, p.Slog),
-			fx.WithLogger(func() fxevent.Logger {
-				return &fxevent.ZapLogger{Logger: p.Zap.WithOptions(zap.IncreaseLevel(zap.WarnLevel))}
-			}),
+			// lazy returns every error to the cobra command, which logs it.
+			fx.WithLogger(func() fxevent.Logger { return log.FxLogger(p.Zap, log.ErrorsReturned()) }),
 		),
 		state: stateModule(p.Config.State.Driver),
 	}

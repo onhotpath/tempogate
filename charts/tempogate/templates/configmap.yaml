@@ -6,6 +6,7 @@ metadata:
     {{- include "tempogate.labels" . | nindent 4 }}
 data:
   LOG_LEVEL: {{ .Values.log.level | quote }}
+  LOG_FORMAT: {{ .Values.log.format | quote }}
   HTTP_LISTENER: {{ printf "%s:%v" .Values.listenAddress .Values.service.port | quote }}
   STATE_DRIVER: {{ .Values.state.driver | quote }}
   {{- if include "tempogate.postgres" . }}

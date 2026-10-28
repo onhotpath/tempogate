@@ -15,6 +15,7 @@ type Result struct {
 	fx.Out
 
 	LogLevel              log.Level
+	LogFormat             log.Format
 	LogRequests           bool          `name:"log_requests"`
 	HTTPListener          Listener      `name:"http"`
 	AdminListener         Listener      `name:"admin"`
@@ -91,6 +92,7 @@ func Supply(cfg *Config) fx.Option {
 func project(cfg *Config) Result {
 	return Result{
 		LogLevel:              log.Level(cfg.Log.Level),
+		LogFormat:             cfg.Log.Format,
 		LogRequests:           cfg.Log.Requests,
 		HTTPListener:          cfg.HTTP.Listener,
 		AdminListener:         cfg.Admin.Listener,

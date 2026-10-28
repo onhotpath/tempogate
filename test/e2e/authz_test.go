@@ -100,7 +100,7 @@ func TestAuthzRules(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	// The startup log counts the cluster-wide rules.
-	st.tg.waitForLogs(t, `"system_grant_rules": 1`)
+	st.tg.waitForLogs(t, `"system_grant_rules":1`)
 
 	t.Run("bob (temporal-system:admin) registers namespaces, lists them and starts anywhere", func(t *testing.T) {
 		tok := st.login(ctx, t, "bob", "/tmp/tg-authz-bob.json")
@@ -235,7 +235,7 @@ func TestAuthzLegacyDefault(t *testing.T) {
 	ctx := context.Background()
 	st := setupAuthzStack(ctx, t, map[string]string{"OIDC_AUTHZ_DEFAULT_PERMISSIONS": "temporal-system:admin"})
 
-	st.tg.waitForLogs(t, "WARN", "every admitted user is cluster admin")
+	st.tg.waitForLogs(t, `"level":"warn"`, "every admitted user is cluster admin")
 
 	tok := st.login(ctx, t, "carol", "/tmp/tg-authz-legacy.json")
 	requirePermissions(t, tok.AccessToken, "temporal-system:admin")

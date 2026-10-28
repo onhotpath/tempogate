@@ -77,6 +77,7 @@ services:
       HTTP_LISTENER: "0.0.0.0:8000"
       STATE_SQLITE_PATH: /state/state.db
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      LOG_FORMAT: "${LOG_FORMAT:-json}"
       # Externally reachable base URL — advertised as `issuer`, derives
       # jwks_uri. Same string on host and in-network (see header comment).
       OIDC_ISSUER: "http://tempogate:8000"

@@ -224,9 +224,11 @@ Tracing is off by default; `OTEL_TRACES_EXPORTER=otlp` turns it on, and the othe
 
 With `LOG_REQUESTS=true` (the default), each request on either listener writes one structured line through the server logger:
 
+```json
+{"level":"info","time":"2026-10-27T12:00:00.000Z","logger":"http","msg":"http request","listener":"public","method":"POST","path":"/token","status":200,"duration":"3.1ms","bytes":1234,"remote_addr":"10.0.0.7:51234","user_agent":"tempogate-cli/0.3.0","request_id":"..."}
 ```
-INFO	http	http request	{"listener": "public", "method": "POST", "path": "/token", "status": 200, "duration": "3.1ms", "bytes": 1234, "remote_addr": "10.0.0.7:51234", "user_agent": "tempogate-cli/0.3.0", "request_id": "..."}
-```
+
+That is the `json` format, the default off a terminal; see `LOG_FORMAT` in [Configuration](configuration.md#logging).
 
 - **Allowlisted fields only.** tempogate never logs the query string (OAuth codes, `state`, PKCE parameters), request headers (`Authorization`, cookies) or bodies (refresh tokens, client secrets). `path` is only the URL path.
 - **`request_id`** is a copy of the `X-Request-Id` response header when one is set; otherwise it is absent.

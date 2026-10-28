@@ -96,10 +96,10 @@ func TestObservability(t *testing.T) {
 			requestLines = append(requestLines, line)
 		}
 	}
-	for _, path := range []string{`"path": "/authorize"`, `"path": "/callback/google"`, `"path": "/token"`} {
+	for _, path := range []string{`"path":"/authorize"`, `"path":"/callback/google"`, `"path":"/token"`} {
 		require.Truef(t, containsAny(requestLines, path), "no access-log line with %s in:\n%s", path, logs)
 	}
-	require.Truef(t, containsAny(requestLines, `"listener": "admin"`), "admin requests are logged too:\n%s", logs)
+	require.Truef(t, containsAny(requestLines, `"listener":"admin"`), "admin requests are logged too:\n%s", logs)
 	for _, line := range requestLines {
 		for _, leak := range []string{"?", "code=", "state=", "code_challenge", "refresh_token=", "Bearer"} {
 			require.NotContainsf(t, line, leak, "access log leaked %q", leak)

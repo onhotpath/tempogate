@@ -82,8 +82,14 @@ for mode in "${modes[@]}"; do
     # Isolate the old binary from the database already migrated by the
     # fresh-install smoke test.
     k exec deploy/postgres -- psql -U tempogate -d tempogate -c 'CREATE DATABASE tempogate_upgrade'
-    upgrade_dsn=$(k get secret tempogate-postgres -o jsonpath='{.data.dsn}' | openssl base64 -d -A)
-    upgrade_dsn="${upgrade_dsn/\/tempogate?/\/tempogate_upgrade?}"
+    dsn=$(k get secret tempogate-postgres -o jsonpath='{.data.dsn}' | openssl base64 -d -A)
+    # Quoted, so `?` is literal: unquoted it is a glob that also matches the
+    # `/tempogate:` of the userinfo and rewrites the user name instead.
+    upgrade_dsn="${dsn/"/tempogate?"/"/tempogate_upgrade?"}"
+    if [ "$upgrade_dsn" = "$dsn" ]; then
+      echo "the tempogate-postgres DSN has no /tempogate? database path to repoint" >&2
+      exit 1
+    fi
     k create secret generic tempogate-upgrade-postgres --from-literal=dsn="$upgrade_dsn"
     values+=(--values "$ROOT/test/deploy/values-postgres.yaml"
       --set state.postgres.dsnSecretRef.name=tempogate-upgrade-postgres)

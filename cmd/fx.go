@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+
+	"github.com/onhotpath/tempogate/log"
 )
 
 // Fx wires the cobra root dispatcher. Subcommands are not referenced here:
@@ -53,7 +55,7 @@ func Run(p rootParams) {
 	runCmd := func(ctx context.Context) {
 		defer close(done)
 		if err := rootCmd.ExecuteContext(ctx); err != nil {
-			p.Logger.Error("command failed", zap.Error(err))
+			log.Failure(p.Logger, "command failed", err)
 			_ = p.Shutdowner.Shutdown(fx.ExitCode(1))
 			return
 		}

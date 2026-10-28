@@ -140,6 +140,7 @@ func (s *observabilityStack) exportedSpans(ctx context.Context, t *testing.T) (s
 }
 
 type accessLine struct {
+	Msg       string `json:"msg"`
 	Listener  string `json:"listener"`
 	Path      string `json:"path"`
 	RequestID string `json:"request_id"`
@@ -151,12 +152,10 @@ func (s *observabilityStack) tracedRequests(ctx context.Context, t *testing.T) [
 	t.Helper()
 	var out []accessLine
 	for _, line := range strings.Split(s.logs(ctx, t), "\n") {
-		_, fields, ok := strings.Cut(line, "\thttp request\t")
-		if !ok {
+		var l accessLine
+		if json.Unmarshal([]byte(line), &l) != nil || l.Msg != "http request" {
 			continue
 		}
-		var l accessLine
-		require.NoError(t, json.Unmarshal([]byte(fields), &l), line)
 		switch l.Path {
 		case "/healthz", "/readyz", "/admin/healthz", "/metrics":
 			continue

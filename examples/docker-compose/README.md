@@ -107,7 +107,8 @@ you prefer to write the file by hand:
 
 Optional, non-secret knobs: `DEMO_EMAIL` (the identity the mock asserts,
 default `alice@example.com`), `TEMPOGATE_ALLOWED_DOMAINS` (default
-`example.com`), and `LOG_LEVEL` (default `info`). Full env-var reference:
+`example.com`), `LOG_LEVEL` (default `info`), and `LOG_FORMAT` (default
+`json`; `pretty` for reading `docker compose logs` by eye). Full env-var reference:
 [`docs/configuration.md`](../../docs/configuration.md).
 
 ## Who gets access

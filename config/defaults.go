@@ -3,11 +3,13 @@ package config
 import (
 	"net"
 	"time"
+
+	"github.com/onhotpath/tempogate/log"
 )
 
 func defaultConfig() *Config {
 	return &Config{
-		Log: LogConfig{Level: "info", Requests: true},
+		Log: LogConfig{Level: "info", Format: log.FormatAuto, Requests: true},
 		HTTP: HTTPConfig{
 			Listener: Listener{
 				IP:   net.IPv4(127, 0, 0, 1),
