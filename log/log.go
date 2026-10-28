@@ -106,7 +106,7 @@ func New(p Params) (Result, error) {
 
 func newCore(format Format, color bool, out zapcore.WriteSyncer, lvl zapcore.LevelEnabler) zapcore.Core {
 	if format == FormatPretty {
-		return &prettyCore{Core: zapcore.NewCore(newPrettyEncoder(color), out, lvl)}
+		return newPrettyCore(newPrettyEncoder(color), out, lvl)
 	}
 	return zapcore.NewCore(zapcore.NewJSONEncoder(jsonEncoderConfig()), out, lvl)
 }

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -419,4 +420,101 @@ func TestPretty_UnusualWrappers(t *testing.T) {
 	z.Error("stop", zap.Error(customError{cause: errors.New("timeout")}))
 	assert.Equal(t, "15:04:05.006 ERROR stop\n  error: outer\n"+
 		"15:04:05.006 ERROR stop\n  error: request failed\n    ↳ timeout\n", buf.String())
+}
+
+// The header reads as zap's console encoder wrote it before pretty wrote it
+// itself.
+func TestPretty_HeaderMatchesConsoleEncoder(t *testing.T) {
+	console := func(color bool) zapcore.Encoder {
+		level := zapcore.CapitalLevelEncoder
+		if color {
+			level = zapcore.CapitalColorLevelEncoder
+		}
+		return zapcore.NewConsoleEncoder(zapcore.EncoderConfig{
+			TimeKey: "T", LevelKey: "L", NameKey: "N", CallerKey: "C", MessageKey: "M",
+			FunctionKey: zapcore.OmitKey, StacktraceKey: zapcore.OmitKey,
+			LineEnding:   zapcore.DefaultLineEnding,
+			EncodeLevel:  level,
+			EncodeTime:   zapcore.TimeEncoderOfLayout("15:04:05.000"),
+			EncodeCaller: zapcore.ShortCallerEncoder,
+			EncodeName: func(n string, enc zapcore.PrimitiveArrayEncoder) {
+				enc.AppendString("[" + escapeControls(n, false) + "]")
+			},
+			ConsoleSeparator: " ",
+		})
+	}
+	var entries []zapcore.Entry
+	for _, lvl := range []zapcore.Level{zapcore.DebugLevel - 2, zapcore.DebugLevel, zapcore.InfoLevel, zapcore.WarnLevel,
+		zapcore.ErrorLevel, zapcore.DPanicLevel, zapcore.PanicLevel, zapcore.FatalLevel, zapcore.FatalLevel + 3} {
+		entries = append(entries, zapcore.Entry{Level: lvl, Time: fixedClock{}.Now(), Message: "m"})
+	}
+	for _, c := range []zapcore.EntryCaller{
+		{Defined: true, File: "main.go", Line: 1},
+		{Defined: true, File: "/main.go", Line: 2},
+		{Defined: true, File: "/src/cmd/main.go", Line: 3},
+		{Defined: true, File: "github.com/onhotpath/tempogate/cmd/servercmd/server.go", Line: 88},
+		{File: "/src/cmd/main.go", Line: 4},
+	} {
+		entries = append(entries, zapcore.Entry{Time: time.Date(2026, 1, 2, 23, 59, 59, 999999999, time.UTC), Caller: c, Message: "m"})
+	}
+	entries = append(entries,
+		zapcore.Entry{Message: "no time"},
+		zapcore.Entry{Time: fixedClock{}.Now()},
+		zapcore.Entry{Time: fixedClock{}.Now(), LoggerName: "http.n\x1b[2J", Message: "msg\x1b[2J\nfake\r\x7f\u009b\x9b"},
+	)
+	for _, color := range []bool{false, true} {
+		for _, ent := range entries {
+			got := prettyBufs.Get()
+			newPrettyEncoder(color).appendHeader(got, ent)
+			// The console encoder left the message to its caller to escape.
+			ent.Message = escapeControls(ent.Message, false)
+			want, err := console(color).EncodeEntry(ent, nil)
+			require.NoError(t, err)
+			want.TrimNewline()
+			assert.Equal(t, want.String(), got.String(), "%+v", ent)
+		}
+	}
+}
+
+// With fields render once, ahead of the call's, and the namespace they
+// leave open applies to the call's fields and blocks; a block among them
+// still renders under the line, in field order.
+func TestPretty_WithFieldsAndCallFields(t *testing.T) {
+	z, buf := prettyLogger(false)
+	parent := z.With(zap.String("a", "1"), zap.Error(errors.New("with")), zap.Namespace("ns"), zap.Int("b", 2))
+	child := parent.With(zap.Namespace("inner"), zap.Bool("c", true))
+	child.Info("m", zap.String("d", "x y"), zap.Error(errors.New("call")), zap.Strings("e", []string{"f"}))
+	parent.Info("p", zap.Int("g", 3))
+	z.Info("root", zap.Int("h", 4))
+	assert.Equal(t, "15:04:05.006 INFO m a=1 ns.b=2 ns.inner.c=true ns.inner.d=\"x y\" ns.inner.e=[\"f\"]\n"+
+		"  error: with\n"+
+		"  ns.inner.error: call\n"+
+		"15:04:05.006 INFO p a=1 ns.b=2 ns.g=3\n"+
+		"  error: with\n"+
+		"15:04:05.006 INFO root h=4\n", buf.String())
+}
+
+// Clones of one core share only what none of them writes to.
+func TestPretty_WithClonesConcurrently(t *testing.T) {
+	var buf bytes.Buffer
+	core := newCore(FormatPretty, false, zapcore.Lock(zapcore.AddSync(&buf)), zapcore.DebugLevel)
+	parent := zap.New(core, zap.WithClock(fixedClock{})).With(zap.String("p", "1"), zap.Error(errors.New("e")))
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			z := parent.With(zap.Int("i", i))
+			for range 50 {
+				z.Info("m", zap.Int("n", i), zap.Error(errors.New("call")))
+			}
+		})
+	}
+	wg.Wait()
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 8*50*3)
+	for i := 0; i < len(lines); i += 3 {
+		assert.Regexp(t, `^15:04:05\.006 INFO m p=1 i=(\d) n=(\d)$`, lines[i])
+		assert.Equal(t, "  error: e", lines[i+1])
+		assert.Equal(t, "  error: call", lines[i+2])
+		assert.Equal(t, lines[i][len("15:04:05.006 INFO m p=1 i="):][:1], lines[i][len(lines[i])-1:])
+	}
 }

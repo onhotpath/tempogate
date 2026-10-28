@@ -1,9 +1,9 @@
 package log
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 
 	"go.uber.org/zap/buffer"
@@ -33,133 +33,205 @@ const (
 	maxErrorNodes = 64
 )
 
-// prettyCore keeps With fields until Write, so the encoder still sees each
-// field's type: the core zap builds encodes With fields into the encoder at
-// once, which turns an error into plain strings before it can be rendered.
+// prettyCore renders With fields with the pretty encoder, so it still sees
+// each field's type: the core zap builds adds them to the encoder as an
+// ObjectEncoder, which turns an error into plain strings before it can be
+// rendered as a block.
 type prettyCore struct {
 	zapcore.Core
-	fields []zapcore.Field
+	enc *prettyEncoder
+	out zapcore.WriteSyncer
+	lvl zapcore.LevelEnabler
+}
+
+func newPrettyCore(enc *prettyEncoder, out zapcore.WriteSyncer, lvl zapcore.LevelEnabler) *prettyCore {
+	return &prettyCore{Core: zapcore.NewCore(enc, out, lvl), enc: enc, out: out, lvl: lvl}
 }
 
 func (c *prettyCore) With(fields []zapcore.Field) zapcore.Core {
-	return &prettyCore{Core: c.Core, fields: append(slices.Clip(c.fields), fields...)}
+	return newPrettyCore(c.enc.with(fields), c.out, c.lvl)
 }
 
-func (c *prettyCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	if c.Enabled(ent.Level) {
-		return ce.AddCore(ent, c)
-	}
-	return ce
-}
-
-func (c *prettyCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
-	return c.Core.Write(ent, append(slices.Clip(c.fields), fields...))
-}
-
-// prettyEncoder uses zap's console encoder for the header (time, level,
-// logger name, caller, message) and renders every field itself.
+// prettyEncoder writes the header (time, level, logger name, caller,
+// message) as zap's console encoder would, and renders every field itself.
 type prettyEncoder struct {
-	zapcore.Encoder
+	// ObjectEncoder is nil: With fields reach the encoder through with, never
+	// through its Add methods.
+	zapcore.ObjectEncoder
+	levels [zapcore.FatalLevel - zapcore.DebugLevel + 1]string
+	level  zapcore.LevelEncoder
+
+	// The With fields, as zap's encoders keep theirs: those on the header
+	// line already rendered, the blocks under it still as fields (keyed with
+	// their namespace), and the namespace they leave open.
+	inline    []byte
+	blocks    []zapcore.Field
+	namespace string
 }
+
+var prettyBufs = buffer.NewPool()
 
 func newPrettyEncoder(color bool) *prettyEncoder {
-	level := zapcore.CapitalLevelEncoder
+	e := &prettyEncoder{level: zapcore.CapitalLevelEncoder}
 	if color {
-		level = zapcore.CapitalColorLevelEncoder
+		e.level = zapcore.CapitalColorLevelEncoder
 	}
-	return &prettyEncoder{Encoder: zapcore.NewConsoleEncoder(zapcore.EncoderConfig{
-		TimeKey:          "T",
-		LevelKey:         "L",
-		NameKey:          "N",
-		CallerKey:        "C",
-		FunctionKey:      zapcore.OmitKey,
-		MessageKey:       "M",
-		StacktraceKey:    zapcore.OmitKey,
-		LineEnding:       zapcore.DefaultLineEnding,
-		EncodeLevel:      level,
-		EncodeTime:       zapcore.TimeEncoderOfLayout("15:04:05.000"),
-		EncodeDuration:   zapcore.StringDurationEncoder,
-		EncodeCaller:     zapcore.ShortCallerEncoder,
-		EncodeName:       encodeName,
-		ConsoleSeparator: " ",
-	})}
+	for i := range e.levels {
+		e.levels[i] = levelText(zapcore.DebugLevel+zapcore.Level(i), e.level)
+	}
+	return e
 }
 
-func encodeName(name string, enc zapcore.PrimitiveArrayEncoder) {
-	enc.AppendString("[" + escapeControls(name, false) + "]")
+// levelText is what enc writes for l, as zap's console encoder prints it.
+func levelText(l zapcore.Level, enc zapcore.LevelEncoder) string {
+	m := zapcore.NewMapObjectEncoder()
+	_ = m.AddArray("", zapcore.ArrayMarshalerFunc(func(arr zapcore.ArrayEncoder) error {
+		enc(l, arr)
+		return nil
+	}))
+	return fmt.Sprint(m.Fields[""].([]any)...)
 }
 
 func (e *prettyEncoder) Clone() zapcore.Encoder {
-	return &prettyEncoder{Encoder: e.Encoder.Clone()}
+	clone := *e
+	return &clone
+}
+
+// with returns a clone of e that adds fields to its With fields. Its slices
+// are its own or shared read-only, so clones are safe to use concurrently.
+func (e *prettyEncoder) with(fields []zapcore.Field) *prettyEncoder {
+	clone := *e
+	buf := prettyBufs.Get()
+	defer buf.Free()
+	buf.AppendBytes(e.inline)
+	clone.namespace, clone.blocks = appendFields(buf, e.namespace, slices.Clip(e.blocks), fields)
+	clone.inline = slices.Clone(buf.Bytes())
+	return &clone
 }
 
 func (e *prettyEncoder) EncodeEntry(ent zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	stack := ent.Stack
-	ent.Stack = ""
-	ent.Message = escapeControls(ent.Message, false)
-	buf, err := e.Encoder.EncodeEntry(ent, nil)
-	if err != nil {
-		return nil, err
-	}
-	buf.TrimNewline()
+	buf := prettyBufs.Get()
+	e.appendHeader(buf, ent)
+	buf.AppendBytes(e.inline)
+	_, blocks := appendFields(buf, e.namespace, slices.Clip(e.blocks), fields)
+	buf.AppendString(zapcore.DefaultLineEnding)
 
-	var blocks []zapcore.Field
-	namespace := ""
+	for _, f := range blocks {
+		appendBlock(buf, f)
+	}
+	if ent.Stack != "" {
+		buf.AppendString(blockIndent)
+		buf.AppendString("stacktrace:")
+		appendText(buf, ent.Stack)
+		buf.AppendString(zapcore.DefaultLineEnding)
+	}
+	return buf, nil
+}
+
+// appendHeader writes what zap's console encoder would, with a space between
+// elements: the time as 15:04:05.000, the level, the logger name in
+// brackets, the short caller and the message.
+func (e *prettyEncoder) appendHeader(buf *buffer.Buffer, ent zapcore.Entry) {
+	if !ent.Time.IsZero() {
+		var clock [len("15:04:05.000")]byte
+		buf.AppendBytes(appendClock(clock[:0], ent.Time))
+		buf.AppendByte(' ')
+	}
+	if i := int(ent.Level - zapcore.DebugLevel); i >= 0 && i < len(e.levels) {
+		buf.AppendString(e.levels[i])
+	} else {
+		buf.AppendString(levelText(ent.Level, e.level))
+	}
+	if ent.LoggerName != "" {
+		buf.AppendString(" [")
+		appendEscaped(buf, ent.LoggerName, false)
+		buf.AppendByte(']')
+	}
+	if ent.Caller.Defined {
+		buf.AppendByte(' ')
+		appendCaller(buf, ent.Caller)
+	}
+	buf.AppendByte(' ')
+	appendEscaped(buf, ent.Message, false)
+}
+
+// appendCaller writes c as zapcore.ShortCallerEncoder does: the file's last
+// directory and name, and the line.
+func appendCaller(buf *buffer.Buffer, c zapcore.EntryCaller) {
+	file := c.File
+	if i := strings.LastIndexByte(file, '/'); i >= 0 {
+		if i = strings.LastIndexByte(file[:i], '/'); i >= 0 {
+			file = file[i+1:]
+		}
+	}
+	buf.AppendString(file)
+	buf.AppendByte(':')
+	buf.AppendInt(int64(c.Line))
+}
+
+// appendFields writes the fields that go on the header line to buf, and
+// returns the namespace they leave open and blocks with those rendered under
+// it appended, keyed with their namespace.
+func appendFields(buf *buffer.Buffer, namespace string, blocks, fields []zapcore.Field) (string, []zapcore.Field) {
 	for _, f := range fields {
 		switch {
 		case f.Type == zapcore.NamespaceType:
 			namespace += f.Key + "."
 		case f.Type == zapcore.ErrorType,
 			f.Type == zapcore.StringType && strings.Contains(f.String, "\n"),
-			errorList(f) != nil:
+			isErrorList(f):
 			f.Key = namespace + f.Key
 			blocks = append(blocks, f)
 		default:
 			appendInline(buf, namespace, f)
 		}
 	}
-	buf.AppendString(zapcore.DefaultLineEnding)
-
-	for _, f := range blocks {
-		buf.AppendString(blockIndent + escapeControls(f.Key, false) + ":")
-		w := &errorWriter{buf: buf, base: blockIndent, budget: maxErrorNodes}
-		switch errs := errorList(f); {
-		case f.Type == zapcore.ErrorType:
-			if err, ok := f.Interface.(error); ok {
-				w.write(err, 0)
-			}
-		case errs != nil:
-			w.base += blockIndent
-			for i, err := range errs {
-				if err != nil {
-					buf.AppendString(zapcore.DefaultLineEnding + w.base + "[" + strconv.Itoa(i) + "]")
-					w.write(err, 0)
-				}
-			}
-		default:
-			appendText(buf, f.String)
-		}
-		buf.AppendString(zapcore.DefaultLineEnding)
-	}
-	if stack != "" {
-		buf.AppendString(blockIndent + "stacktrace:")
-		appendText(buf, stack)
-		buf.AppendString(zapcore.DefaultLineEnding)
-	}
-	return buf, nil
+	return namespace, blocks
 }
 
-// errorList returns the errors of a zap.Errors field, or nil for any other.
-// zap.Errors is an array of an unexported []error type, so it is found by
-// shape.
-func errorList(f zapcore.Field) []error {
+// appendBlock writes f as an indented block: an error's chain, each error of
+// a zap.Errors under its index, or a multi-line string's lines.
+func appendBlock(buf *buffer.Buffer, f zapcore.Field) {
+	buf.AppendString(blockIndent)
+	appendEscaped(buf, f.Key, false)
+	buf.AppendByte(':')
+	w := &errorWriter{buf: buf, base: blockIndent, budget: maxErrorNodes}
+	switch {
+	case f.Type == zapcore.ErrorType:
+		if err, ok := f.Interface.(error); ok {
+			w.write(err, 0)
+		}
+	case isErrorList(f):
+		w.base = blockIndent + blockIndent
+		for i, err := range errorList(f) {
+			if err != nil {
+				buf.AppendString(zapcore.DefaultLineEnding)
+				buf.AppendString(w.base)
+				buf.AppendByte('[')
+				buf.AppendInt(int64(i))
+				buf.AppendByte(']')
+				w.write(err, 0)
+			}
+		}
+	default:
+		appendText(buf, f.String)
+	}
+	buf.AppendString(zapcore.DefaultLineEnding)
+}
+
+// isErrorList reports whether f is a zap.Errors field. zap.Errors is an
+// array of an unexported []error type, so it is found by shape.
+func isErrorList(f zapcore.Field) bool {
 	if f.Type != zapcore.ArrayMarshalerType {
-		return nil
+		return false
 	}
+	t := reflect.TypeOf(f.Interface)
+	return t != nil && t.Kind() == reflect.Slice && t.Elem() == errorType
+}
+
+// errorList returns the errors of a zap.Errors field.
+func errorList(f zapcore.Field) []error {
 	v := reflect.ValueOf(f.Interface)
-	if v.Kind() != reflect.Slice || v.Type().Elem() != errorType {
-		return nil
-	}
 	errs := make([]error, v.Len())
 	for i := range errs {
 		errs[i], _ = v.Index(i).Interface().(error)
@@ -170,13 +242,12 @@ func errorList(f zapcore.Field) []error {
 // appendText writes s on the lines below the current one, each indented, so a
 // stack trace keeps its real line breaks.
 func appendText(buf *buffer.Buffer, s string) {
-	pad := blockIndent + blockIndent
 	for line := range strings.SplitSeq(strings.TrimRight(s, "\n"), "\n") {
-		buf.AppendString(zapcore.DefaultLineEnding + pad + escapeControls(line, false))
+		buf.AppendString(zapcore.DefaultLineEnding)
+		buf.AppendString(blockIndent + blockIndent)
+		appendEscaped(buf, line, false)
 	}
 }
-
-var prettyBufs = buffer.NewPool()
 
 // errorWriter writes an error's chain one level per line, each level indented
 // under the one it wraps and showing only its own text.
