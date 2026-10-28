@@ -63,19 +63,21 @@ func appendClock(b []byte, t time.Time) []byte {
 	b = append2(b, minute)
 	b = append(b, ':')
 	b = append2(b, sec)
-	return append(b, '.', byte('0'+ms/100), byte('0'+ms/10%10), byte('0'+ms%10))
+	return append(b, '.', digits[ms/100], digits[ms/10%10], digits[ms%10])
 }
+
+const digits = "0123456789abcdef"
 
 // append2 appends x, which must be in [0, 99], as two digits.
 func append2(b []byte, x int) []byte {
-	return append(b, byte('0'+x/10), byte('0'+x%10))
+	return append(b, digits[x/10], digits[x%10])
 }
 
 // appendPadded appends x in decimal, zero-padded to width digits after any
 // sign, as time.Format pads its fields.
 func appendPadded(b []byte, x, width int) []byte {
 	if width == 4 && x >= 0 && x < 1e4 {
-		return append(b, byte('0'+x/1000), byte('0'+x/100%10), byte('0'+x/10%10), byte('0'+x%10))
+		return append(b, digits[x/1000], digits[x/100%10], digits[x/10%10], digits[x%10])
 	}
 	if width == 2 && x >= 0 && x < 100 {
 		return append2(b, x)

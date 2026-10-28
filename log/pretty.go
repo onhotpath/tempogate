@@ -1,16 +1,10 @@
 package log
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -22,9 +16,10 @@ import (
 // an error's %+v as errorVerbose and a stack as one string full of \n\t
 // escapes, which buries the cause a failed startup is about.
 //
-// It is for development, so it favours readable output over allocation (a
-// map encoder per inline field, a string per error level); json is the
-// format for production.
+// It is for development, so it favours readable output and code over
+// allocation (objects and reflected values go through a map encoder and
+// encoding/json, and each error in a chain costs its Error() string); json is
+// the format for production.
 //
 // Everything it writes that is not its own colour codes goes through
 // escapeControls or strconv.Quote, so a logged value cannot move the cursor,
@@ -172,80 +167,6 @@ func errorList(f zapcore.Field) []error {
 	return errs
 }
 
-// appendInline writes f as " key=value" pairs. A field can expand to several
-// keys (zap.Inline), so it goes through a map encoder rather than its type.
-func appendInline(buf *buffer.Buffer, namespace string, f zapcore.Field) {
-	m := zapcore.NewMapObjectEncoder()
-	f.AddTo(m)
-	dropVerbose(m.Fields)
-	keys := make([]string, 0, len(m.Fields))
-	for k := range m.Fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		buf.AppendString(" " + escapeControls(namespace+k, false) + "=")
-		appendValue(buf, m.Fields[k])
-	}
-}
-
-// dropVerbose removes the "<key>Verbose" that zap adds beside an error's
-// "<key>" when the error is a fmt.Formatter, from an error nested in an
-// object or array: its %+v is what the pretty format leaves out.
-func dropVerbose(v any) {
-	switch v := v.(type) {
-	case map[string]any:
-		for k, x := range v {
-			if base, ok := strings.CutSuffix(k, "Verbose"); ok && base != "" {
-				if _, ok := v[base]; ok {
-					delete(v, k)
-					continue
-				}
-			}
-			dropVerbose(x)
-		}
-	case []any:
-		for _, x := range v {
-			dropVerbose(x)
-		}
-	}
-}
-
-func appendValue(buf *buffer.Buffer, v any) {
-	switch v := v.(type) {
-	case string:
-		appendString(buf, v)
-	case bool:
-		buf.AppendBool(v)
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr, float32, float64:
-		_, _ = fmt.Fprint(buf, v)
-	case time.Duration:
-		buf.AppendString(v.String())
-	case time.Time:
-		buf.AppendString(v.Format(time.RFC3339Nano))
-	default:
-		// Objects, arrays and reflected values stay inline as JSON.
-		b, err := json.Marshal(v)
-		if err != nil {
-			appendString(buf, fmt.Sprint(v))
-			return
-		}
-		buf.AppendString(escapeJSON(string(b)))
-	}
-}
-
-// appendString quotes s only when it would not read back as one token, or
-// holds anything a terminal would act on.
-func appendString(buf *buffer.Buffer, s string) {
-	if s == "" || !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool {
-		return r == '=' || r == '"' || unicode.IsSpace(r) || !unicode.IsPrint(r)
-	}) >= 0 {
-		buf.AppendString(strconv.Quote(s))
-		return
-	}
-	buf.AppendString(s)
-}
-
 // appendText writes s on the lines below the current one, each indented, so a
 // stack trace keeps its real line breaks.
 func appendText(buf *buffer.Buffer, s string) {
@@ -254,6 +175,8 @@ func appendText(buf *buffer.Buffer, s string) {
 		buf.AppendString(zapcore.DefaultLineEnding + pad + escapeControls(line, false))
 	}
 }
+
+var prettyBufs = buffer.NewPool()
 
 // errorWriter writes an error's chain one level per line, each level indented
 // under the one it wraps and showing only its own text.
@@ -404,70 +327,7 @@ func trimSeparator(s string) string {
 
 // errorText is err.Error(), recovering from a panicking implementation. Like
 // zap, a nil pointer that panics reads as <nil>.
-func errorText(err error) (msg string) {
-	defer func() {
-		if r := recover(); r != nil {
-			if v := reflect.ValueOf(err); v.Kind() == reflect.Pointer && v.IsNil() {
-				msg = "<nil>"
-				return
-			}
-			msg = fmt.Sprintf("PANIC=%v", r)
-		}
-	}()
-	return err.Error()
-}
-
-// escapeControls makes control characters visible: C0 (but tab, and newline
-// when newline is set), DEL, C1 and bytes that are not UTF-8, any of which a
-// terminal may act on. A newline outside a block would start a line that
-// looks like another entry.
-func escapeControls(s string, newline bool) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return isControl(r, newline) }) && utf8.ValidString(s) {
-		return s
-	}
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		r, n := utf8.DecodeRuneInString(s[i:])
-		switch {
-		case r == utf8.RuneError && n == 1:
-			fmt.Fprintf(&b, `\x%02x`, s[i])
-		case r == '\n' && !newline:
-			b.WriteString(`\n`)
-		case r == '\r':
-			b.WriteString(`\r`)
-		case isControl(r, newline):
-			fmt.Fprintf(&b, `\x%02x`, r)
-		default:
-			b.WriteString(s[i : i+n])
-		}
-		i += n
-	}
-	return b.String()
-}
-
-func isControl(r rune, newline bool) bool {
-	switch {
-	case r == '\t', r == '\n' && newline:
-		return false
-	case r < 0x20, r == 0x7f:
-		return true
-	default:
-		return r >= 0x80 && r <= 0x9f
-	}
-}
-
-// escapeJSON escapes DEL and C1, which json.Marshal leaves as they are.
-func escapeJSON(s string) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return r == 0x7f || r >= 0x80 && r <= 0x9f }) {
-		return s
-	}
-	var b strings.Builder
-	for _, r := range s {
-		if r == 0x7f || r >= 0x80 && r <= 0x9f {
-			fmt.Fprintf(&b, `\u%04x`, r)
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+func errorText(err error) string {
+	msg, _ := recoverText(err, func() string { return err.Error() })
+	return msg
 }
